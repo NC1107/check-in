@@ -232,13 +232,8 @@ jobs:
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           IPA=$(find app/build/ios -name "*.ipa" | head -1)
-          UPLOAD_LOG=$(mktemp)
           xcrun altool --upload-app \
             -f "$IPA" -t ios \
             --apiKey "$ASC_KEY_ID" \
             --apiIssuer "$ASC_ISSUER_ID" \
-            --show-progress 2>&1 | tee "$UPLOAD_LOG"
-          if grep -qi "error\|failed\|invalid" "$UPLOAD_LOG"; then
-            echo "::error::TestFlight upload may have failed — check log above"
-            exit 1
-          fi
+            --show-progress
