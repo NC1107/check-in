@@ -29,3 +29,8 @@ app/**/*.freezed.dart
 .DS_Store
 *.swp
 .vscode/
+
+# Tooling / session data
+.claude/
+.playwright-mcp/
+downloads/
