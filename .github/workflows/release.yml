@@ -41,10 +41,10 @@ jobs:
         id: secrets
         env:
           PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-          ASC_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+          IOS_CERT: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
         run: |
           echo "has_play=$([ -n "$PLAY_JSON" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
-          echo "has_appstore=$([ -n "$ASC_KEY" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "has_appstore=$([ -n "$IOS_CERT" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
   docker:
     name: Build & push server image
@@ -147,27 +147,95 @@ jobs:
         run: bundle exec fastlane android internal
 
   app-store:
-    name: Deploy to App Store
+    name: Build & upload iOS to TestFlight
     needs: [version]
     if: needs.version.outputs.has_appstore == 'true'
-    runs-on: macos-14
+    runs-on: macos-15
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.3"
-          bundler-cache: true
-          working-directory: app
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
-      - name: Deploy (TestFlight)
-        working-directory: app
+          cache: true
+      - name: Cache pub-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pub-cache
+            app/.dart_tool
+          key: ${{ runner.os }}-pubcache-${{ hashFiles('app/pubspec.lock') }}
+          restore-keys: ${{ runner.os }}-pubcache-
+      - name: Cache CocoaPods
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/ios/Pods
+            ~/.cocoapods
+          key: ${{ runner.os }}-pods-${{ hashFiles('app/pubspec.lock') }}
+          restore-keys: ${{ runner.os }}-pods-
+      - name: Select latest Xcode
+        run: |
+          XCODE_PATH=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+          xcodebuild -version
+      - name: Install CocoaPods
+        run: gem install cocoapods
+      - name: Set up code signing
         env:
-          APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
-          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
-          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
-          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
-          VERSION: ${{ needs.version.outputs.new_version }}
-        run: bundle exec fastlane ios beta
+          IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          PP_PATH=$RUNNER_TEMP/build_pp.mobileprovision
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          echo "$IOS_CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          echo "$IOS_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PP_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$IOS_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< \
+            $(security cms -D -i "$PP_PATH"))
+          cp "$PP_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/${UUID}.mobileprovision
+      - name: Set up App Store Connect API key
+        env:
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          mkdir -p ~/private_keys
+          echo "$ASC_API_KEY_BASE64" | base64 --decode > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+      - name: Build IPA
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter build ipa --release \
+            --build-name=${{ needs.version.outputs.new_version }} \
+            --build-number=${{ github.run_number }} \
+            --export-options-plist=ios/ExportOptions.plist
+      - name: Upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          IPA=$(find app/build/ios -name "*.ipa" | head -1)
+          UPLOAD_LOG=$(mktemp)
+          xcrun altool --upload-app \
+            -f "$IPA" -t ios \
+            --apiKey "$ASC_KEY_ID" \
+            --apiIssuer "$ASC_ISSUER_ID" \
+            --show-progress 2>&1 | tee "$UPLOAD_LOG"
+          if grep -qi "error\|failed\|invalid" "$UPLOAD_LOG"; then
+            echo "::error::TestFlight upload may have failed — check log above"
+            exit 1
+          fi
