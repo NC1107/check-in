@@ -32,8 +32,6 @@
 	<string>Check-In accesses your photo library to share images in posts.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Check-In saves photos to your library.</string>
-	<key>NSContactsUsageDescription</key>
-	<string>Check-In uses your contacts to help you find friends.</string>
 	<key>NSUserNotificationUsageDescription</key>
 	<string>Check-In sends notifications for new messages and activity.</string>
 	<key>UIApplicationSceneManifest</key>
