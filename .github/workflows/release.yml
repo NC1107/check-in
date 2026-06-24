@@ -27,6 +27,7 @@ jobs:
       changelog: ${{ steps.tag.outputs.changelog }}
       has_play: ${{ steps.secrets.outputs.has_play }}
       has_appstore: ${{ steps.secrets.outputs.has_appstore }}
+      has_keystore: ${{ steps.secrets.outputs.has_keystore }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,9 +43,11 @@ jobs:
         env:
           PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           ASC_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
         run: |
           echo "has_play=$([ -n "$PLAY_JSON" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
           echo "has_appstore=$([ -n "$ASC_KEY" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "has_keystore=$([ -n "$KEYSTORE" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
   docker:
     name: Build & push server image
@@ -84,7 +87,7 @@ jobs:
         with:
           channel: stable
       - name: Decode signing keystore
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: needs.version.outputs.has_keystore == 'true'
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEY_PROPERTIES: ${{ secrets.ANDROID_KEY_PROPERTIES }}
