@@ -181,9 +181,9 @@ class _SignupFormState extends ConsumerState<_SignupForm> {
         if (_checked) ...[
           if (_isFirstAdmin) ...[
             const SizedBox(height: 16),
-            Card(
-              color: const Color(0xFFE7F5FF),
-              child: const Padding(
+            const Card(
+              color: Color(0xFFE7F5FF),
+              child: Padding(
                 padding: EdgeInsets.all(16),
                 child: Text(
                   "You're the first user, so you'll be the admin. After signing up you'll be "

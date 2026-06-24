@@ -63,5 +63,6 @@ func (s *Server) handleServeMedia(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", media.Mime)
 	w.Header().Set("Cache-Control", "private, max-age=86400")
+	w.Header().Set("Content-Disposition", "attachment")
 	_, _ = io.Copy(w, f)
 }

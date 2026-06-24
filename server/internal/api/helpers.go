@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -31,8 +32,8 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 }
 
 // decodeJSON parses a JSON request body into v, capping the body size.
-func decodeJSON(r *http.Request, v any) error {
-	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20))
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	dec.DisallowUnknownFields()
 	return dec.Decode(v)
 }
@@ -85,9 +86,18 @@ func (s *Server) requireAdmin(next http.Handler) http.Handler {
 }
 
 // rateLimitAuth throttles unauthenticated auth endpoints by client IP.
+// Uses X-Real-IP (set by Caddy) when available; falls back to RemoteAddr with
+// port stripped, so per-port bucket proliferation cannot bypass the limiter.
 func (s *Server) rateLimitAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.authLim.allow(r.RemoteAddr) {
+		ip := r.Header.Get("X-Real-IP")
+		if ip == "" {
+			ip, _, _ = net.SplitHostPort(r.RemoteAddr)
+			if ip == "" {
+				ip = r.RemoteAddr
+			}
+		}
+		if !s.authLim.allow(ip) {
 			writeErr(w, http.StatusTooManyRequests, "too many attempts, slow down")
 			return
 		}

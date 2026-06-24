@@ -19,7 +19,7 @@ type uploadContactsReq struct {
 // access code.
 func (s *Server) handleUploadContacts(w http.ResponseWriter, r *http.Request) {
 	var req uploadContactsReq
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
@@ -56,7 +56,7 @@ func (s *Server) handleUploadContacts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
-	users, err := s.db.ListUsers(r.Context())
+	users, err := s.db.ListAllUsers(r.Context())
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
@@ -85,5 +85,7 @@ func (s *Server) handleAdminRevokeUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
+	// Invalidate all existing sessions so the revoked user is kicked immediately.
+	_ = s.db.DeleteUserSessions(r.Context(), id)
 	w.WriteHeader(http.StatusNoContent)
 }

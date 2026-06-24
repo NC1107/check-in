@@ -7,10 +7,18 @@
 # Caddy automatically obtains a Let's Encrypt certificate for CHECKIN_DOMAIN
 # (e.g. check-in.npc-server.top). Point that subdomain's DNS A record at this host.
 
+networks:
+  # caddy reaches server but has no route to db.
+  frontend:
+  # server reaches db but is not exposed directly to caddy's external net.
+  backend:
+
 services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    networks:
+      - backend
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-checkin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
@@ -22,12 +30,19 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 512M
 
   server:
     # Pull the released image, or build locally with `docker compose build`.
     image: ${CHECKIN_IMAGE:-ghcr.io/nc1107/check-in:latest}
     build: ./server
     restart: unless-stopped
+    networks:
+      - frontend
+      - backend
     depends_on:
       db:
         condition: service_healthy
@@ -38,10 +53,16 @@ services:
       CHECKIN_SERVER_NAME: ${CHECKIN_SERVER_NAME:-Check-In}
     volumes:
       - media_data:/data/media
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    networks:
+      - frontend
     depends_on:
       - server
     ports:
@@ -53,6 +74,10 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
 volumes:
   db_data:

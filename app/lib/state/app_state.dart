@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -50,7 +51,8 @@ class SessionController extends StateNotifier<Session> {
         final client = ApiClient(baseUrl: baseUrl, token: token);
         user = await client.me();
         state = state.copyWith(user: user);
-      } catch (_) {
+      } on DioException catch (_) {
+        // Network error or 401 — token is invalid or server unreachable; sign out.
         await signOut();
       }
     }

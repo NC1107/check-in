@@ -54,12 +54,12 @@ func (d *DB) GetUserByPhone(ctx context.Context, phone string) (User, string, er
 	return u, hash, err
 }
 
-// GetUser returns a user by id.
+// GetUser returns an active user by id. Returns ErrNotFound for revoked users.
 func (d *DB) GetUser(ctx context.Context, id int64) (User, error) {
 	var u User
 	err := d.Pool.QueryRow(ctx, `
 		SELECT id, phone, name, birthday, profile_media_id, is_admin, status, created_at
-		FROM users WHERE id = $1`, id,
+		FROM users WHERE id = $1 AND status = 'active'`, id,
 	).Scan(&u.ID, &u.Phone, &u.Name, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return u, ErrNotFound
@@ -91,9 +91,24 @@ func (d *DB) SearchUsers(ctx context.Context, query string, limit int) ([]User, 
 	return users, rows.Err()
 }
 
-// ListUsers returns all users (admin view).
-func (d *DB) ListUsers(ctx context.Context) ([]User, error) {
-	return d.SearchUsers(ctx, "", 1000)
+// ListAllUsers returns all users including revoked ones for the admin view.
+func (d *DB) ListAllUsers(ctx context.Context) ([]User, error) {
+	rows, err := d.Pool.Query(ctx, `
+		SELECT id, phone, name, birthday, profile_media_id, is_admin, status, created_at
+		FROM users ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Phone, &u.Name, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
 }
 
 // SetUserStatus updates a user's status (e.g. 'revoked'), used by admin to kick users.
@@ -125,19 +140,20 @@ func (d *DB) PhoneAllowed(ctx context.Context, phone string) (allowed, used bool
 }
 
 // AddAllowedPhones inserts allowlist entries, ignoring duplicates. Returns the count
-// of newly inserted numbers.
+// of newly inserted numbers. Uses a single bulk statement to avoid N round-trips.
 func (d *DB) AddAllowedPhones(ctx context.Context, phones []string, addedBy int64) (int, error) {
-	added := 0
-	for _, p := range phones {
-		ct, err := d.Pool.Exec(ctx,
-			`INSERT INTO allowed_phones (phone, added_by) VALUES ($1, $2)
-			 ON CONFLICT (phone) DO NOTHING`, p, addedBy)
-		if err != nil {
-			return added, err
-		}
-		added += int(ct.RowsAffected())
+	if len(phones) == 0 {
+		return 0, nil
 	}
-	return added, nil
+	ct, err := d.Pool.Exec(ctx,
+		`INSERT INTO allowed_phones (phone, added_by)
+		 SELECT unnest($1::text[]), $2
+		 ON CONFLICT (phone) DO NOTHING`,
+		phones, addedBy)
+	if err != nil {
+		return 0, err
+	}
+	return int(ct.RowsAffected()), nil
 }
 
 // MarkPhoneUsed flags an allowlist entry as consumed by a signup.
@@ -174,6 +190,12 @@ func (d *DB) UserForToken(ctx context.Context, tokenHash string) (User, error) {
 // DeleteSession removes a single session token (logout).
 func (d *DB) DeleteSession(ctx context.Context, tokenHash string) error {
 	_, err := d.Pool.Exec(ctx, `DELETE FROM sessions WHERE token_hash = $1`, tokenHash)
+	return err
+}
+
+// DeleteUserSessions removes all sessions for a user (called on account revocation).
+func (d *DB) DeleteUserSessions(ctx context.Context, userID int64) error {
+	_, err := d.Pool.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID)
 	return err
 }
 
@@ -265,7 +287,7 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
 		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)
 		FROM posts p JOIN users u ON u.id = p.author_id
-		WHERE p.id = $2`, viewerID, postID,
+		WHERE p.id = $2 AND u.status = 'active'`, viewerID, postID,
 	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.CreatedAt,
 		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer)
 	if errors.Is(err, pgx.ErrNoRows) {
