@@ -11,7 +11,7 @@ platform :android do
     sh("flutter", "build", "appbundle", "--release", "--build-name=#{ENV['VERSION']}")
     upload_to_play_store(
       track: "internal",
-      aab: "../build/app/outputs/bundle/release/app-release.aab",
+      aab: "build/app/outputs/bundle/release/app-release.aab",
       json_key_data: ENV["PLAY_SERVICE_ACCOUNT_JSON"],
       skip_upload_metadata: true,
       skip_upload_images: true,
