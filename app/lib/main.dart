@@ -6,7 +6,8 @@ import 'features/onboarding/connect_screen.dart';
 import 'features/onboarding/auth_screen.dart';
 import 'state/app_state.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const ProviderScope(child: CheckInApp()));
 }
 
