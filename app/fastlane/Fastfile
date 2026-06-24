@@ -10,6 +10,7 @@ platform :android do
     # The .aab is produced by `flutter build appbundle` in CI before this lane runs.
     sh("flutter", "build", "appbundle", "--release", "--build-name=#{ENV['VERSION']}")
     upload_to_play_store(
+      package_name: "top.npcserver.checkin",
       track: "internal",
       aab: "build/app/outputs/bundle/release/app-release.aab",
       json_key_data: ENV["PLAY_SERVICE_ACCOUNT_JSON"],

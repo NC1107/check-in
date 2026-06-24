@@ -1,8 +1,11 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../api/api_client.dart';
+import '../../main.dart' show kLastCrashKey;
 import '../../state/app_state.dart';
 
 /// ConnectScreen is the first thing a new user sees: they enter the server address the
@@ -18,6 +21,66 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
   final _controller = TextEditingController(text: 'https://');
   bool _busy = false;
   String? _error;
+  String? _lastCrash;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCrashLog();
+  }
+
+  Future<void> _loadCrashLog() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final crash = prefs.getString(kLastCrashKey);
+      if (crash != null && mounted) setState(() => _lastCrash = crash);
+    } catch (_) {}
+  }
+
+  Future<void> _clearCrashLog() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(kLastCrashKey);
+      if (mounted) setState(() => _lastCrash = null);
+    } catch (_) {}
+  }
+
+  void _showCrashDialog() {
+    showDialog<void>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Last Crash Log'),
+        content: SingleChildScrollView(
+          child: SelectableText(
+            _lastCrash ?? '',
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: _lastCrash ?? ''));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Copied to clipboard')),
+              );
+            },
+            child: const Text('Copy'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _clearCrashLog();
+            },
+            child: const Text('Clear'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<void> _connect() async {
     var url = _controller.text.trim();
@@ -93,6 +156,18 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                           height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
                       : const Text('Connect'),
                 ),
+                if (_lastCrash != null) ...[
+                  const SizedBox(height: 24),
+                  OutlinedButton.icon(
+                    onPressed: _showCrashDialog,
+                    icon: const Icon(Icons.bug_report, color: Colors.orange),
+                    label: const Text('View last crash log',
+                        style: TextStyle(color: Colors.orange)),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Colors.orange),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
