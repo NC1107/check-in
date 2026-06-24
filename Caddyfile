@@ -1,0 +1,17 @@
+# Caddy reverse proxy for Check-In.
+#
+# Uses the domain from the CHECKIN_DOMAIN env var (e.g. check-in.npc-server.top) and
+# automatically provisions + renews a Let's Encrypt TLS certificate. All /api traffic
+# is proxied to the Go server. With a real domain the mobile app gets a trusted cert,
+# so no certificate pinning is needed.
+
+{$CHECKIN_DOMAIN} {
+	encode gzip
+
+	# Larger body limit so image uploads pass through.
+	request_body {
+		max_size 15MB
+	}
+
+	reverse_proxy server:8080
+}
