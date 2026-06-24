@@ -23,7 +23,7 @@ ads, no algorithm.
 server/   Go + PostgreSQL API (single static binary, Docker image)
 app/       Flutter app (iOS + Android)
 .github/   CI (PRs) and Release (on push to main) pipelines
-docs/      Deployment & self-hosting guide
+docs/      Self-hosting guide (docs/self-hosting/) + release/CI setup
 docker-compose.yml + Caddyfile   The self-hosted stack (Postgres + server + Caddy TLS)
 ```
 
@@ -46,9 +46,10 @@ cp .env.example .env          # set POSTGRES_PASSWORD and CHECKIN_DOMAIN
 docker compose up -d --build
 ```
 
-The first account created on a fresh server becomes the admin. See
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for production self-hosting (DNS, HTTPS) and the
-CI/CD store-release setup.
+The first account created on a fresh server becomes the admin. For production
+self-hosting (DNS, HTTPS, backups, upgrades) see the
+**[self-hosting guide](docs/self-hosting/README.md)**. For the CI/CD and app-store
+release setup see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Develop the backend
 
