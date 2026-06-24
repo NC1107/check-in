@@ -13,6 +13,7 @@ type rateLimiter struct {
 	buckets map[string]*bucket
 	rate    float64 // tokens per second
 	burst   float64
+	calls   int
 }
 
 type bucket struct {
@@ -33,6 +34,11 @@ func (r *rateLimiter) allow(key string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
+	// Periodically evict idle buckets to bound memory usage.
+	r.calls++
+	if r.calls%1000 == 0 {
+		r.evictIdle(now)
+	}
 	b, ok := r.buckets[key]
 	if !ok {
 		r.buckets[key] = &bucket{tokens: r.burst - 1, last: now}
@@ -48,4 +54,15 @@ func (r *rateLimiter) allow(key string) bool {
 		return true
 	}
 	return false
+}
+
+// evictIdle removes buckets that haven't been accessed in 10 minutes.
+// Must be called with r.mu held.
+func (r *rateLimiter) evictIdle(now time.Time) {
+	cutoff := now.Add(-10 * time.Minute)
+	for k, b := range r.buckets {
+		if b.last.Before(cutoff) {
+			delete(r.buckets, k)
+		}
+	}
 }
