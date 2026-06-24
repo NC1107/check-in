@@ -35,7 +35,7 @@ type checkPhoneReq struct {
 // allowlist and not already used.
 func (s *Server) handleCheckPhone(w http.ResponseWriter, r *http.Request) {
 	var req checkPhoneReq
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
@@ -77,13 +77,17 @@ type signupReq struct {
 // normalized phone to be on the allowlist and unused.
 func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	var req signupReq
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	phone := auth.NormalizePhone(req.Phone)
-	if phone == "" || req.Name == "" || len(req.Password) < 6 {
-		writeErr(w, http.StatusBadRequest, "phone, name and a 6+ char password are required")
+	if phone == "" || req.Name == "" || len(req.Password) < 8 {
+		writeErr(w, http.StatusBadRequest, "phone, name and an 8+ char password are required")
+		return
+	}
+	if len(req.Name) > 100 {
+		writeErr(w, http.StatusBadRequest, "name too long (max 100 characters)")
 		return
 	}
 	birthday, err := time.Parse("2006-01-02", req.Birthday)
@@ -149,7 +153,7 @@ type loginReq struct {
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req loginReq
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}

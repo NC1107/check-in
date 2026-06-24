@@ -1,4 +1,4 @@
-/// Plain data models mirroring the server's JSON responses.
+// Plain data models mirroring the server's JSON responses.
 
 class ServerInfo {
   ServerInfo({required this.name, required this.initialized});
