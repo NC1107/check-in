@@ -1,0 +1,98 @@
+// Package api wires together the HTTP router, middleware, and handlers.
+package api
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+
+	"github.com/nc1107/check-in/server/internal/config"
+	"github.com/nc1107/check-in/server/internal/db"
+	"github.com/nc1107/check-in/server/internal/storage"
+)
+
+// Server holds dependencies shared by all handlers.
+type Server struct {
+	cfg     config.Config
+	db      *db.DB
+	store   *storage.Store
+	authLim *rateLimiter // limits signup/login attempts
+}
+
+// New constructs a Server.
+func New(cfg config.Config, database *db.DB, store *storage.Store) *Server {
+	return &Server{
+		cfg:     cfg,
+		db:      database,
+		store:   store,
+		authLim: newRateLimiter(20, 10), // 20/min, burst 10, per IP
+	}
+}
+
+// Router builds the chi router with all routes and middleware.
+func (s *Server) Router() http.Handler {
+	r := chi.NewRouter()
+	r.Use(middleware.RealIP)
+	r.Use(middleware.Recoverer)
+	r.Use(middleware.Timeout(30 * time.Second))
+	r.Use(secureHeaders)
+
+	r.Get("/api/health", s.handleHealth)
+	r.Get("/api/server-info", s.handleServerInfo)
+
+	// Auth / onboarding (rate-limited).
+	r.Group(func(r chi.Router) {
+		r.Use(s.rateLimitAuth)
+		r.Post("/api/auth/check-phone", s.handleCheckPhone)
+		r.Post("/api/auth/signup", s.handleSignup)
+		r.Post("/api/auth/login", s.handleLogin)
+	})
+
+	// Authenticated routes.
+	r.Group(func(r chi.Router) {
+		r.Use(s.requireAuth)
+
+		r.Post("/api/auth/logout", s.handleLogout)
+		r.Get("/api/me", s.handleMe)
+
+		r.Get("/api/feed", s.handleFeed)
+		r.Get("/api/users", s.handleSearchUsers)
+		r.Get("/api/users/{id}", s.handleGetUser)
+		r.Get("/api/users/{id}/posts", s.handleUserPosts)
+
+		r.Post("/api/posts", s.handleCreatePost)
+		r.Get("/api/posts/{id}", s.handleGetPost)
+		r.Delete("/api/posts/{id}", s.handleDeletePost)
+		r.Post("/api/posts/{id}/like", s.handleLike)
+		r.Delete("/api/posts/{id}/like", s.handleUnlike)
+		r.Get("/api/posts/{id}/comments", s.handleListComments)
+		r.Post("/api/posts/{id}/comments", s.handleAddComment)
+
+		r.Get("/api/birthdays/upcoming", s.handleUpcomingBirthdays)
+
+		r.Post("/api/media", s.handleUploadMedia)
+		r.Get("/api/media/{id}", s.handleServeMedia)
+
+		// Admin-only.
+		r.Group(func(r chi.Router) {
+			r.Use(s.requireAdmin)
+			r.Post("/api/admin/contacts", s.handleUploadContacts)
+			r.Get("/api/admin/users", s.handleAdminListUsers)
+			r.Delete("/api/admin/users/{id}", s.handleAdminRevokeUser)
+		})
+	})
+
+	return r
+}
+
+func secureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		next.ServeHTTP(w, r)
+	})
+}
