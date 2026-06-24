@@ -1,0 +1,31 @@
+# Secrets / local config
+.env
+*.env.local
+
+# Server
+server/data/
+server/server
+*.out
+
+# Flutter / Dart
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/build/
+app/.idea/
+app/ios/Pods/
+app/ios/.symlinks/
+app/android/.gradle/
+app/android/local.properties
+app/android/key.properties
+app/**/*.g.dart
+app/**/*.freezed.dart
+*.keystore
+*.jks
+*.p12
+*.mobileprovision
+
+# OS / editor
+.DS_Store
+*.swp
+.vscode/
