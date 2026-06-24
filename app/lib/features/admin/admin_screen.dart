@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../widgets/auth_image.dart';
 
-/// AdminScreen lets the admin upload their phone contacts (which become the allowlist
-/// of who can sign up) and manage existing members.
+/// AdminScreen lets the admin build the signup allowlist by entering phone numbers
+/// and manage existing members.
 class AdminScreen extends ConsumerStatefulWidget {
   const AdminScreen({super.key});
 
@@ -17,6 +16,7 @@ class AdminScreen extends ConsumerStatefulWidget {
 
 class _AdminScreenState extends ConsumerState<AdminScreen> {
   late Future<List<User>> _users;
+  final _phonesCtrl = TextEditingController();
   bool _uploading = false;
 
   @override
@@ -25,30 +25,37 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
     _users = ref.read(apiProvider).adminListUsers();
   }
 
+  @override
+  void dispose() {
+    _phonesCtrl.dispose();
+    super.dispose();
+  }
+
   void _refreshUsers() {
     setState(() => _users = ref.read(apiProvider).adminListUsers());
   }
 
-  Future<void> _uploadContacts() async {
+  /// Parse the free-text field into a list of phone numbers. Accepts numbers
+  /// separated by newlines, commas, or semicolons.
+  List<String> _parsePhones() {
+    return _phonesCtrl.text
+        .split(RegExp(r'[\n,;]+'))
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+  }
+
+  Future<void> _uploadPhones() async {
+    final phones = _parsePhones();
+    if (phones.isEmpty) {
+      _snack('Enter at least one phone number.');
+      return;
+    }
     setState(() => _uploading = true);
     try {
-      if (!await FlutterContacts.requestPermission()) {
-        _snack('Contacts permission denied');
-        return;
-      }
-      final contacts = await FlutterContacts.getContacts(withProperties: true);
-      final phones = <String>[];
-      for (final c in contacts) {
-        for (final p in c.phones) {
-          if (p.number.trim().isNotEmpty) phones.add(p.number);
-        }
-      }
-      if (phones.isEmpty) {
-        _snack('No phone numbers found in contacts');
-        return;
-      }
       final result = await ref.read(apiProvider).uploadContacts(phones);
       _snack('Added ${result['added']} new numbers (${result['valid']} valid of ${result['received']}).');
+      _phonesCtrl.clear();
     } catch (e) {
       _snack('Upload failed: $e');
     } finally {
@@ -77,13 +84,24 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
                     Text('Invite list', style: Theme.of(context).textTheme.titleMedium),
                     const SizedBox(height: 8),
                     const Text(
-                        'Upload your phone contacts to choose who can sign up. Each contact’s '
-                        'phone number becomes their invite — they just enter it to join.'),
+                        'Add phone numbers to choose who can sign up. Each number becomes their '
+                        'invite — they just enter it to join. One per line, or separated by commas.'),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _phonesCtrl,
+                      keyboardType: TextInputType.phone,
+                      minLines: 3,
+                      maxLines: 8,
+                      decoration: const InputDecoration(
+                        hintText: '+15551234567\n+15557654321',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
                     const SizedBox(height: 12),
                     FilledButton.icon(
-                      icon: const Icon(Icons.contacts),
-                      label: Text(_uploading ? 'Uploading…' : 'Upload my contacts'),
-                      onPressed: _uploading ? null : _uploadContacts,
+                      icon: const Icon(Icons.person_add_alt),
+                      label: Text(_uploading ? 'Adding…' : 'Add to invite list'),
+                      onPressed: _uploading ? null : _uploadPhones,
                     ),
                   ],
                 ),
