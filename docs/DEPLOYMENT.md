@@ -1,35 +1,28 @@
-# Deployment & CI/CD setup
+# Release & app-store deployment
 
-This covers (1) self-hosting the server and (2) configuring the automated store
-releases. The release pipeline already builds the Docker image and a GitHub Release with
-the Android APK using only the built-in `GITHUB_TOKEN` — no setup needed for that part.
-The store-deploy jobs stay dormant until you add the secrets below.
+This page covers the **CI/CD release pipeline** and shipping the mobile apps to the
+Google Play Store and Apple App Store.
 
-## 1. Self-hosting the server
+> Running the **server** on your own machine is a separate topic — see the
+> [self-hosting guide](self-hosting/README.md).
 
-1. Point a subdomain's DNS **A record** at your server's public IP, e.g.
-   `check-in.npc-server.top → <your IP>`. Open ports **80** and **443**.
-2. On the server:
-   ```bash
-   git clone https://github.com/nc1107/check-in.git && cd check-in
-   cp .env.example .env
-   # edit .env: set CHECKIN_DOMAIN=check-in.npc-server.top and a strong POSTGRES_PASSWORD
-   docker compose up -d
-   ```
-3. Caddy automatically obtains a Let's Encrypt certificate for your domain. Because it's
-   a real, trusted cert, the mobile app needs no special configuration — users just enter
-   `https://check-in.npc-server.top`.
-4. Open the app, sign up — **the first account becomes the admin** — then upload your
-   contacts to build the invite list.
+## How releases work
 
-To upgrade, pull the new image and restart: `docker compose pull && docker compose up -d`.
-Pin a specific version by setting `CHECKIN_IMAGE=ghcr.io/nc1107/check-in:vX.Y.Z` in `.env`.
+Every push to `main` runs `.github/workflows/release.yml`, which:
 
-## 2. App store release pipeline
+- bumps the version from conventional commit messages and tags it,
+- builds and publishes the server Docker image to `ghcr.io/nc1107/check-in`,
+- builds the Flutter apps, and
+- creates a GitHub Release with the Android APK attached.
 
-The release workflow (`.github/workflows/release.yml`) deploys to the stores only when
-the relevant secrets exist. Add them under **GitHub → repo Settings → Secrets and
-variables → Actions**.
+All of the above works out of the box using the built-in `GITHUB_TOKEN` — **no setup
+needed**. The store-deploy jobs below stay dormant until you add the corresponding
+secrets.
+
+## App store release pipeline
+
+The release workflow deploys to the stores only when the relevant secrets exist. Add them
+under **GitHub → repo Settings → Secrets and variables → Actions**.
 
 ### Android / Google Play
 
