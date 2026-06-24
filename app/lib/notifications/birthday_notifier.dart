@@ -19,13 +19,21 @@ Future<void> _ensureInit() async {
     iOS: DarwinInitializationSettings(),
   );
   await _plugin.initialize(settings);
+  // Request Android 13+ notification permission (no-op on earlier versions).
+  // iOS permission is deferred — request it explicitly via requestNotificationPermission()
+  // so the system dialog only appears when the user has seen the feature.
   await _plugin
       .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
       ?.requestNotificationsPermission();
+  _initialized = true;
+}
+
+/// Call this once from a user-visible action (e.g. a "Enable birthday reminders" button)
+/// to show the iOS permission dialog. Safe to call multiple times.
+Future<void> requestNotificationPermission() async {
   await _plugin
       .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>()
       ?.requestPermissions(alert: true, badge: true, sound: true);
-  _initialized = true;
 }
 
 /// scheduleBirthdayNotifications syncs birthdays and (re)schedules reminders for the

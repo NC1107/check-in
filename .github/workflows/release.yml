@@ -97,11 +97,16 @@ jobs:
       - working-directory: app
         run: |
           flutter pub get
-          flutter build apk --release --build-name=${{ needs.version.outputs.new_version }}
-          flutter build appbundle --release --build-name=${{ needs.version.outputs.new_version }}
+          flutter build apk --release \
+            --build-name=${{ needs.version.outputs.new_version }} \
+            --build-number=${{ github.run_number }}
+          flutter build appbundle --release \
+            --build-name=${{ needs.version.outputs.new_version }} \
+            --build-number=${{ github.run_number }}
       - uses: actions/upload-artifact@v4
         with:
           name: android
+          retention-days: 7
           path: |
             app/build/app/outputs/flutter-apk/app-release.apk
             app/build/app/outputs/bundle/release/app-release.aab
@@ -128,10 +133,16 @@ jobs:
   play-store:
     name: Deploy to Play Store
     needs: [version, android]
-    if: needs.version.outputs.has_play == 'true'
+    if: >
+      needs.version.outputs.has_play == 'true' &&
+      needs.version.outputs.new_tag != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.3"
@@ -140,19 +151,27 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+      - name: Decode signing keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_PROPERTIES: ${{ secrets.ANDROID_KEY_PROPERTIES }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > app/android/app/upload-keystore.jks
+          printf '%s' "$KEY_PROPERTIES" > app/android/key.properties
       - name: Deploy (internal track)
         working-directory: app
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEY_PROPERTIES: ${{ secrets.ANDROID_KEY_PROPERTIES }}
           VERSION: ${{ needs.version.outputs.new_version }}
+          VERSION_CODE: ${{ github.run_number }}
         run: bundle exec fastlane android internal
 
   app-store:
     name: Build & upload iOS to TestFlight
     needs: [version]
-    if: needs.version.outputs.has_appstore == 'true'
+    if: >
+      needs.version.outputs.has_appstore == 'true' &&
+      needs.version.outputs.new_tag != ''
     runs-on: macos-15
     timeout-minutes: 90
     steps:
@@ -224,7 +243,7 @@ jobs:
           flutter pub get
           flutter build ipa --release \
             --build-name=${{ needs.version.outputs.new_version }} \
-            --build-number=${{ github.run_number }} \
+            --build-number=${{ github.run_number }}${{ github.run_attempt }} \
             --export-options-plist=ios/ExportOptions.plist
       - name: Upload to TestFlight
         env:
