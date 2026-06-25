@@ -66,6 +66,7 @@ func (s *Server) Router() http.Handler {
 
 		r.Post("/api/auth/logout", s.handleLogout)
 		r.Get("/api/me", s.handleMe)
+		r.Put("/api/me/photo", s.handleSetProfilePhoto)
 
 		r.Get("/api/feed", s.handleFeed)
 		r.Get("/api/users", s.handleSearchUsers)

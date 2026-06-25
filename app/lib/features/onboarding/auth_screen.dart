@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 
+import '../../api/api_client.dart';
 import '../../api/models.dart';
 import '../../state/app_state.dart';
 
@@ -135,15 +136,27 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     });
     try {
       final api = ref.read(apiProvider);
-      int? mediaId;
-      if (_photo != null) mediaId = await api.uploadImage(_photo!.path);
-      final res = await api.signup(
+      // Sign up first — this is unauthenticated and returns the token. We can't upload the
+      // photo beforehand because media upload requires auth (chicken-and-egg).
+      var res = await api.signup(
         phone: _phone.text.trim(),
         name: _name.text.trim(),
         birthday: DateFormat('yyyy-MM-dd').format(_birthday!),
         password: _password.text,
-        mediaId: mediaId,
       );
+      // Now that we have a token, upload the photo and attach it. Best-effort: the account
+      // already exists, so a photo failure shouldn't block finishing signup.
+      if (_photo != null) {
+        try {
+          final baseUrl = ref.read(sessionProvider).baseUrl ?? '';
+          final authed = ApiClient(baseUrl: baseUrl, token: res.token);
+          final mediaId = await authed.uploadImage(_photo!.path);
+          final updatedUser = await authed.setProfilePhoto(mediaId);
+          res = AuthResult(token: res.token, user: updatedUser);
+        } catch (_) {
+          // Keep the photo-less account; the user can add a picture later.
+        }
+      }
       // Hold the credentials so the Done screen can show before we enter the app.
       setState(() {
         _pendingAuth = res;

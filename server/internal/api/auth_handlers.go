@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
@@ -180,6 +181,45 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, userFrom(r))
+}
+
+type setPhotoReq struct {
+	MediaID int64 `json:"mediaId"`
+}
+
+// handleSetProfilePhoto sets the authenticated user's profile picture to a media item
+// they own. This lets signup attach a photo after the account (and token) exist, since
+// media upload itself requires auth.
+func (s *Server) handleSetProfilePhoto(w http.ResponseWriter, r *http.Request) {
+	var req setPhotoReq
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	u := userFrom(r)
+	media, err := s.db.GetMedia(r.Context(), req.MediaID)
+	if errors.Is(err, db.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "media not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	if media.OwnerID == nil || *media.OwnerID != u.ID {
+		writeErr(w, http.StatusForbidden, "that image isn't yours")
+		return
+	}
+	if err := s.db.SetUserProfileMedia(r.Context(), u.ID, req.MediaID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	updated, err := s.db.GetUser(r.Context(), u.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 // issueSession creates a session token and returns it with the user.
