@@ -8,20 +8,32 @@ import '../api/models.dart';
 
 /// Persisted session: the server base URL, the auth token, and the current user.
 class Session {
-  const Session({this.baseUrl, this.token, this.user});
+  const Session({this.baseUrl, this.token, this.user, this.serverInitialized = true});
 
   final String? baseUrl;
   final String? token;
   final User? user;
 
+  /// Whether the connected server already has an admin. When false, the first signup
+  /// becomes the host/admin, so onboarding shows host-setup framing instead of the
+  /// invite-list verify copy. Defaults to true (the common case) until known.
+  final bool serverInitialized;
+
   bool get hasServer => baseUrl != null && baseUrl!.isNotEmpty;
   bool get isLoggedIn => hasServer && token != null && user != null;
 
-  Session copyWith({String? baseUrl, String? token, User? user, bool clearAuth = false}) {
+  Session copyWith({
+    String? baseUrl,
+    String? token,
+    User? user,
+    bool? serverInitialized,
+    bool clearAuth = false,
+  }) {
     return Session(
       baseUrl: baseUrl ?? this.baseUrl,
       token: clearAuth ? null : (token ?? this.token),
       user: clearAuth ? null : (user ?? this.user),
+      serverInitialized: serverInitialized ?? this.serverInitialized,
     );
   }
 }
@@ -58,10 +70,10 @@ class SessionController extends StateNotifier<Session> {
     }
   }
 
-  Future<void> setServer(String baseUrl) async {
+  Future<void> setServer(String baseUrl, {bool serverInitialized = true}) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kBaseUrl, baseUrl);
-    state = state.copyWith(baseUrl: baseUrl);
+    state = state.copyWith(baseUrl: baseUrl, serverInitialized: serverInitialized);
   }
 
   Future<void> signIn(String token, User user) async {

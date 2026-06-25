@@ -106,8 +106,12 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
     try {
       // Probe the server before committing the URL. Once it responds, setServer swaps
       // this screen for the auth flow — no toast needed (the transition is the feedback).
-      await ApiClient(baseUrl: url).serverInfo();
-      await ref.read(sessionProvider.notifier).setServer(url);
+      // Carry the server's initialized flag so onboarding knows whether this user is the
+      // first (host) or a regular invited member.
+      final info = await ApiClient(baseUrl: url).serverInfo();
+      await ref
+          .read(sessionProvider.notifier)
+          .setServer(url, serverInitialized: info.initialized);
     } on DioException catch (_) {
       setState(() => _error = 'Could not reach that server. Check the address.');
     } catch (_) {
