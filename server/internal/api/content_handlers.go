@@ -152,11 +152,13 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	post, err := s.db.CreatePost(r.Context(), userFrom(r).ID, req.Kind, req.Body, req.MediaID, location)
+	me := userFrom(r)
+	post, err := s.db.CreatePost(r.Context(), me.ID, req.Kind, req.Body, req.MediaID, location)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not create post")
 		return
 	}
+	go s.notifyPost(me.ID, me.Name, post.ID)
 	writeJSON(w, http.StatusCreated, post)
 }
 
@@ -256,11 +258,13 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "comment must be 1-2000 characters")
 		return
 	}
-	comment, err := s.db.AddComment(r.Context(), id, userFrom(r).ID, req.Body)
+	me := userFrom(r)
+	comment, err := s.db.AddComment(r.Context(), id, me.ID, req.Body)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not add comment")
 		return
 	}
+	go s.notifyReply(me.Name, id, me.ID)
 	writeJSON(w, http.StatusCreated, comment)
 }
 

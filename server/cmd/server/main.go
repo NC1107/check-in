@@ -14,6 +14,7 @@ import (
 	"github.com/nc1107/check-in/server/internal/api"
 	"github.com/nc1107/check-in/server/internal/config"
 	"github.com/nc1107/check-in/server/internal/db"
+	"github.com/nc1107/check-in/server/internal/push"
 	"github.com/nc1107/check-in/server/internal/storage"
 )
 
@@ -39,7 +40,22 @@ func main() {
 		log.Fatalf("storage: %v", err)
 	}
 
-	srv := api.New(cfg, database, store)
+	// Optional push notifications via FCM. Failure here only disables push; it never
+	// stops the server from running.
+	var pushSender *push.Sender
+	if cfg.FCMCredentialsFile != "" {
+		creds, rerr := os.ReadFile(cfg.FCMCredentialsFile)
+		if rerr != nil {
+			log.Printf("push: cannot read FCM credentials (%v); push disabled", rerr)
+		} else if pushSender, err = push.New(ctx, creds); err != nil {
+			log.Printf("push: init failed (%v); push disabled", err)
+			pushSender = nil
+		} else {
+			log.Println("push: FCM enabled")
+		}
+	}
+
+	srv := api.New(cfg, database, store, pushSender)
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           srv.Router(),

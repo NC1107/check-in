@@ -10,6 +10,7 @@ import (
 
 	"github.com/nc1107/check-in/server/internal/config"
 	"github.com/nc1107/check-in/server/internal/db"
+	"github.com/nc1107/check-in/server/internal/push"
 	"github.com/nc1107/check-in/server/internal/storage"
 )
 
@@ -18,15 +19,17 @@ type Server struct {
 	cfg     config.Config
 	db      *db.DB
 	store   *storage.Store
+	push    *push.Sender // nil when push isn't configured
 	authLim *rateLimiter // limits signup/login attempts
 }
 
 // New constructs a Server.
-func New(cfg config.Config, database *db.DB, store *storage.Store) *Server {
+func New(cfg config.Config, database *db.DB, store *storage.Store, pushSender *push.Sender) *Server {
 	return &Server{
 		cfg:     cfg,
 		db:      database,
 		store:   store,
+		push:    pushSender,
 		authLim: newRateLimiter(20, 10), // 20/min, burst 10, per IP
 	}
 }
@@ -74,6 +77,11 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/me", s.handleMe)
 		r.Patch("/api/me", s.handleUpdateMe)
 		r.Put("/api/me/photo", s.handleSetProfilePhoto)
+
+		r.Post("/api/me/devices", s.handleRegisterDevice)
+		r.Delete("/api/me/devices", s.handleUnregisterDevice)
+		r.Get("/api/me/notifications", s.handleGetNotificationPrefs)
+		r.Patch("/api/me/notifications", s.handleUpdateNotificationPrefs)
 
 		r.Get("/api/feed", s.handleFeed)
 		r.Get("/api/search", s.handleSearch)
