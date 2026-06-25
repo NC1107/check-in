@@ -2,11 +2,19 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 )
+
+// commentPreviewExpr is a SELECT-list fragment returning the 2 most recent comments on
+// post p as a JSON array (oldest-of-the-two first), for inline feed previews.
+const commentPreviewExpr = `, COALESCE((
+		SELECT json_agg(json_build_object('authorName', t.name, 'body', t.body) ORDER BY t.created_at)
+		FROM (SELECT u2.name, c.body, c.created_at FROM comments c JOIN users u2 ON u2.id = c.user_id
+		      WHERE c.post_id = p.id ORDER BY c.created_at DESC LIMIT 2) t), '[]'::json)`
 
 // ErrNotFound is returned when a row does not exist.
 var ErrNotFound = errors.New("not found")
@@ -346,7 +354,7 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, before *
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
-		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)
+		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+`
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
 		WHERE ($2::bigint IS NULL OR p.author_id = $2)
@@ -361,9 +369,13 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, before *
 	var posts []Post
 	for rows.Next() {
 		var p Post
+		var preview []byte
 		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.CreatedAt,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer); err != nil {
+			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview); err != nil {
 			return nil, err
+		}
+		if len(preview) > 0 {
+			_ = json.Unmarshal(preview, &p.CommentsPreview)
 		}
 		posts = append(posts, p)
 	}
@@ -378,7 +390,7 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
-		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)
+		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+`
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
 		WHERE u.status = 'active' AND (
@@ -394,9 +406,13 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 	var posts []Post
 	for rows.Next() {
 		var p Post
+		var preview []byte
 		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.CreatedAt,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer); err != nil {
+			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview); err != nil {
 			return nil, err
+		}
+		if len(preview) > 0 {
+			_ = json.Unmarshal(preview, &p.CommentsPreview)
 		}
 		posts = append(posts, p)
 	}
@@ -406,18 +422,22 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 // GetPost returns a single post with engagement counts from the viewer's perspective.
 func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) {
 	var p Post
+	var preview []byte
 	err := d.Pool.QueryRow(ctx, `
 		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.created_at,
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
-		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)
+		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+`
 		FROM posts p JOIN users u ON u.id = p.author_id
 		WHERE p.id = $2 AND u.status = 'active'`, viewerID, postID,
 	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.CreatedAt,
-		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer)
+		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, ErrNotFound
+	}
+	if err == nil && len(preview) > 0 {
+		_ = json.Unmarshal(preview, &p.CommentsPreview)
 	}
 	return p, err
 }

@@ -250,6 +250,43 @@ class _PostCardState extends ConsumerState<PostCard> {
               ],
             ),
           ),
+          // Recent comments preview (inline, so you don't have to open the post)
+          if (p.commentsPreview.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (_comments > p.commentsPreview.length)
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => PostDetailScreen(postId: p.id),
+                      )),
+                      child: Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text('View all $_comments comments',
+                            style: const TextStyle(color: _fgMuted, fontSize: 13)),
+                      ),
+                    ),
+                  ...p.commentsPreview.map((c) => Padding(
+                        padding: const EdgeInsets.only(bottom: 3),
+                        child: RichText(
+                          text: TextSpan(children: [
+                            TextSpan(
+                                text: '${c.authorName} ',
+                                style: const TextStyle(
+                                    color: _fgPrimary, fontWeight: FontWeight.w600, fontSize: 13)),
+                            TextSpan(
+                                text: c.body,
+                                style: const TextStyle(
+                                    color: _fgSecondary, fontSize: 13, height: 1.3)),
+                          ]),
+                        ),
+                      )),
+                ],
+              ),
+            ),
           // Quick comment input
           Container(
             decoration: const BoxDecoration(
