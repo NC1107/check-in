@@ -49,6 +49,12 @@ func (s *Server) Router() http.Handler {
 			r.Use(s.requireDebugToken)
 			r.Get("/debug", s.handleDebugDashboard)
 			r.Post("/debug/reset", s.handleDebugReset)
+			r.Post("/debug/invite/add", s.handleDebugInviteAdd)
+			r.Post("/debug/invite/remove", s.handleDebugInviteRemove)
+			r.Post("/debug/member/revoke", s.handleDebugMemberRevoke)
+			r.Post("/debug/member/promote", s.handleDebugMemberPromote)
+			r.Post("/debug/post/delete", s.handleDebugPostDelete)
+			r.Post("/debug/comment/delete", s.handleDebugCommentDelete)
 		})
 	}
 
