@@ -365,16 +365,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         onTap: _loginMode ? _login : _continue,
       ),
       children: [
-        Container(
-          width: 46,
-          height: 46,
-          decoration: BoxDecoration(
-            color: _accentLight,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          alignment: Alignment.center,
-          child: Icon(_loginMode ? Icons.lock_open : Icons.waving_hand, size: 24, color: _accent),
-        ),
+        Image.asset('assets/logo/echo-rings.png', width: 52, height: 52),
         const SizedBox(height: 20),
         Text(
           _loginMode ? 'Welcome back' : 'Connect to Check-In',
