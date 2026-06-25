@@ -133,9 +133,23 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     super.dispose();
   }
 
-  Future<void> _pickImage() async {
-    final x = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 90);
+  Future<void> _pickImage(ImageSource source) async {
+    final x = await ImagePicker().pickImage(source: source, imageQuality: 90);
     if (x != null && mounted) setState(() => _image = x);
+  }
+
+  Widget _mediaButton(IconData icon, String label, VoidCallback onTap) {
+    return OutlinedButton.icon(
+      onPressed: onTap,
+      icon: Icon(icon, color: _accent, size: 19),
+      label: Text(label,
+          style: const TextStyle(color: _fgSecondary, fontWeight: FontWeight.w600, fontSize: 13)),
+      style: OutlinedButton.styleFrom(
+        side: const BorderSide(color: _border),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        padding: const EdgeInsets.symmetric(vertical: 11),
+      ),
+    );
   }
 
   Future<void> _submit() async {
@@ -154,7 +168,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
       }
       if (mounted) Navigator.of(context).pop(true);
     } catch (_) {
-      if (mounted) setState(() => _error = 'Could not post. Try again.');
+      if (mounted) setState(() => _error = 'Could not share your check-in. Try again.');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -196,7 +210,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                 ),
                 const Expanded(
                   child: Text(
-                    'New post',
+                    'New check-in',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 15),
                   ),
@@ -283,24 +297,24 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
           if (_error != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(_error!, style: const TextStyle(color: Color(0xFFEF4444), fontSize: 13)),
+              child: Text(_error!, style: const TextStyle(color: kLike, fontSize: 13)),
             ),
-          // Divider + photo button
+          // Divider + media buttons (gallery + live camera)
           const Divider(color: _border, height: 24),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-            child: OutlinedButton.icon(
-              onPressed: _pickImage,
-              icon: const Icon(Icons.image_outlined, color: _accent, size: 19),
-              label: Text(
-                _image == null ? 'Add photo' : 'Change photo',
-                style: const TextStyle(color: _fgSecondary, fontWeight: FontWeight.w600, fontSize: 13),
-              ),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: _border),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
-              ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _mediaButton(Icons.image_outlined, _image == null ? 'Photo' : 'Change',
+                      () => _pickImage(ImageSource.gallery)),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _mediaButton(
+                      Icons.photo_camera_outlined, 'Camera', () => _pickImage(ImageSource.camera)),
+                ),
+              ],
             ),
           ),
         ],

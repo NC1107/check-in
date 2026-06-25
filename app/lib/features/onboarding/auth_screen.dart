@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -223,16 +224,48 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   Future<void> _pickBirthday() async {
     final now = DateTime.now();
-    final picked = await showDatePicker(
+    var temp = _birthday ?? DateTime(now.year - 25, 1, 1);
+    final picked = await showModalBottomSheet<DateTime>(
       context: context,
-      initialDate: _birthday ?? DateTime(now.year - 25),
-      firstDate: DateTime(1900),
-      lastDate: now,
-      builder: (ctx, child) => Theme(
-        data: ThemeData.dark().copyWith(
-          colorScheme: const ColorScheme.dark(primary: _accent, surface: _bgSurface),
+      backgroundColor: _bgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Cancel', style: TextStyle(color: _fgSecondary)),
+                ),
+                const Text('Birthday',
+                    style: TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 16)),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, temp),
+                  child: const Text('Done',
+                      style: TextStyle(color: _accent, fontWeight: FontWeight.w700)),
+                ),
+              ],
+            ),
+            SizedBox(
+              height: 216,
+              child: CupertinoTheme(
+                data: const CupertinoThemeData(brightness: Brightness.dark),
+                child: CupertinoDatePicker(
+                  mode: CupertinoDatePickerMode.date,
+                  initialDateTime: temp,
+                  minimumYear: 1900,
+                  maximumDate: now,
+                  onDateTimeChanged: (d) => temp = d,
+                ),
+              ),
+            ),
+          ],
         ),
-        child: child!,
       ),
     );
     if (picked != null) setState(() => _birthday = picked);
