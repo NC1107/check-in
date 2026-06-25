@@ -138,8 +138,8 @@ var debugTmpl = template.Must(template.New("debug").Funcs(template.FuncMap{
   </div>
 
   <h2>Members ({{len .Users}})</h2>
-  {{if .Users}}<table><tr><th>ID</th><th>Name</th><th>Phone</th><th>Role</th><th>Status</th><th>Joined</th></tr>
-  {{range .Users}}<tr><td>{{.ID}}</td><td>{{.Name}}</td><td><code>{{.Phone}}</code></td>
+  {{if .Users}}<table><tr><th>ID</th><th>Display</th><th>Full name</th><th>Phone</th><th>Role</th><th>Status</th><th>Joined</th></tr>
+  {{range .Users}}<tr><td>{{.ID}}</td><td>{{.Name}}</td><td>{{.FirstName}} {{.LastName}}</td><td><code>{{.Phone}}</code></td>
     <td>{{if .IsAdmin}}<span class="pill ok">admin</span>{{else}}member{{end}}</td>
     <td>{{.Status}}</td><td>{{fmtTime .CreatedAt}}</td></tr>{{end}}</table>
   {{else}}<div class="empty">No members yet.</div>{{end}}

@@ -40,7 +40,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   bool _loginMode = false;
 
   final _phone = TextEditingController();
-  final _name = TextEditingController();
+  final _firstName = TextEditingController();
+  final _lastName = TextEditingController();
+  final _displayName = TextEditingController();
   final _password = TextEditingController();
   DateTime? _birthday;
   XFile? _photo;
@@ -75,7 +77,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   @override
   void dispose() {
     _phone.dispose();
-    _name.dispose();
+    _firstName.dispose();
+    _lastName.dispose();
+    _displayName.dispose();
     _password.dispose();
     super.dispose();
   }
@@ -140,7 +144,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       // photo beforehand because media upload requires auth (chicken-and-egg).
       var res = await api.signup(
         phone: _phone.text.trim(),
-        name: _name.text.trim(),
+        firstName: _firstName.text.trim(),
+        lastName: _lastName.text.trim(),
+        displayName: _displayName.text.trim(),
         birthday: DateFormat('yyyy-MM-dd').format(_birthday!),
         password: _password.text,
       );
@@ -426,7 +432,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   // ---- Step: profile ----
 
   Widget _profileStep() {
-    final canFinish = _name.text.trim().isNotEmpty &&
+    final canFinish = _firstName.text.trim().isNotEmpty &&
+        _lastName.text.trim().isNotEmpty &&
         _birthday != null &&
         _password.text.length >= 6 &&
         !_busy;
@@ -496,12 +503,35 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           ),
         ),
         const SizedBox(height: 24),
-        const _FieldLabel('Name'),
-        _DarkInput(
-          controller: _name,
-          hint: 'Your name',
-          onChanged: (_) => setState(() {}),
+        const _FieldLabel('Full name'),
+        Row(
+          children: [
+            Expanded(
+              child: _DarkInput(
+                controller: _firstName,
+                hint: 'First',
+                onChanged: (_) => setState(() {}),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: _DarkInput(
+                controller: _lastName,
+                hint: 'Last',
+                onChanged: (_) => setState(() {}),
+              ),
+            ),
+          ],
         ),
+        const SizedBox(height: 18),
+        const _FieldLabel('Display name'),
+        _DarkInput(
+          controller: _displayName,
+          hint: 'Optional — defaults to your full name',
+        ),
+        const SizedBox(height: 6),
+        const Text("This is what your circle sees. Leave blank to use your full name.",
+            style: TextStyle(color: _fgMuted, fontSize: 12, height: 1.4)),
         const SizedBox(height: 18),
         const _FieldLabel('Birthday'),
         GestureDetector(
@@ -529,6 +559,17 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             ),
           ),
         ),
+        const SizedBox(height: 8),
+        const Row(
+          children: [
+            Icon(Icons.cake_outlined, size: 16, color: _fgMuted),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text('Your circle gets a gentle reminder on your day.',
+                  style: TextStyle(color: _fgMuted, fontSize: 12)),
+            ),
+          ],
+        ),
         const SizedBox(height: 18),
         const _FieldLabel('Password'),
         _DarkInput(
@@ -536,15 +577,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           hint: 'At least 6 characters',
           obscure: true,
           onChanged: (_) => setState(() {}),
-        ),
-        const SizedBox(height: 10),
-        const Row(
-          children: [
-            Icon(Icons.cake_outlined, size: 16, color: _fgMuted),
-            SizedBox(width: 8),
-            Text('Your circle gets a gentle reminder on your day.',
-                style: TextStyle(color: _fgMuted, fontSize: 12)),
-          ],
         ),
         if (_error != null) _errorRow(_error!),
       ],

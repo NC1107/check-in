@@ -4,9 +4,13 @@ import "time"
 
 // User is a registered member of the server.
 type User struct {
-	ID             int64     `json:"id"`
-	Phone          string    `json:"phone"`
+	ID    int64  `json:"id"`
+	Phone string `json:"phone"`
+	// Name is the display name shown throughout the app. FirstName/LastName are the
+	// recorded full name, which may differ (some people prefer a nickname/first name only).
 	Name           string    `json:"name"`
+	FirstName      string    `json:"firstName"`
+	LastName       string    `json:"lastName"`
 	Birthday       time.Time `json:"birthday"`
 	ProfileMediaID *int64    `json:"profileMediaId,omitempty"`
 	IsAdmin        bool      `json:"isAdmin"`

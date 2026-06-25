@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/nc1107/check-in/server/internal/auth"
@@ -66,11 +67,28 @@ func (s *Server) handleCheckPhone(w http.ResponseWriter, r *http.Request) {
 }
 
 type signupReq struct {
-	Phone    string `json:"phone"`
-	Name     string `json:"name"`
-	Birthday string `json:"birthday"` // YYYY-MM-DD
-	Password string `json:"password"`
-	MediaID  *int64 `json:"mediaId,omitempty"` // optional pre-uploaded profile picture
+	Phone string `json:"phone"`
+	// Name is a legacy single-field display name kept for older clients. Newer clients
+	// send FirstName/LastName and an optional DisplayName instead.
+	Name        string `json:"name"`
+	FirstName   string `json:"firstName"`
+	LastName    string `json:"lastName"`
+	DisplayName string `json:"displayName"` // optional override; defaults to the full name
+	Birthday    string `json:"birthday"`    // YYYY-MM-DD
+	Password    string `json:"password"`
+	MediaID     *int64 `json:"mediaId,omitempty"` // optional pre-uploaded profile picture
+}
+
+// displayName derives the public-facing name from a signup request: an explicit display
+// name wins, then the full "first last", then a legacy single name field.
+func (r signupReq) displayName() string {
+	if d := strings.TrimSpace(r.DisplayName); d != "" {
+		return d
+	}
+	if full := strings.TrimSpace(strings.TrimSpace(r.FirstName) + " " + strings.TrimSpace(r.LastName)); full != "" {
+		return full
+	}
+	return strings.TrimSpace(r.Name)
 }
 
 // handleSignup registers a new user. The first signup on a fresh server becomes the
@@ -83,11 +101,12 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	phone := auth.NormalizePhone(req.Phone)
-	if phone == "" || req.Name == "" || len(req.Password) < 8 {
+	name := req.displayName()
+	if phone == "" || name == "" || len(req.Password) < 8 {
 		writeErr(w, http.StatusBadRequest, "phone, name and an 8+ char password are required")
 		return
 	}
-	if len(req.Name) > 100 {
+	if len(name) > 100 {
 		writeErr(w, http.StatusBadRequest, "name too long (max 100 characters)")
 		return
 	}
@@ -129,7 +148,9 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := s.db.CreateUser(r.Context(), phone, req.Name, birthday, req.MediaID, hash, isAdmin)
+	user, err := s.db.CreateUser(r.Context(), phone, name,
+		strings.TrimSpace(req.FirstName), strings.TrimSpace(req.LastName),
+		birthday, req.MediaID, hash, isAdmin)
 	if err != nil {
 		writeErr(w, http.StatusConflict, "could not create account (phone may already exist)")
 		return
