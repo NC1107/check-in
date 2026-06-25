@@ -1,0 +1,178 @@
+- generic [active] [ref=e1]:
+  - banner "App Store Connect" [ref=e3]:
+    - generic [ref=e4]:
+      - heading "App Store Connect" [level=1] [ref=e20]:
+        - link "App Store Connect" [ref=e21] [cursor=pointer]:
+          - /url: /
+      - navigation "Global" [ref=e7]:
+        - list [ref=e23]:
+          - listitem [ref=e24]:
+            - link "Apps" [ref=e25] [cursor=pointer]:
+              - /url: /apps
+          - listitem [ref=e26]:
+            - link "Trends" [ref=e27] [cursor=pointer]:
+              - /url: /trends
+          - listitem [ref=e28]:
+            - link "Reports" [ref=e29] [cursor=pointer]:
+              - /url: /itc/payments_and_financial_reports
+          - listitem [ref=e30]:
+            - link "Business" [ref=e31] [cursor=pointer]:
+              - /url: /business
+          - listitem [ref=e32]:
+            - link "Users and Access" [ref=e33] [cursor=pointer]:
+              - /url: /access/users
+      - button "Nicholas Conn Nicholas Conn|18944112454|1 Account name menu" [ref=e35] [cursor=pointer]:
+        - generic:
+          - generic: Nicholas Conn
+          - generic: Nicholas Conn|18944112454|1
+          - img [ref=e36]
+  - generic [ref=e41]:
+    - 'button "Apps menu, Check-In: Social Feed, selected" [ref=e46] [cursor=pointer]':
+      - generic [ref=e47]:
+        - 'generic "Check-In: Social Feed" [ref=e48]':
+          - 'img "Check-In: Social Feed" [ref=e49]'
+        - generic [ref=e51]: "Check-In: Social Feed"
+      - img [ref=e53]
+    - navigation "Apps" [ref=e56]:
+      - list [ref=e57]:
+        - listitem [ref=e58]:
+          - link "Distribution" [ref=e59] [cursor=pointer]:
+            - /url: /apps/6783974361/distribution
+        - listitem [ref=e60]:
+          - link "Analytics" [ref=e61] [cursor=pointer]:
+            - /url: /apps/6783974361/analytics
+        - listitem [ref=e62]:
+          - link "TestFlight" [ref=e63] [cursor=pointer]:
+            - /url: /teams/ecc309ee-d14e-4afb-acbf-d0f01f60484f/apps/6783974361/testflight
+        - listitem [ref=e64]:
+          - link "Xcode Cloud" [ref=e65] [cursor=pointer]:
+            - /url: /teams/ecc309ee-d14e-4afb-acbf-d0f01f60484f/apps/6783974361/ci
+  - main [ref=e69]:
+    - generic [ref=e73]:
+      - navigation "TestFlight" [ref=e75]:
+        - list [ref=e76]:
+          - listitem [ref=e77]:
+            - heading "Builds" [level=2] [ref=e79]
+            - list [ref=e80]:
+              - listitem [ref=e81]:
+                - link "iOS" [ref=e82] [cursor=pointer]:
+                  - /url: /teams/ecc309ee-d14e-4afb-acbf-d0f01f60484f/apps/6783974361/testflight/ios
+                  - generic [ref=e83]: iOS
+          - listitem [ref=e84]:
+            - separator [ref=e85]
+          - listitem [ref=e86]:
+            - heading "Feedback" [level=2] [ref=e88]
+            - list [ref=e89]:
+              - listitem [ref=e90]:
+                - link "Crashes" [ref=e91] [cursor=pointer]:
+                  - /url: /teams/ecc309ee-d14e-4afb-acbf-d0f01f60484f/apps/6783974361/testflight/crashes
+                  - generic [ref=e92]: Crashes
+              - listitem [ref=e93]:
+                - link "Screenshots" [ref=e94] [cursor=pointer]:
+                  - /url: /teams/ecc309ee-d14e-4afb-acbf-d0f01f60484f/apps/6783974361/testflight/screenshots
+                  - generic [ref=e95]: Screenshots
+          - listitem [ref=e96]:
+            - separator [ref=e97]
+          - listitem [ref=e98]:
+            - heading "Testers" [level=2] [ref=e100]
+            - list [ref=e101]:
+              - listitem [ref=e102]:
+                - link "All" [ref=e103] [cursor=pointer]:
+                  - /url: /teams/ecc309ee-d14e-4afb-acbf-d0f01f60484f/apps/6783974361/testflight/testers
+                  - generic [ref=e104]: All
+            - generic [ref=e105]:
+              - generic [ref=e106]:
+                - heading "Internal Testing" [level=3] [ref=e107]
+                - button "New Group" [ref=e108] [cursor=pointer]:
+                  - img [ref=e109]
+              - list [ref=e111]:
+                - listitem [ref=e112]:
+                  - generic [ref=e113]:
+                    - link "IN Internal" [ref=e114] [cursor=pointer]:
+                      - /url: /teams/ecc309ee-d14e-4afb-acbf-d0f01f60484f/apps/6783974361/testflight/groups/991dae55-ca1a-4864-9c1d-fc69ca60acb1
+                      - generic [ref=e116]:
+                        - generic [ref=e118]: IN
+                        - generic [ref=e119]: Internal
+                    - button "Delete" [ref=e120] [cursor=pointer]:
+                      - img [ref=e122]:
+                        - img [ref=e124]
+                      - generic [ref=e126]: Delete
+            - generic [ref=e127]:
+              - generic [ref=e128]:
+                - heading "External Testing" [level=3] [ref=e129]
+                - button "New Group" [ref=e130] [cursor=pointer]:
+                  - img [ref=e131]
+              - list [ref=e133]:
+                - listitem [ref=e134]:
+                  - generic [ref=e135]:
+                    - link "PB Public Beta" [ref=e136] [cursor=pointer]:
+                      - /url: /teams/ecc309ee-d14e-4afb-acbf-d0f01f60484f/apps/6783974361/testflight/groups/f9ea5ecf-6ee0-4785-83e2-8364358a94c5
+                      - generic [ref=e138]:
+                        - generic [ref=e140]: PB
+                        - generic [ref=e141]: Public Beta
+                    - button "Delete" [ref=e142] [cursor=pointer]:
+                      - img [ref=e144]:
+                        - img [ref=e146]
+                      - generic [ref=e148]: Delete
+          - listitem [ref=e149]:
+            - separator [ref=e150]
+          - listitem [ref=e151]:
+            - heading "Additional" [level=2] [ref=e153]
+            - list [ref=e154]:
+              - listitem [ref=e155]:
+                - link "Test Information" [ref=e156] [cursor=pointer]:
+                  - /url: /teams/ecc309ee-d14e-4afb-acbf-d0f01f60484f/apps/6783974361/testflight/test-info
+                  - generic [ref=e159]: Test Information
+              - listitem [ref=e160]:
+                - generic [ref=e164] [cursor=pointer]:
+                  - generic [ref=e165]: About TestFlight Data
+                  - button [ref=e166]: "?"
+      - generic [ref=e169]:
+        - generic [ref=e170]:
+          - generic [ref=e172]:
+            - generic "Public Beta" [ref=e173]:
+              - generic [ref=e174]: PB
+              - generic [ref=e175]: Public Beta
+            - generic [ref=e176]:
+              - heading "Public Beta" [level=2] [ref=e178]
+              - paragraph [ref=e179]: External Group ∙ 0 Testers ∙ 1 Build
+          - navigation [ref=e181]:
+            - listitem [ref=e182] [cursor=pointer]:
+              - generic [ref=e183]: Testers
+            - listitem [ref=e184] [cursor=pointer]:
+              - generic [ref=e185]: Builds
+            - listitem [ref=e186] [cursor=pointer]:
+              - generic [ref=e187]: Settings
+        - heading "Public Link" [level=3] [ref=e189]
+        - generic [ref=e191]:
+          - paragraph [ref=e192]:
+            - generic [ref=e193]:
+              - text: Create a public link to share on social media, messaging platforms, email campaigns, and more.
+              - link "Learn More" [ref=e194] [cursor=pointer]:
+                - /url: https://developer.apple.com/help/app-store-connect/test-a-beta-version/invite-external-testers#invite-external-testers
+          - button "Create Public Link" [ref=e195] [cursor=pointer]
+        - generic [ref=e198]:
+          - generic [ref=e202]:
+            - heading "Testers (0)" [level=3] [ref=e203]
+            - button "Add Testers" [ref=e204] [cursor=pointer]:
+              - img [ref=e205]
+          - paragraph [ref=e210]: Testers in this group will be notified when a new build is available and will have access to all builds added to this group.
+  - contentinfo [ref=e10]:
+    - generic [ref=e11]:
+      - list [ref=e211]:
+        - listitem [ref=e212]:
+          - link "App Store Connect" [ref=e213] [cursor=pointer]:
+            - /url: /apps
+      - list [ref=e12]:
+        - listitem [ref=e13]: Copyright © 2026 Apple Inc. All rights reserved. |
+        - listitem [ref=e14]:
+          - link "Terms of Service" [ref=e15] [cursor=pointer]:
+            - /url: /WebObjects/iTunesConnect.woa/wa/termsOfService
+          - text: "|"
+        - listitem [ref=e16]:
+          - link "Privacy Policy" [ref=e17] [cursor=pointer]:
+            - /url: https://www.apple.com/legal/privacy
+          - text: "|"
+        - listitem [ref=e18]:
+          - link "Contact Us" [ref=e19] [cursor=pointer]:
+            - /url: /contact-us

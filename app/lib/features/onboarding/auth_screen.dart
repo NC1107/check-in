@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
@@ -363,11 +364,38 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         : (hasServer && digits.length >= 7);
 
     return _StepScaffold(
-      footer: PrimaryButton(
-        label: _loginMode ? 'Log in' : 'Continue',
-        enabled: canSubmit && !_busy,
-        busy: _busy,
-        onTap: _loginMode ? _login : _continue,
+      footer: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          PrimaryButton(
+            label: _loginMode ? 'Log in' : 'Continue',
+            enabled: canSubmit && !_busy,
+            busy: _busy,
+            onTap: _loginMode ? _login : _continue,
+          ),
+          const SizedBox(height: 14),
+          // Explicit path between login and join so returning members aren't stuck.
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => setState(() {
+              _loginMode = !_loginMode;
+              _error = null;
+              _phoneError = null;
+            }),
+            child: Text.rich(
+              TextSpan(
+                style: const TextStyle(color: _fgMuted, fontSize: 13),
+                children: [
+                  TextSpan(text: _loginMode ? 'New here?  ' : 'Already have an account?  '),
+                  TextSpan(
+                    text: _loginMode ? 'Join' : 'Log in',
+                    style: const TextStyle(color: _accent, fontWeight: FontWeight.w700),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
       children: [
         Image.asset('assets/logo/echo-rings.png', width: 52, height: 52),
@@ -379,7 +407,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         const SizedBox(height: 8),
         Text(
           _loginMode
-              ? 'Enter your password to sign back in.'
+              ? 'Enter your server, number, and password to sign back in.'
               : 'Enter your server address and phone number to log in or join.',
           style: const TextStyle(color: _fgSecondary, fontSize: 14, height: 1.5),
         ),
@@ -391,11 +419,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           keyboardType: TextInputType.url,
           errorText: _serverError,
           onChanged: (_) => setState(() {
-            // A changed address invalidates any prior probe and the login decision.
+            // A changed address invalidates any prior probe.
             _connectedUrl = null;
-            _loginMode = false;
             _serverError = null;
-            _phoneError = null;
           }),
         ),
         const SizedBox(height: 16),
@@ -404,12 +430,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           controller: _phone,
           hint: '(415) 555-0148',
           keyboardType: TextInputType.phone,
+          inputFormatters: [_PhoneFormatter()],
           errorText: _phoneError,
-          onChanged: (_) => setState(() {
-            // Editing the number invalidates the login decision for it.
-            _loginMode = false;
-            _phoneError = null;
-          }),
+          onChanged: (_) => setState(() => _phoneError = null),
         ),
         if (_loginMode) ...[
           const SizedBox(height: 16),
@@ -430,8 +453,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  "Members log in with their password; new invitees set up a profile. Not on "
-                  "the list? Ask whoever set up the server to add your number.",
+                  "New invitees set up a profile; returning members tap “Log in”. Not on the "
+                  "list? Ask whoever set up the server to add your number.",
                   style: TextStyle(color: _fgMuted, fontSize: 12, height: 1.5),
                 ),
               ),
@@ -753,4 +776,31 @@ String _msg(DioException e, String fallback) {
   final data = e.response?.data;
   if (data is Map && data['error'] is String) return data['error'] as String;
   return fallback;
+}
+
+/// Formats a US-style number as "(123) 456-7890" while typing. Numbers longer than 10
+/// digits (i.e. an explicit country code) are shown as "+digits" so international users
+/// aren't blocked. The server strips formatting on its end.
+class _PhoneFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final digits = newValue.text.replaceAll(RegExp(r'\D'), '');
+    String text;
+    if (digits.length <= 10) {
+      final b = StringBuffer();
+      for (var i = 0; i < digits.length; i++) {
+        if (i == 0) b.write('(');
+        if (i == 3) b.write(') ');
+        if (i == 6) b.write('-');
+        b.write(digits[i]);
+      }
+      text = b.toString();
+    } else {
+      text = '+$digits';
+    }
+    return TextEditingValue(
+      text: text,
+      selection: TextSelection.collapsed(offset: text.length),
+    );
+  }
 }
