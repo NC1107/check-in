@@ -193,11 +193,24 @@ func (d *DB) MarkPhoneUsed(ctx context.Context, phone string) error {
 	return err
 }
 
-// AllowedPhone is one allowlist entry, for the debug view.
+// RemoveAllowedPhone deletes an allowlist entry. Returns ErrNotFound if the phone was
+// not on the list. Does not affect any account that already signed up with it.
+func (d *DB) RemoveAllowedPhone(ctx context.Context, phone string) error {
+	ct, err := d.Pool.Exec(ctx, `DELETE FROM allowed_phones WHERE phone = $1`, phone)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// AllowedPhone is one allowlist entry (the admin's invite list).
 type AllowedPhone struct {
-	Phone     string
-	Used      bool
-	CreatedAt time.Time
+	Phone     string    `json:"phone"`
+	Used      bool      `json:"used"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // ListAllowedPhones returns every allowlist entry, newest first (debug view).

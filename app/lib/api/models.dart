@@ -126,6 +126,23 @@ class Comment {
       );
 }
 
+/// One entry on the admin's invite list (allowlist). [used] is true once someone has
+/// signed up with this number.
+class Invite {
+  Invite({required this.phone, required this.used, this.createdAt});
+
+  final String phone;
+  final bool used;
+  final DateTime? createdAt;
+
+  factory Invite.fromJson(Map<String, dynamic> j) => Invite(
+        phone: j['phone'] as String? ?? '',
+        used: j['used'] as bool? ?? false,
+        createdAt:
+            j['createdAt'] != null ? DateTime.tryParse(j['createdAt'] as String) : null,
+      );
+}
+
 class Birthday {
   Birthday({required this.userId, required this.name, required this.month, required this.day});
 

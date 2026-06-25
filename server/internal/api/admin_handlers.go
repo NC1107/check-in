@@ -55,6 +55,50 @@ func (s *Server) handleUploadContacts(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleAdminListAllowed returns the invite list (allowlist) so the admin can see who
+// can sign up and which numbers have already joined.
+func (s *Server) handleAdminListAllowed(w http.ResponseWriter, r *http.Request) {
+	allowed, err := s.db.ListAllowedPhones(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	if allowed == nil {
+		allowed = []db.AllowedPhone{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"invites": allowed})
+}
+
+type removeAllowedReq struct {
+	Phone string `json:"phone"`
+}
+
+// handleAdminRemoveAllowed removes a number from the invite list. This only affects
+// pending invites — someone who already signed up keeps their account (revoke them from
+// the members list instead).
+func (s *Server) handleAdminRemoveAllowed(w http.ResponseWriter, r *http.Request) {
+	var req removeAllowedReq
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	phone := auth.NormalizePhone(req.Phone, s.cfg.DefaultCountryCode)
+	if phone == "" {
+		writeErr(w, http.StatusBadRequest, "phone required")
+		return
+	}
+	err := s.db.RemoveAllowedPhone(r.Context(), phone)
+	if errors.Is(err, db.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "that number isn't on the invite list")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := s.db.ListAllUsers(r.Context())
 	if err != nil {

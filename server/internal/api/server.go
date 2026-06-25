@@ -92,6 +92,8 @@ func (s *Server) Router() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(s.requireAdmin)
 			r.Post("/api/admin/contacts", s.handleUploadContacts)
+			r.Get("/api/admin/allowed", s.handleAdminListAllowed)
+			r.Delete("/api/admin/allowed", s.handleAdminRemoveAllowed)
 			r.Get("/api/admin/users", s.handleAdminListUsers)
 			r.Delete("/api/admin/users/{id}", s.handleAdminRevokeUser)
 		})
