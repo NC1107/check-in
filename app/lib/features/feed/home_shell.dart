@@ -7,7 +7,6 @@ import 'package:image_picker/image_picker.dart';
 import '../../notifications/birthday_notifier.dart';
 import '../../state/app_state.dart';
 import '../../theme/tokens.dart';
-import '../admin/admin_screen.dart';
 import '../profile/profile_screen.dart';
 import 'feed_screen.dart';
 
@@ -59,12 +58,12 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   @override
   Widget build(BuildContext context) {
     final me = ref.watch(sessionProvider).user;
-    final isAdmin = me?.isAdmin ?? false;
 
+    // Admin/member management is reached from the profile (host badge + Members button),
+    // so it isn't a bottom-nav destination.
     final pages = <Widget>[
       const FeedScreen(),
       if (me != null) ProfileScreen(userId: me.id, isSelf: true),
-      if (isAdmin) const AdminScreen(),
     ];
 
     return Scaffold(

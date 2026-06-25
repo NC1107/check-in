@@ -81,6 +81,12 @@ class SessionController extends StateNotifier<Session> {
     state = state.copyWith(token: token, user: user);
   }
 
+  /// updateUser refreshes the cached current user (e.g. after editing the profile) so the
+  /// rest of the app reflects the new name/photo.
+  void updateUser(User user) {
+    state = state.copyWith(user: user);
+  }
+
   Future<void> signOut() async {
     await _secure.delete(key: _kToken);
     state = state.copyWith(clearAuth: true);

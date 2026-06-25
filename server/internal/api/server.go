@@ -66,9 +66,11 @@ func (s *Server) Router() http.Handler {
 
 		r.Post("/api/auth/logout", s.handleLogout)
 		r.Get("/api/me", s.handleMe)
+		r.Patch("/api/me", s.handleUpdateMe)
 		r.Put("/api/me/photo", s.handleSetProfilePhoto)
 
 		r.Get("/api/feed", s.handleFeed)
+		r.Get("/api/search", s.handleSearch)
 		r.Get("/api/users", s.handleSearchUsers)
 		r.Get("/api/users/{id}", s.handleGetUser)
 		r.Get("/api/users/{id}/posts", s.handleUserPosts)

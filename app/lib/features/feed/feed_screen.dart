@@ -4,9 +4,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/tokens.dart';
-import '../profile/profile_screen.dart';
+import 'global_search_delegate.dart';
 import 'post_card.dart';
-import 'user_search_delegate.dart';
 
 // Theme tokens (centralized in theme/tokens.dart).
 const _bgMain = kBgMain;
@@ -157,16 +156,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     await ref.read(feedProvider.future);
   }
 
-  Future<void> _openUserSearch() async {
-    final user = await showSearch<User?>(
+  void _openSearch() {
+    showSearch<void>(
       context: context,
-      delegate: UserSearchDelegate(ref.read(apiProvider)),
+      delegate: GlobalSearchDelegate(ref.read(apiProvider)),
     );
-    if (user != null && mounted) {
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => ProfileScreen(userId: user.id, isSelf: false)),
-      );
-    }
   }
 
   // --- filtering ---
@@ -317,7 +311,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                   child: Column(
                     children: [
                       _SearchBar(
-                        onSearch: _openUserSearch,
+                        onSearch: _openSearch,
                         onFilter: _openFilter,
                         filterActive: _hasFilter,
                       ),
@@ -408,7 +402,7 @@ class _SearchBar extends StatelessWidget {
               child: GestureDetector(
                 onTap: onSearch,
                 behavior: HitTestBehavior.opaque,
-                child: const Text('Search people',
+                child: const Text('Search check-ins & people',
                     style: TextStyle(color: _fgMuted, fontSize: 14)),
               ),
             ),
@@ -452,6 +446,7 @@ class _FilterSheet extends StatefulWidget {
 class _FilterSheetState extends State<_FilterSheet> {
   late final Set<int> _people = {...widget.selectedPeople};
   late String? _date = widget.datePreset;
+  String _personQuery = '';
 
   static const _palette = [
     Color(0xFF5557E0), Color(0xFF13AF9D), Color(0xFFDD1C85),
@@ -496,12 +491,37 @@ class _FilterSheetState extends State<_FilterSheet> {
             const Text('PEOPLE',
                 style: TextStyle(
                     color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 12, letterSpacing: 0.4)),
-            const SizedBox(height: 11),
+            const SizedBox(height: 10),
+            if (widget.authors.length > 5) ...[
+              TextField(
+                onChanged: (v) => setState(() => _personQuery = v.trim().toLowerCase()),
+                style: const TextStyle(color: _fgPrimary, fontSize: 14),
+                cursorColor: _accent,
+                decoration: InputDecoration(
+                  isDense: true,
+                  prefixIcon: const Icon(Icons.search, size: 18, color: _fgMuted),
+                  hintText: 'Search people',
+                  hintStyle: const TextStyle(color: _fgMuted, fontSize: 14),
+                  filled: true,
+                  fillColor: _bgMain,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: _border)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: _accent)),
+                ),
+              ),
+              const SizedBox(height: 11),
+            ],
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: [
-                for (final a in widget.authors) _personChip(a),
+                for (final a in widget.authors.where((a) =>
+                    _personQuery.isEmpty || a.name.toLowerCase().contains(_personQuery)))
+                  _personChip(a),
               ],
             ),
             const SizedBox(height: 22),
