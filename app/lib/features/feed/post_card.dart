@@ -32,21 +32,33 @@ String _relativeTime(DateTime dt) {
   return '${diff.inDays}d';
 }
 
-/// Circular avatar widget with the author's initial and a consistent color.
+/// Circular avatar: the user's profile photo when they have one, otherwise their
+/// initial on a consistent color.
 class AuthorAvatar extends StatelessWidget {
   const AuthorAvatar({
     super.key,
     required this.userId,
     required this.name,
     required this.size,
+    this.mediaId,
   });
 
   final int userId;
   final String name;
   final double size;
+  final int? mediaId;
 
   @override
   Widget build(BuildContext context) {
+    if (mediaId != null) {
+      return ClipOval(
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: AuthImage(mediaId: mediaId!),
+        ),
+      );
+    }
     return Container(
       width: size,
       height: size,
@@ -148,7 +160,8 @@ class _PostCardState extends ConsumerState<PostCard> {
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
             child: Row(
               children: [
-                AuthorAvatar(userId: p.authorId, name: p.authorName, size: 38),
+                AuthorAvatar(
+                    userId: p.authorId, name: p.authorName, size: 38, mediaId: p.authorPhotoId),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -246,7 +259,8 @@ class _PostCardState extends ConsumerState<PostCard> {
             child: Row(
               children: [
                 if (me != null)
-                  AuthorAvatar(userId: me.id, name: me.name, size: 26),
+                  AuthorAvatar(
+                      userId: me.id, name: me.name, size: 26, mediaId: me.profileMediaId),
                 const SizedBox(width: 9),
                 Expanded(
                   child: TextField(
