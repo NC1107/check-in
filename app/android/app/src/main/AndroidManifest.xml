@@ -1,8 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.CAMERA"/>
+    <!-- Read-only: contacts build the host's invite list; the app never writes them. -->
     <uses-permission android:name="android.permission.READ_CONTACTS"/>
-    <uses-permission android:name="android.permission.WRITE_CONTACTS"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- Media access for image picker -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
