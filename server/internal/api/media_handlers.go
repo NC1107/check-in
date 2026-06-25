@@ -12,6 +12,9 @@ import (
 // returns the media metadata (the client then references mediaId when creating a post
 // or completing signup).
 func (s *Server) handleUploadMedia(w http.ResponseWriter, r *http.Request) {
+	// Cap the whole request so ParseMultipartForm can't spool a huge temp file to disk
+	// before SaveImage gets a chance to reject it. Leave headroom for multipart framing.
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxUploadBytes+(1<<20))
 	if err := r.ParseMultipartForm(s.cfg.MaxUploadBytes + 1024); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid upload")
 		return
