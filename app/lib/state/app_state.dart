@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -89,6 +90,13 @@ class SessionController extends StateNotifier<Session> {
 
   Future<void> signOut() async {
     await _secure.delete(key: _kToken);
+    // Drop cached media so a different account/server — or a server whose data was reset
+    // (which reuses media ids) — never shows another context's stale images.
+    try {
+      await DefaultCacheManager().emptyCache();
+    } catch (_) {
+      // Cache clearing is best-effort; never block sign-out on it.
+    }
     state = state.copyWith(clearAuth: true);
   }
 }
