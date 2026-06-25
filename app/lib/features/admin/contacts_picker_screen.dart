@@ -9,6 +9,7 @@ const _fgPrimary = Color(0xFFEDEDEF);
 const _fgSecondary = Color(0xFFABABB0);
 const _fgMuted = Color(0xFF848490);
 const _accent = Color(0xFF5557E0);
+const _accentLight = Color(0x295557E0);
 const _onAccent = Colors.white;
 
 const _avatarPalette = [
@@ -27,9 +28,12 @@ class _PickContact {
   String get initial => name.isNotEmpty ? name[0].toUpperCase() : '?';
 }
 
-/// ContactsPickerScreen requests contacts permission, shows the device contacts as a
-/// selectable list (matching the design's "Invite your circle" step), and pops with the
-/// selected phone numbers. Returns null if cancelled or permission denied.
+enum _Phase { intro, loading, list, blocked, error }
+
+/// ContactsPickerScreen explains why it needs contacts, asks the user for permission
+/// (the system dialog is only shown after the user opts in), then shows the device
+/// contacts as a selectable list matching the design's "Invite your circle" step. Pops
+/// with the selected phone numbers, or null if cancelled.
 class ContactsPickerScreen extends StatefulWidget {
   const ContactsPickerScreen({super.key});
 
@@ -38,7 +42,8 @@ class ContactsPickerScreen extends StatefulWidget {
 }
 
 class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
-  bool _loading = true;
+  _Phase _phase = _Phase.intro;
+  bool _permanentlyBlocked = false;
   String? _error;
   List<_PickContact> _contacts = [];
   final Set<String> _selected = {};
@@ -46,22 +51,55 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    _maybeSkipIntro();
   }
 
-  Future<void> _load() async {
+  bool _isGranted(PermissionStatus s) =>
+      s == PermissionStatus.granted || s == PermissionStatus.limited;
+
+  /// If contacts access was already granted on a previous visit, skip the rationale
+  /// and load straight away. check() never shows a dialog, so this won't prompt.
+  Future<void> _maybeSkipIntro() async {
     try {
-      final status = await FlutterContacts.permissions.request(PermissionType.read);
-      final granted =
-          status == PermissionStatus.granted || status == PermissionStatus.limited;
-      if (!granted) {
+      final status = await FlutterContacts.permissions.check(PermissionType.read);
+      if (_isGranted(status) && mounted) _loadContacts();
+    } catch (_) {
+      // Stay on the intro screen and let the user trigger the request.
+    }
+  }
+
+  /// Triggered by the user tapping "Allow access to contacts" — this is the only place
+  /// the system permission dialog is requested.
+  Future<void> _requestThenLoad() async {
+    setState(() => _phase = _Phase.loading);
+    PermissionStatus status;
+    try {
+      status = await FlutterContacts.permissions.request(PermissionType.read);
+    } catch (e) {
+      if (mounted) {
         setState(() {
-          _loading = false;
-          _error = 'Contacts permission denied. You can enable it in Settings, '
-              'or add numbers manually instead.';
+          _error = 'Could not request contacts access: $e';
+          _phase = _Phase.error;
         });
-        return;
       }
+      return;
+    }
+    if (_isGranted(status)) {
+      _loadContacts();
+    } else if (mounted) {
+      setState(() {
+        // Once permanently denied/restricted, request() won't prompt again — the user
+        // has to enable it from system Settings.
+        _permanentlyBlocked = status == PermissionStatus.permanentlyDenied ||
+            status == PermissionStatus.restricted;
+        _phase = _Phase.blocked;
+      });
+    }
+  }
+
+  Future<void> _loadContacts() async {
+    setState(() => _phase = _Phase.loading);
+    try {
       final raw = await FlutterContacts.getAll(
         properties: {ContactProperty.name, ContactProperty.phone},
       );
@@ -82,15 +120,19 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
         i++;
       }
       list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-      setState(() {
-        _contacts = list;
-        _loading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _contacts = list;
+          _phase = _Phase.list;
+        });
+      }
     } catch (e) {
-      setState(() {
-        _loading = false;
-        _error = 'Could not read contacts: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _error = 'Could not read contacts: $e';
+          _phase = _Phase.error;
+        });
+      }
     }
   }
 
@@ -120,7 +162,6 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final allSelected = _contacts.isNotEmpty && _selected.length == _contacts.length;
     return Scaffold(
       backgroundColor: _bgMain,
       appBar: AppBar(
@@ -132,56 +173,188 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
       ),
       body: SafeArea(
         top: false,
-        child: _loading
-            ? const Center(child: CircularProgressIndicator(color: _accent))
-            : _error != null
-                ? _errorView()
-                : Column(
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(22, 4, 22, 8),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text(
-                              'Check-In is invite-only. Choose who can join — only these numbers '
-                              'will be able to sign up. You can change this anytime.',
-                              style: TextStyle(color: _fgSecondary, fontSize: 14, height: 1.5),
-                            ),
-                            const SizedBox(height: 14),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text('${_selected.length} of ${_contacts.length} selected',
-                                    style: const TextStyle(
-                                        color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 12)),
-                                GestureDetector(
-                                  onTap: _toggleAll,
-                                  behavior: HitTestBehavior.opaque,
-                                  child: Text(allSelected ? 'Clear all' : 'Select all',
-                                      style: const TextStyle(
-                                          color: _accent, fontWeight: FontWeight.w600, fontSize: 13)),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                      Expanded(
-                        child: _contacts.isEmpty
-                            ? const Center(
-                                child: Text('No contacts with phone numbers found.',
-                                    style: TextStyle(color: _fgMuted)))
-                            : ListView.builder(
-                                padding: const EdgeInsets.symmetric(horizontal: 16),
-                                itemCount: _contacts.length,
-                                itemBuilder: (_, i) => _contactRow(_contacts[i]),
-                              ),
-                      ),
-                      _footer(),
-                    ],
-                  ),
+        child: switch (_phase) {
+          _Phase.intro => _introView(),
+          _Phase.loading => const Center(child: CircularProgressIndicator(color: _accent)),
+          _Phase.list => _listView(),
+          _Phase.blocked => _blockedView(),
+          _Phase.error => _messageView(
+              icon: Icons.error_outline,
+              text: _error ?? 'Something went wrong.',
+              primaryLabel: 'Back',
+              onPrimary: () => Navigator.of(context).pop(),
+            ),
+        },
       ),
+    );
+  }
+
+  // ---- Phase: rationale (shown before the system prompt) ----
+
+  Widget _introView() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(26, 12, 26, 24),
+      child: Column(
+        children: [
+          const Spacer(),
+          Container(
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(color: _accentLight, borderRadius: BorderRadius.circular(18)),
+            child: const Icon(Icons.contacts_outlined, size: 30, color: _accent),
+          ),
+          const SizedBox(height: 22),
+          const Text('Find people to invite',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 22)),
+          const SizedBox(height: 10),
+          const Text(
+            'Check-In is invite-only. Grant access to your contacts so you can pick who '
+            'can join — their phone number becomes their invite. Nothing is uploaded until '
+            'you choose who to add, and you can change it anytime.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: _fgSecondary, fontSize: 14, height: 1.5),
+          ),
+          const Spacer(),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: _requestThenLoad,
+              style: FilledButton.styleFrom(
+                backgroundColor: _accent,
+                foregroundColor: _onAccent,
+                padding: const EdgeInsets.symmetric(vertical: 15),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: const Text('Allow access to contacts',
+                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            style: TextButton.styleFrom(foregroundColor: _fgMuted),
+            child: const Text("I'll add numbers manually"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---- Phase: permission blocked ----
+
+  Widget _blockedView() {
+    return _messageView(
+      icon: Icons.contacts_outlined,
+      text: _permanentlyBlocked
+          ? 'Contacts access is turned off. Enable it in Settings to pick invitees, '
+              'or go back and add numbers manually.'
+          : 'Contacts access was denied. You can try again, or go back and add numbers '
+              'manually.',
+      primaryLabel: _permanentlyBlocked ? 'Open Settings' : 'Try again',
+      onPrimary: _permanentlyBlocked
+          ? () => FlutterContacts.permissions.openSettings()
+          : _requestThenLoad,
+      secondaryLabel: 'Back',
+      onSecondary: () => Navigator.of(context).pop(),
+    );
+  }
+
+  Widget _messageView({
+    required IconData icon,
+    required String text,
+    required String primaryLabel,
+    required VoidCallback onPrimary,
+    String? secondaryLabel,
+    VoidCallback? onSecondary,
+  }) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 40, color: _fgMuted),
+            const SizedBox(height: 16),
+            Text(text,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: _fgSecondary, fontSize: 14, height: 1.5)),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: onPrimary,
+                style: FilledButton.styleFrom(
+                  backgroundColor: _accent,
+                  foregroundColor: _onAccent,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: Text(primaryLabel, style: const TextStyle(fontWeight: FontWeight.w700)),
+              ),
+            ),
+            if (secondaryLabel != null) ...[
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: onSecondary,
+                style: TextButton.styleFrom(foregroundColor: _fgMuted),
+                child: Text(secondaryLabel),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ---- Phase: selectable list ----
+
+  Widget _listView() {
+    final allSelected = _contacts.isNotEmpty && _selected.length == _contacts.length;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(22, 4, 22, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Only the people you select will be able to sign up. You can change this '
+                'anytime.',
+                style: TextStyle(color: _fgSecondary, fontSize: 14, height: 1.5),
+              ),
+              const SizedBox(height: 14),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('${_selected.length} of ${_contacts.length} selected',
+                      style: const TextStyle(
+                          color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 12)),
+                  GestureDetector(
+                    onTap: _toggleAll,
+                    behavior: HitTestBehavior.opaque,
+                    child: Text(allSelected ? 'Clear all' : 'Select all',
+                        style: const TextStyle(
+                            color: _accent, fontWeight: FontWeight.w600, fontSize: 13)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: _contacts.isEmpty
+              ? const Center(
+                  child: Text('No contacts with phone numbers found.',
+                      style: TextStyle(color: _fgMuted)))
+              : ListView.builder(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  itemCount: _contacts.length,
+                  itemBuilder: (_, i) => _contactRow(_contacts[i]),
+                ),
+        ),
+        _footer(),
+      ],
     );
   }
 
@@ -257,33 +430,6 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
           ),
           child: Text(enabled ? 'Invite $n ${n == 1 ? 'number' : 'numbers'}' : 'Select contacts',
               style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-        ),
-      ),
-    );
-  }
-
-  Widget _errorView() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.contacts_outlined, size: 40, color: _fgMuted),
-            const SizedBox(height: 16),
-            Text(_error ?? 'Something went wrong.',
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: _fgSecondary, fontSize: 14, height: 1.5)),
-            const SizedBox(height: 20),
-            OutlinedButton(
-              onPressed: () => Navigator.of(context).pop(),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: _fgPrimary,
-                side: const BorderSide(color: _border),
-              ),
-              child: const Text('Back'),
-            ),
-          ],
         ),
       ),
     );
