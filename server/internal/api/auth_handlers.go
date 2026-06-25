@@ -41,7 +41,7 @@ func (s *Server) handleCheckPhone(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	phone := auth.NormalizePhone(req.Phone)
+	phone := auth.NormalizePhone(req.Phone, s.cfg.DefaultCountryCode)
 	if phone == "" {
 		writeErr(w, http.StatusBadRequest, "phone required")
 		return
@@ -100,7 +100,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	phone := auth.NormalizePhone(req.Phone)
+	phone := auth.NormalizePhone(req.Phone, s.cfg.DefaultCountryCode)
 	name := req.displayName()
 	if phone == "" || name == "" || len(req.Password) < 8 {
 		writeErr(w, http.StatusBadRequest, "phone, name and an 8+ char password are required")
@@ -179,7 +179,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	phone := auth.NormalizePhone(req.Phone)
+	phone := auth.NormalizePhone(req.Phone, s.cfg.DefaultCountryCode)
 	user, hash, err := s.db.GetUserByPhone(r.Context(), phone)
 	if err != nil || !auth.VerifyPassword(req.Password, hash) {
 		writeErr(w, http.StatusUnauthorized, "incorrect phone or password")

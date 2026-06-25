@@ -18,13 +18,15 @@ const _avatarPalette = [
   Color(0xFFEF4444), Color(0xFF0EA5E9),
 ];
 
-/// A contact with a usable phone number, flattened for the picker.
+/// A contact with one or more phone numbers, flattened for the picker. All numbers are
+/// uploaded when selected so the friend matches whichever one they sign up with.
 class _PickContact {
-  _PickContact({required this.id, required this.name, required this.phone, required this.color});
+  _PickContact({required this.id, required this.name, required this.phones, required this.color});
   final String id;
   final String name;
-  final String phone;
+  final List<String> phones;
   final Color color;
+  String get phone => phones.first; // primary, shown in the row
   String get initial => name.isNotEmpty ? name[0].toUpperCase() : '?';
 }
 
@@ -106,15 +108,17 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
       final list = <_PickContact>[];
       var i = 0;
       for (final c in raw) {
-        if (c.phones.isEmpty) continue;
-        final number = c.phones.first.number.trim();
-        if (number.isEmpty) continue;
+        final nums = c.phones
+            .map((p) => p.number.trim())
+            .where((s) => s.isNotEmpty)
+            .toList();
+        if (nums.isEmpty) continue;
         final display = (c.displayName ?? '').trim();
-        final name = display.isEmpty ? number : display;
+        final name = display.isEmpty ? nums.first : display;
         list.add(_PickContact(
-          id: c.id ?? '$i-$number',
+          id: c.id ?? '$i-${nums.first}',
           name: name,
-          phone: number,
+          phones: nums,
           color: _avatarPalette[i % _avatarPalette.length],
         ));
         i++;
@@ -153,9 +157,10 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
   }
 
   void _continue() {
+    // Upload every number of each selected contact so they match whichever they use.
     final phones = _contacts
         .where((c) => _selected.contains(c.id))
-        .map((c) => c.phone)
+        .expand((c) => c.phones)
         .toList();
     Navigator.of(context).pop(phones);
   }
