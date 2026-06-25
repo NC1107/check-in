@@ -119,13 +119,14 @@ func (d *DB) ListAllUsers(ctx context.Context) ([]User, error) {
 	return users, rows.Err()
 }
 
-// UpdateUserName changes a user's display name and returns the updated user.
-func (d *DB) UpdateUserName(ctx context.Context, id int64, name string) (User, error) {
+// UpdateUserProfile changes a user's display name and (legal) first/last name, returning
+// the updated user. First/last are stored as given; the display name is what others see.
+func (d *DB) UpdateUserProfile(ctx context.Context, id int64, name, firstName, lastName string) (User, error) {
 	var u User
 	err := d.Pool.QueryRow(ctx, `
-		UPDATE users SET name = $2 WHERE id = $1
+		UPDATE users SET name = $2, first_name = $3, last_name = $4 WHERE id = $1
 		RETURNING id, phone, name, first_name, last_name, birthday, profile_media_id, is_admin, status, created_at`,
-		id, name,
+		id, name, firstName, lastName,
 	).Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt)
 	return u, err
 }
@@ -143,6 +144,17 @@ func (d *DB) SetUserStatus(ctx context.Context, id int64, status string) error {
 }
 
 // ---- allowed phones (the allowlist) ----
+
+// PhoneRegistered reports whether an account already exists for this phone (in any
+// status). Used to route a returning member to login instead of signup. Note this
+// also catches the host, whose number is never on the allowlist.
+func (d *DB) PhoneRegistered(ctx context.Context, phone string) (bool, error) {
+	var exists bool
+	err := d.Pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM users WHERE phone = $1)`, phone,
+	).Scan(&exists)
+	return exists, err
+}
 
 // PhoneAllowed reports whether a phone is on the allowlist and whether it is unused.
 func (d *DB) PhoneAllowed(ctx context.Context, phone string) (allowed, used bool, err error) {

@@ -26,11 +26,11 @@ const _accentLight = kAccentLight;
 const _online = kSuccess;
 const _danger = kLike;
 
-enum _Step { phone, profile, invite, done }
+enum _Step { entry, profile, invite, done }
 
-/// AuthScreen is the stepped onboarding/signup flow that runs after the user has
-/// connected to a server: verify number → set up profile → done. A login path is
-/// available for returning members.
+/// AuthScreen is the single entry point once the app launches (until logged in). The
+/// first step takes the server address *and* phone number together, then branches to
+/// login (returning members) or signup (new invitees / the first host).
 class AuthScreen extends ConsumerStatefulWidget {
   const AuthScreen({super.key});
 
@@ -39,9 +39,10 @@ class AuthScreen extends ConsumerStatefulWidget {
 }
 
 class _AuthScreenState extends ConsumerState<AuthScreen> {
-  _Step _step = _Step.phone;
-  bool _loginMode = false;
+  _Step _step = _Step.entry;
+  bool _loginMode = false; // entered when the number already has an account
 
+  final _server = TextEditingController();
   final _phone = TextEditingController();
   final _firstName = TextEditingController();
   final _lastName = TextEditingController();
@@ -53,33 +54,24 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   bool _busy = false;
   String? _error;
   bool _isFirstAdmin = false;
-  bool? _phoneAllowed; // null = not yet checked
+  bool? _phoneAllowed; // null = not yet checked; false = rejected
   AuthResult? _pendingAuth; // captured from signup, applied on "Enter Check-In"
   int? _invited; // number of invitees added on the host invite step (null = not done)
-  // Whether the server already has an admin. Seeded from the connect probe, then
-  // refreshed on load so a fresh server shows host-setup framing, not invite-list copy.
-  bool _serverInitialized = true;
+  // The server URL we've successfully reached and bound the session to. Null until the
+  // first successful probe; used to avoid re-probing an unchanged address.
+  String? _connectedUrl;
 
   @override
   void initState() {
     super.initState();
-    _serverInitialized = ref.read(sessionProvider).serverInitialized;
-    _refreshServerState();
-  }
-
-  /// Re-checks whether the server has an admin yet. Handles the case where the session
-  /// was restored from disk (where the flag isn't persisted) rather than freshly probed.
-  Future<void> _refreshServerState() async {
-    try {
-      final info = await ref.read(apiProvider).serverInfo();
-      if (mounted) setState(() => _serverInitialized = info.initialized);
-    } catch (_) {
-      // Leave the seeded value; the verify call will still gate signup correctly.
-    }
+    // Pre-fill the last server we used so logging back in doesn't mean retyping it.
+    final saved = ref.read(sessionProvider).baseUrl;
+    if (saved != null && saved.isNotEmpty) _server.text = saved;
   }
 
   @override
   void dispose() {
+    _server.dispose();
     _phone.dispose();
     _firstName.dispose();
     _lastName.dispose();
@@ -90,26 +82,60 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   // --- actions ---
 
-  Future<void> _verifyPhone() async {
+  /// Normalizes a typed server address into a base URL (https:// by default, no trailing
+  /// slash). Returns null when blank.
+  String? _normalizeServer(String raw) {
+    var url = raw.trim();
+    if (url.isEmpty) return null;
+    if (url.endsWith('/')) url = url.substring(0, url.length - 1);
+    if (!url.startsWith('http')) url = 'https://$url';
+    return url;
+  }
+
+  /// Probes the server address and binds the session to it. Returns true on success;
+  /// sets [_error] and returns false if blank or unreachable. No-ops if the address is
+  /// unchanged since the last successful probe.
+  Future<bool> _ensureServer() async {
+    final url = _normalizeServer(_server.text);
+    if (url == null) {
+      setState(() => _error = 'Enter your server address.');
+      return false;
+    }
+    if (url == _connectedUrl) return true;
+    try {
+      final info = await ApiClient(baseUrl: url).serverInfo();
+      await ref.read(sessionProvider.notifier).setServer(url, serverInitialized: info.initialized);
+      _connectedUrl = url;
+      return true;
+    } on DioException catch (_) {
+      setState(() => _error = 'Could not reach that server. Check the address.');
+      return false;
+    }
+  }
+
+  /// Single entry action: connect to the server, then check the number and branch to
+  /// login (existing account), profile setup (invited / first host), or rejection.
+  Future<void> _continue() async {
     setState(() {
       _busy = true;
       _error = null;
+      _phoneAllowed = null;
     });
     try {
+      if (!await _ensureServer()) return;
       final res = await ref.read(apiProvider).checkPhone(_phone.text.trim());
-      if (res.allowed) {
-        // Valid → go straight to profile setup (no confusing second tap).
+      if (res.registered) {
+        setState(() => _loginMode = true); // reveal the password field
+      } else if (res.allowed) {
         setState(() {
-          _phoneAllowed = true;
           _isFirstAdmin = res.isFirstAdmin;
           _step = _Step.profile;
         });
       } else {
-        // Not on the list → show the red status row.
         setState(() => _phoneAllowed = false);
       }
     } on DioException catch (e) {
-      setState(() => _error = _msg(e, 'Could not check that number'));
+      setState(() => _error = _msg(e, 'Could not check that number. Try again.'));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -121,6 +147,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       _error = null;
     });
     try {
+      if (!await _ensureServer()) return;
       final res = await ref
           .read(apiProvider)
           .login(phone: _phone.text.trim(), password: _password.text);
@@ -208,10 +235,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     setState(() {
       _error = null;
       if (_step == _Step.profile) {
-        _step = _Step.phone;
-      } else {
-        // From the phone step, "back" returns to the connect screen.
-        ref.read(sessionProvider.notifier).setServer('');
+        _step = _Step.entry;
+      } else if (_loginMode) {
+        // From login, step back to the neutral state so the number/server can be fixed.
+        _loginMode = false;
+        _phoneAllowed = null;
       }
     });
   }
@@ -279,10 +307,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            if (_step == _Step.phone || _step == _Step.profile) _header(),
+            if (_step == _Step.entry || _step == _Step.profile) _header(),
             Expanded(
               child: switch (_step) {
-                _Step.phone => _phoneStep(),
+                _Step.entry => _entryStep(),
                 _Step.profile => _profileStep(),
                 _Step.invite => _inviteStep(),
                 _Step.done => _doneStep(),
@@ -295,20 +323,22 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   }
 
   Widget _header() {
-    // server(0) already done before this screen; phone=1, profile=2.
+    // The back arrow only appears where there's somewhere to go back to: the profile
+    // step (→ entry) or the login sub-state (→ neutral entry).
+    final canGoBack = _step == _Step.profile || (_step == _Step.entry && _loginMode);
     final pIndex = _step == _Step.profile ? 2 : 1;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 20, 4),
       child: Row(
         children: [
-          GestureDetector(
-            onTap: _back,
-            behavior: HitTestBehavior.opaque,
-            child: const Icon(Icons.arrow_back, size: 24, color: _fgSecondary),
-          ),
-          const SizedBox(width: 12),
-          _ProgressDot(active: pIndex >= 0),
-          const SizedBox(width: 7),
+          if (canGoBack) ...[
+            GestureDetector(
+              onTap: _back,
+              behavior: HitTestBehavior.opaque,
+              child: const Icon(Icons.arrow_back, size: 24, color: _fgSecondary),
+            ),
+            const SizedBox(width: 12),
+          ],
           _ProgressDot(active: pIndex >= 1),
           const SizedBox(width: 7),
           _ProgressDot(active: pIndex >= 2),
@@ -317,45 +347,22 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     );
   }
 
-  // ---- Step: phone verify / login ----
+  // ---- Step: entry (server + phone → login / signup) ----
 
-  Widget _phoneStep() {
+  Widget _entryStep() {
     final digits = _phone.text.replaceAll(RegExp(r'\D'), '');
+    final hasServer = _server.text.trim().isNotEmpty;
     final canSubmit = _loginMode
-        ? (digits.length >= 7 && _password.text.isNotEmpty)
-        : digits.length >= 7;
-    final showStatus = !_loginMode && _phoneAllowed != null;
-    // Fresh server with no admin yet → this user is claiming the host account, so show
-    // setup framing instead of the invite-list verify copy, and hide the login link
-    // (there are no accounts to log into yet).
-    final fresh = !_serverInitialized && !_loginMode;
+        ? (hasServer && digits.length >= 7 && _password.text.isNotEmpty)
+        : (hasServer && digits.length >= 7);
+    final rejected = !_loginMode && _phoneAllowed == false;
 
     return _StepScaffold(
-      footer: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          PrimaryButton(
-            label: _loginMode ? 'Log in' : 'Continue',
-            enabled: canSubmit && !_busy,
-            busy: _busy,
-            onTap: _loginMode ? _login : _verifyPhone,
-          ),
-          if (!fresh) ...[
-            const SizedBox(height: 12),
-            GestureDetector(
-              onTap: () => setState(() {
-                _loginMode = !_loginMode;
-                _phoneAllowed = null;
-                _error = null;
-              }),
-              behavior: HitTestBehavior.opaque,
-              child: Text(
-                _loginMode ? 'New here? Verify your number' : 'Already a member? Log in',
-                style: const TextStyle(color: _accent, fontWeight: FontWeight.w600, fontSize: 13),
-              ),
-            ),
-          ],
-        ],
+      footer: PrimaryButton(
+        label: _loginMode ? 'Log in' : 'Continue',
+        enabled: canSubmit && !_busy,
+        busy: _busy,
+        onTap: _loginMode ? _login : _continue,
       ),
       children: [
         Container(
@@ -366,26 +373,34 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             borderRadius: BorderRadius.circular(12),
           ),
           alignment: Alignment.center,
-          child: Icon(fresh ? Icons.add_moderator : Icons.verified_user, size: 24, color: _accent),
+          child: Icon(_loginMode ? Icons.lock_open : Icons.waving_hand, size: 24, color: _accent),
         ),
         const SizedBox(height: 20),
         Text(
-          _loginMode
-              ? 'Welcome back'
-              : (fresh ? 'Set up your server' : 'Verify your number'),
+          _loginMode ? 'Welcome back' : 'Connect to Check-In',
           style: const TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 22),
         ),
         const SizedBox(height: 8),
         Text(
           _loginMode
-              ? 'Enter your number and password to sign back in.'
-              : (fresh
-                  ? "You're the first here, so this account becomes the host. Enter your phone "
-                      'number to claim it.'
-                  : "Your phone number must be on the host's invite list to join this server."),
+              ? 'Enter your password to sign back in.'
+              : 'Enter your server address and phone number to log in or join.',
           style: const TextStyle(color: _fgSecondary, fontSize: 14, height: 1.5),
         ),
         const SizedBox(height: 22),
+        const FieldLabel('Server address'),
+        AppTextField(
+          controller: _server,
+          hint: 'checkin.myhome.net',
+          keyboardType: TextInputType.url,
+          onChanged: (_) => setState(() {
+            // A changed address invalidates any prior probe and the login decision.
+            _connectedUrl = null;
+            _loginMode = false;
+            _phoneAllowed = null;
+          }),
+        ),
+        const SizedBox(height: 16),
         const FieldLabel('Phone number'),
         Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -407,7 +422,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                 controller: _phone,
                 hint: '(415) 555-0148',
                 keyboardType: TextInputType.phone,
-                onChanged: (_) => setState(() => _phoneAllowed = null),
+                onChanged: (_) => setState(() {
+                  // Editing the number invalidates the login decision for it.
+                  _loginMode = false;
+                  _phoneAllowed = null;
+                }),
               ),
             ),
           ],
@@ -422,8 +441,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             onChanged: (_) => setState(() {}),
           ),
         ],
-        if (showStatus) _statusRow(),
-        if (!_loginMode && !fresh) ...[
+        if (rejected) _statusRow(),
+        if (!_loginMode && !rejected) ...[
           const SizedBox(height: 16),
           const Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -432,23 +451,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Not on the list? Ask whoever set up the server to add your number.',
-                  style: TextStyle(color: _fgMuted, fontSize: 12, height: 1.5),
-                ),
-              ),
-            ],
-          ),
-        ],
-        if (fresh) ...[
-          const SizedBox(height: 16),
-          const Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(Icons.info_outline, size: 17, color: _fgMuted),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  "Next you'll set up your profile, then you can invite your circle.",
+                  "Members log in with their password; new invitees set up a profile. Not on "
+                  "the list? Ask whoever set up the server to add your number.",
                   style: TextStyle(color: _fgMuted, fontSize: 12, height: 1.5),
                 ),
               ),
@@ -460,28 +464,21 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     );
   }
 
-  Widget _statusRow() {
-    final ok = _phoneAllowed == true;
-    final color = ok ? _online : _danger;
-    final text = ok
-        ? (_isFirstAdmin
-            ? "You're the first user — you'll be the host."
-            : "You're on the invite list.")
-        : "This number isn't on the invite list, or it's already registered.";
-    return Padding(
-      padding: const EdgeInsets.only(top: 14),
-      child: Row(
-        children: [
-          Icon(ok ? Icons.check_circle : Icons.cancel, size: 18, color: color),
-          const SizedBox(width: 7),
-          Expanded(
-            child: Text(text,
-                style: TextStyle(color: color, fontWeight: FontWeight.w500, fontSize: 13)),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _statusRow() => const Padding(
+        padding: EdgeInsets.only(top: 14),
+        child: Row(
+          children: [
+            Icon(Icons.cancel, size: 18, color: _danger),
+            SizedBox(width: 7),
+            Expanded(
+              child: Text(
+                "This number isn't on the invite list. Ask the host to add it, then try again.",
+                style: TextStyle(color: _danger, fontWeight: FontWeight.w500, fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+      );
 
   // ---- Step: profile ----
 
@@ -489,7 +486,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     final canFinish = _firstName.text.trim().isNotEmpty &&
         _lastName.text.trim().isNotEmpty &&
         _birthday != null &&
-        _password.text.length >= 6 &&
+        _password.text.length >= 8 &&
         !_busy;
     return _StepScaffold(
       footer: PrimaryButton(
@@ -628,7 +625,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         const FieldLabel('Password'),
         AppTextField(
           controller: _password,
-          hint: 'At least 6 characters',
+          hint: 'At least 8 characters',
           obscure: true,
           onChanged: (_) => setState(() {}),
         ),

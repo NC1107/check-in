@@ -43,10 +43,16 @@ class ApiClient {
     return ServerInfo.fromJson(r.data as Map<String, dynamic>);
   }
 
-  Future<({bool allowed, bool isFirstAdmin})> checkPhone(String phone) async {
+  /// checkPhone reports whether a number may sign up ([allowed]), already has an account
+  /// ([registered] → route to login), and whether it would be the first/host account.
+  Future<({bool allowed, bool registered, bool isFirstAdmin})> checkPhone(String phone) async {
     final r = await _dio.post('/api/auth/check-phone', data: {'phone': phone});
     final j = r.data as Map<String, dynamic>;
-    return (allowed: j['allowed'] as bool, isFirstAdmin: j['isFirstAdmin'] as bool? ?? false);
+    return (
+      allowed: j['allowed'] as bool? ?? false,
+      registered: j['registered'] as bool? ?? false,
+      isFirstAdmin: j['isFirstAdmin'] as bool? ?? false,
+    );
   }
 
   Future<AuthResult> signup({
@@ -90,9 +96,14 @@ class ApiClient {
     return User.fromJson(r.data as Map<String, dynamic>);
   }
 
-  /// updateProfile changes the current user's display name and returns the updated user.
-  Future<User> updateProfile({required String name}) async {
-    final r = await _dio.patch('/api/me', data: {'name': name});
+  /// updateProfile changes the current user's display name and, optionally, their
+  /// first/last name, returning the updated user. Omitted name parts are preserved.
+  Future<User> updateProfile({required String name, String? firstName, String? lastName}) async {
+    final r = await _dio.patch('/api/me', data: {
+      'name': name,
+      if (firstName != null) 'firstName': firstName,
+      if (lastName != null) 'lastName': lastName,
+    });
     return User.fromJson(r.data as Map<String, dynamic>);
   }
 
