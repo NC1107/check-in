@@ -239,7 +239,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                   style: FilledButton.styleFrom(
                     backgroundColor: _accent,
                     disabledBackgroundColor: _bgSurfaceHover,
-                    foregroundColor: Colors.white,
+                    foregroundColor: kOnAccent,
                     disabledForegroundColor: _fgMuted,
                     padding: const EdgeInsets.symmetric(vertical: 15),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -248,7 +248,7 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
                       ? const SizedBox(
                           height: 20,
                           width: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          child: CircularProgressIndicator(strokeWidth: 2, color: kOnAccent))
                       : const Text('Connect',
                           style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
                 ),

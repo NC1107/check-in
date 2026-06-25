@@ -3,27 +3,27 @@ import 'package:flutter/material.dart';
 /// Central color tokens for the Check-In dark theme. Every screen aliases these, so
 /// changing the palette means editing this one file.
 ///
-/// "Amethyst" — built around the user's deep violet ramp (#3A015C → #11001C). The ramp
-/// supplies the backgrounds/surfaces; text, accent, and semantic colors are tuned to it
-/// for contrast (WCAG AA) and a cohesive, premium feel.
+/// "Onyx" — a simple near-black + greys theme with a single popping green accent (used
+/// for buttons, links, and the timeline connector nodes). The accent is bright, so text
+/// on it (kOnAccent) is near-black for legibility.
 
-// Backgrounds & surfaces (darkest canvas → lifted cards → hover).
-const kBgMain = Color(0xFF11001C); // user's midnight-violet-2
-const kBgSurface = Color(0xFF1E0233); // cards
-const kBgSurfaceHover = Color(0xFF2A044A);
-const kBorder = Color(0xFF3A105C); // visible amethyst hairline
+// Backgrounds & surfaces (near-black canvas → grey cards → hover).
+const kBgMain = Color(0xFF0A0A0A);
+const kBgSurface = Color(0xFF161616);
+const kBgSurfaceHover = Color(0xFF1F1F1F);
+const kBorder = Color(0xFF2A2A2A);
 
-// Text hierarchy (violet-tinted neutrals).
-const kFgPrimary = Color(0xFFF3EAFB);
-const kFgSecondary = Color(0xFFC2ADD6);
-const kFgMuted = Color(0xFF8C77A6);
+// Text hierarchy (neutral greys).
+const kFgPrimary = Color(0xFFF4F4F5);
+const kFgSecondary = Color(0xFFA1A1AA);
+const kFgMuted = Color(0xFF6B6B72);
 
-// Accent — a rich violet that pops on the deep base; white reads AA on it.
-const kAccent = Color(0xFF7C3AED);
-const kAccentHover = Color(0xFF9061F0);
-const kAccentLight = Color(0x297C3AED); // ~16% alpha, for tints/connectors
-const kOnAccent = Colors.white;
+// Accent — a vivid green that pops on the black/grey base. Bright, so text on it is dark.
+const kAccent = Color(0xFF37E07E);
+const kAccentHover = Color(0xFF5CE89A);
+const kAccentLight = Color(0x2937E07E); // ~16% alpha, for tints/connectors
+const kOnAccent = Color(0xFF07140C); // near-black text/icons on the green accent
 
 // Semantic.
-const kLike = Color(0xFFF2587A); // danger / like (rose-red, harmonizes with violet)
-const kSuccess = Color(0xFF4ED9A6); // online / success (mint)
+const kLike = Color(0xFFF2557B); // danger / like (rose-red, pops on black, distinct from green)
+const kSuccess = Color(0xFF37E07E); // online / success (matches the accent green)

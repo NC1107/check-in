@@ -6,13 +6,24 @@ import 'models.dart';
 /// ApiClient wraps all HTTP calls to a Check-In server. The base URL (server address)
 /// and bearer token are injected after the user connects and logs in.
 class ApiClient {
-  ApiClient({required String baseUrl, String? token})
+  ApiClient({required String baseUrl, String? token, void Function()? onUnauthorized})
       : _dio = Dio(BaseOptions(
           baseUrl: baseUrl,
           connectTimeout: const Duration(seconds: 10),
           receiveTimeout: const Duration(seconds: 20),
           headers: token == null ? null : {'Authorization': 'Bearer $token'},
-        ));
+        )) {
+    if (onUnauthorized != null) {
+      _dio.interceptors.add(InterceptorsWrapper(
+        onError: (e, handler) {
+          // We sent a token but the server rejected it → the session is invalid/expired.
+          // Sign out so the user lands on login and can re-authenticate (vs. being stuck).
+          if (e.response?.statusCode == 401 && token != null) onUnauthorized();
+          handler.next(e);
+        },
+      ));
+    }
+  }
 
   final Dio _dio;
 
