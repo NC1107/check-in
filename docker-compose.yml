@@ -81,6 +81,52 @@ services:
         limits:
           memory: 128M
 
+  # --- Backups (write to ./backups on the host so they're easy to find & copy off-box) ---
+
+  # Daily, consistent pg_dump with rotation. Restore:
+  #   gunzip -c ./backups/db/last/checkin-<ts>.sql.gz | \
+  #     docker compose exec -T db psql -U checkin -d checkin
+  db-backup:
+    image: prodrigestivill/postgres-backup-local:16
+    restart: unless-stopped
+    networks:
+      - backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: ${POSTGRES_DB:-checkin}
+      POSTGRES_USER: ${POSTGRES_USER:-checkin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SCHEDULE: "@daily"
+      BACKUP_KEEP_DAYS: "7"
+      BACKUP_KEEP_WEEKS: "4"
+      BACKUP_KEEP_MONTHS: "6"
+    volumes:
+      - ./backups/db:/backups
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  # Nightly tar.gz of the uploaded media volume, kept 30 days. Restore: extract a
+  # ./backups/media/*.tar.gz back into the media_data volume.
+  media-backup:
+    image: offen/docker-volume-backup:v2
+    restart: unless-stopped
+    environment:
+      BACKUP_CRON_EXPRESSION: "0 3 * * *"
+      BACKUP_FILENAME: "media-%Y-%m-%dT%H-%M-%S.tar.gz"
+      BACKUP_RETENTION_DAYS: "30"
+    volumes:
+      - media_data:/backup/media:ro
+      - ./backups/media:/archive
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
 volumes:
   db_data:
   media_data:
