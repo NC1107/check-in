@@ -97,3 +97,9 @@ final apiProvider = Provider<ApiClient>((ref) {
   final s = ref.watch(sessionProvider);
   return ApiClient(baseUrl: s.baseUrl ?? '', token: s.token);
 });
+
+/// The home feed as a refreshable provider. Invalidate it (e.g. after creating a post)
+/// and the feed list updates without a manual pull-to-refresh.
+final feedProvider = FutureProvider.autoDispose<List<Post>>((ref) {
+  return ref.watch(apiProvider).feed();
+});

@@ -113,7 +113,6 @@ class FeedScreen extends ConsumerStatefulWidget {
 }
 
 class _FeedScreenState extends ConsumerState<FeedScreen> {
-  late Future<List<Post>> _future;
   final _scrollCtrl = ScrollController();
   bool _searchHidden = false;
   double _lastScrollTop = 0;
@@ -128,7 +127,6 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   @override
   void initState() {
     super.initState();
-    _future = ref.read(apiProvider).feed();
     _scrollCtrl.addListener(_onScroll);
   }
 
@@ -138,16 +136,24 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     super.dispose();
   }
 
+  // Hide the top bar only when actively scrolling down; show it at the very top or as
+  // soon as the user scrolls up. A small delta avoids flicker on tiny movements.
   void _onScroll() {
     final top = _scrollCtrl.offset;
-    final hidden = top > _lastScrollTop + 2 && top > 40;
+    final delta = top - _lastScrollTop;
     _lastScrollTop = top;
-    if (hidden != _searchHidden) setState(() => _searchHidden = hidden);
+    if (top <= 8) {
+      if (_searchHidden) setState(() => _searchHidden = false);
+    } else if (delta > 6 && !_searchHidden) {
+      setState(() => _searchHidden = true);
+    } else if (delta < -6 && _searchHidden) {
+      setState(() => _searchHidden = false);
+    }
   }
 
   Future<void> _refresh() async {
-    final posts = await ref.read(apiProvider).feed();
-    if (mounted) setState(() => _future = Future.value(posts));
+    ref.invalidate(feedProvider);
+    await ref.read(feedProvider.future);
   }
 
   Future<void> _openUserSearch() async {
@@ -253,53 +259,49 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
               onRefresh: _refresh,
               color: _accent,
               backgroundColor: _bgSurface,
-              child: FutureBuilder<List<Post>>(
-                future: _future,
-                builder: (context, snap) {
-                  if (snap.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator(color: _accent));
-                  }
-                  if (snap.hasError) {
-                    return ListView(children: [
+              child: ref.watch(feedProvider).when(
+                    loading: () => const Center(child: CircularProgressIndicator(color: _accent)),
+                    error: (e, _) => ListView(children: [
                       const SizedBox(height: 140),
                       Center(
-                        child: Text('Could not load feed.\n${snap.error}',
+                        child: Text('Could not load feed.\n$e',
                             textAlign: TextAlign.center,
                             style: const TextStyle(color: _fgSecondary)),
                       ),
-                    ]);
-                  }
-                  _allPosts = snap.data ?? [];
-                  final posts = _applyFilter(_allPosts);
-                  if (_allPosts.isEmpty) {
-                    return ListView(children: const [
-                      SizedBox(height: 180),
-                      Center(
-                        child: Text('No posts yet.\nTap + to share an update.',
-                            textAlign: TextAlign.center, style: TextStyle(color: _fgMuted)),
-                      ),
-                    ]);
-                  }
-                  final items = _buildItems(posts);
-                  return ListView.builder(
-                    controller: _scrollCtrl,
-                    padding: EdgeInsets.only(top: _hasFilter ? 116 : 72, bottom: 24),
-                    itemCount: posts.isEmpty ? 1 : items.length,
-                    itemBuilder: (_, i) {
-                      if (posts.isEmpty) {
-                        return const Padding(
-                          padding: EdgeInsets.only(top: 60),
-                          child: Center(
-                            child: Text('No posts match your filters.',
-                                style: TextStyle(color: _fgMuted)),
+                    ]),
+                    data: (data) {
+                      _allPosts = data;
+                      final posts = _applyFilter(_allPosts);
+                      if (_allPosts.isEmpty) {
+                        return ListView(children: const [
+                          SizedBox(height: 180),
+                          Center(
+                            child: Text('No posts yet.\nTap + to share an update.',
+                                textAlign: TextAlign.center, style: TextStyle(color: _fgMuted)),
                           ),
-                        );
+                        ]);
                       }
-                      return _buildItem(items[i]);
+                      final items = _buildItems(posts);
+                      return ListView.builder(
+                        controller: _scrollCtrl,
+                        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                        padding: EdgeInsets.only(top: _hasFilter ? 116 : 72, bottom: 24),
+                        itemCount: posts.isEmpty ? 1 : items.length,
+                        itemBuilder: (_, i) {
+                          if (posts.isEmpty) {
+                            return const Padding(
+                              padding: EdgeInsets.only(top: 60),
+                              child: Center(
+                                child: Text('No posts match your filters.',
+                                    style: TextStyle(color: _fgMuted)),
+                              ),
+                            );
+                          }
+                          return _buildItem(items[i]);
+                        },
+                      );
                     },
-                  );
-                },
-              ),
+                  ),
             ),
             // Floating search bar + active filter chips — slide away on scroll down.
             AnimatedSlide(

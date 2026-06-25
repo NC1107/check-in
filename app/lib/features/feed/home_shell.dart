@@ -48,7 +48,10 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       ),
       builder: (_) => const _ComposeSheet(),
     ).then((posted) {
-      if (posted == true && _index != 0) setState(() => _index = 0);
+      if (posted == true) {
+        ref.invalidate(feedProvider); // surface the new post immediately
+        if (_index != 0) setState(() => _index = 0);
+      }
     });
   }
 
