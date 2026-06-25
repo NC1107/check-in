@@ -18,7 +18,6 @@ const _fgPrimary = Color(0xFFEDEDEF);
 const _fgSecondary = Color(0xFFABABB0);
 const _fgMuted = Color(0xFF848490);
 const _accent = Color(0xFF5557E0);
-const _accentLight = Color(0x295557E0);
 
 /// HomeShell hosts the main tabs once a user is logged in.
 class HomeShell extends ConsumerStatefulWidget {
@@ -245,7 +244,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                   Container(
                     width: 38,
                     height: 38,
-                    decoration: BoxDecoration(color: _accent, shape: BoxShape.circle),
+                    decoration: const BoxDecoration(color: _accent, shape: BoxShape.circle),
                     alignment: Alignment.center,
                     child: Text(
                       me.name.isNotEmpty ? me.name[0].toUpperCase() : 'Y',

@@ -320,11 +320,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         if (showStatus) _statusRow(),
         if (!_loginMode) ...[
           const SizedBox(height: 16),
-          Row(
+          const Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.info_outline, size: 17, color: _fgMuted),
-              const SizedBox(width: 8),
+              Icon(Icons.info_outline, size: 17, color: _fgMuted),
+              SizedBox(width: 8),
               Expanded(
                 child: Text(
                   'Not on the list? Ask whoever set up the server to add your number.',
@@ -477,10 +477,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           onChanged: (_) => setState(() {}),
         ),
         const SizedBox(height: 10),
-        Row(
+        const Row(
           children: [
-            const Icon(Icons.cake_outlined, size: 16, color: _fgMuted),
-            const SizedBox(width: 8),
+            Icon(Icons.cake_outlined, size: 16, color: _fgMuted),
+            SizedBox(width: 8),
             Text('Your circle gets a gentle reminder on your day.',
                 style: TextStyle(color: _fgMuted, fontSize: 12)),
           ],
@@ -504,7 +504,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           Container(
             width: 84,
             height: 84,
-            decoration: BoxDecoration(
+            decoration: const BoxDecoration(
               color: _accent,
               shape: BoxShape.circle,
               boxShadow: [BoxShadow(color: _accentLight, blurRadius: 0, spreadRadius: 8)],

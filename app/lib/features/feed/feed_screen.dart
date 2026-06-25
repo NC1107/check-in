@@ -10,14 +10,11 @@ import 'user_search_delegate.dart';
 // Design tokens
 const _bgMain = Color(0xFF0A0A0B);
 const _bgSurface = Color(0xFF1C1C1E);
-const _bgSurfaceHover = Color(0xFF232326);
 const _border = Color(0xFF27272A);
-const _fgPrimary = Color(0xFFEDEDEF);
 const _fgSecondary = Color(0xFFABABB0);
 const _fgMuted = Color(0xFF848490);
 const _accent = Color(0xFF5557E0);
 const _accentLight = Color(0x295557E0);
-const _onAccent = Colors.white;
 
 /// A feed item that renders the section date label with connector lines.
 class _DateDivider extends StatelessWidget {
@@ -66,7 +63,7 @@ class _GapConnector extends StatelessWidget {
           width: 9,
           height: 9,
           margin: const EdgeInsets.symmetric(vertical: 2),
-          decoration: BoxDecoration(
+          decoration: const BoxDecoration(
             color: _accent,
             shape: BoxShape.circle,
             boxShadow: [BoxShadow(color: _accentLight, blurRadius: 0, spreadRadius: 3)],
@@ -99,7 +96,7 @@ String _dateLabel(DateTime dt) {
   final diff = today.difference(day).inDays;
   if (diff == 0) return 'Today';
   if (diff == 1) return 'Yesterday';
-  if (diff < 7) return '${diff} days ago';
+  if (diff < 7) return '$diff days ago';
   return '${dt.month}/${dt.day}/${dt.year}';
 }
 
