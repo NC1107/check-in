@@ -96,6 +96,35 @@ class ApiClient {
     return User.fromJson(r.data as Map<String, dynamic>);
   }
 
+  // ---- push notifications ----
+
+  /// registerDevice stores this device's FCM token server-side so it can receive push.
+  /// Safe to call repeatedly (the server upserts on the token).
+  Future<void> registerDevice({required String token, required String platform}) =>
+      _dio.post('/api/me/devices', data: {'token': token, 'platform': platform});
+
+  /// unregisterDevice removes a token (called on logout so a signed-out phone stops
+  /// receiving this account's notifications).
+  Future<void> unregisterDevice(String token) =>
+      _dio.delete('/api/me/devices', data: {'token': token});
+
+  /// notificationPrefs returns the per-account push opt-outs.
+  Future<({bool posts, bool replies})> notificationPrefs() async {
+    final r = await _dio.get('/api/me/notifications');
+    final j = r.data as Map<String, dynamic>;
+    return (posts: j['posts'] as bool? ?? true, replies: j['replies'] as bool? ?? true);
+  }
+
+  /// updateNotificationPrefs toggles the opt-outs. Omitted fields keep their value.
+  Future<({bool posts, bool replies})> updateNotificationPrefs({bool? posts, bool? replies}) async {
+    final r = await _dio.patch('/api/me/notifications', data: {
+      if (posts != null) 'posts': posts,
+      if (replies != null) 'replies': replies,
+    });
+    final j = r.data as Map<String, dynamic>;
+    return (posts: j['posts'] as bool? ?? true, replies: j['replies'] as bool? ?? true);
+  }
+
   /// setProfilePhoto attaches an already-uploaded media item as the current user's
   /// avatar and returns the updated user. Used during signup once a token exists.
   Future<User> setProfilePhoto(int mediaId) async {

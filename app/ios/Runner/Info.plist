@@ -36,6 +36,11 @@
 	<string>Check-In uses your contacts so you can pick who to invite to your server.</string>
 	<key>NSUserNotificationUsageDescription</key>
 	<string>Check-In sends notifications for new messages and activity.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+		<string>remote-notification</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

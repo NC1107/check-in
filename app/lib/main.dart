@@ -1,11 +1,13 @@
 import 'dart:async';
 
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'features/feed/home_shell.dart';
 import 'features/onboarding/auth_screen.dart';
+import 'notifications/push_messaging.dart';
 import 'state/app_state.dart';
 import 'theme/tokens.dart';
 
@@ -13,7 +15,7 @@ void main() {
   // Ensure plugins (secure storage, prefs) are ready before providers spin up, and route
   // all uncaught errors to one place so a stray exception can't silently kill startup.
   runZonedGuarded(
-    () {
+    () async {
       WidgetsFlutterBinding.ensureInitialized();
       FlutterError.onError = (details) {
         FlutterError.presentError(details);
@@ -23,10 +25,28 @@ void main() {
         debugPrint('[CHECKIN] $error');
         return true;
       };
+      await _initFirebase();
       runApp(const ProviderScope(child: CheckInApp()));
     },
     (error, stack) => debugPrint('[CHECKIN] uncaught: $error'),
   );
+}
+
+/// Bring up Firebase + push on mobile only. The native google-services config is read
+/// automatically. Best-effort: if Firebase isn't configured for a build (e.g. web), the
+/// app still starts — it just won't receive cloud push.
+Future<void> _initFirebase() async {
+  if (kIsWeb ||
+      (defaultTargetPlatform != TargetPlatform.android &&
+          defaultTargetPlatform != TargetPlatform.iOS)) {
+    return;
+  }
+  try {
+    await Firebase.initializeApp();
+    await initPush();
+  } catch (e) {
+    debugPrint('[CHECKIN] firebase init skipped: $e');
+  }
 }
 
 class CheckInApp extends ConsumerWidget {

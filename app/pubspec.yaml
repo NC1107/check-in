@@ -25,6 +25,8 @@ dependencies:
   flutter_local_notifications: ^17.2.3
   timezone: ^0.9.4
   intl: ^0.19.0
+  firebase_core: ^3.8.0       # initialise Firebase from the native google-services config
+  firebase_messaging: ^15.1.5 # FCM push: delivers to Android directly and iOS via APNs
 
 dev_dependencies:
   flutter_test:

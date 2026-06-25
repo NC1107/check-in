@@ -53,8 +53,14 @@ services:
       CHECKIN_SERVER_NAME: ${CHECKIN_SERVER_NAME:-Check-In}
       # Optional debug web view at /debug?token=... — unset/empty disables it.
       CHECKIN_DEBUG_TOKEN: ${CHECKIN_DEBUG_TOKEN:-}
+      # Push notifications (optional): in-container path to the Firebase service-account
+      # JSON. Leave empty to disable push entirely. See CHECKIN_FCM_CREDENTIALS_HOST below.
+      CHECKIN_FCM_CREDENTIALS_FILE: ${CHECKIN_FCM_CREDENTIALS_FILE:-}
     volumes:
       - media_data:/data/media
+      # Mounts your Firebase service-account JSON when CHECKIN_FCM_CREDENTIALS_HOST points
+      # at it; defaults to a harmless no-op so push stays optional for other self-hosters.
+      - ${CHECKIN_FCM_CREDENTIALS_HOST:-/dev/null}:/run/secrets/fcm-service-account.json:ro
     deploy:
       resources:
         limits:
