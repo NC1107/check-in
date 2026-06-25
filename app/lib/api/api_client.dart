@@ -212,6 +212,20 @@ class ApiClient {
     return r.data as Map<String, dynamic>;
   }
 
+  /// adminListAllowed returns the invite list (allowlist) — every number that may sign
+  /// up, plus whether it has already joined.
+  Future<List<Invite>> adminListAllowed() async {
+    final r = await _dio.get('/api/admin/allowed');
+    return ((r.data as Map<String, dynamic>)['invites'] as List? ?? [])
+        .map((e) => Invite.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// adminRemoveInvite removes a pending number from the invite list. Existing accounts
+  /// are unaffected (revoke those from the members list instead).
+  Future<void> adminRemoveInvite(String phone) =>
+      _dio.delete('/api/admin/allowed', data: {'phone': phone});
+
   Future<List<User>> adminListUsers() async {
     final r = await _dio.get('/api/admin/users');
     return ((r.data as Map<String, dynamic>)['users'] as List? ?? [])
