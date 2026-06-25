@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:dio/dio.dart';
 import 'package:http_parser/http_parser.dart';
 
@@ -192,6 +194,16 @@ class ApiClient {
     return ((r.data as Map<String, dynamic>)['birthdays'] as List? ?? [])
         .map((e) => Birthday.fromJson(e as Map<String, dynamic>))
         .toList();
+  }
+
+  /// downloadMedia fetches the raw bytes of a media item (with the auth header) so the
+  /// app can save it to the device gallery.
+  Future<Uint8List> downloadMedia(int mediaId) async {
+    final r = await _dio.get<List<int>>(
+      '/api/media/$mediaId',
+      options: Options(responseType: ResponseType.bytes),
+    );
+    return Uint8List.fromList(r.data ?? const []);
   }
 
   /// uploadImage sends a file and returns the new media id.

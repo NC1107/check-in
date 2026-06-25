@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:gal/gal.dart';
 
 import '../../api/models.dart';
 import '../../state/app_state.dart';
@@ -97,6 +98,22 @@ class _PostCardState extends ConsumerState<PostCard> {
       }
     }
   }
+
+  /// Downloads the post's photo (with auth) and saves it to the device gallery.
+  Future<void> _savePhoto(int mediaId) async {
+    try {
+      final bytes = await ref.read(apiProvider).downloadMedia(mediaId);
+      await Gal.putImageBytes(bytes);
+      if (mounted) _snack('Saved to your photos');
+    } on GalException catch (_) {
+      if (mounted) _snack('Allow photo access to save this');
+    } catch (_) {
+      if (mounted) _snack('Could not save the photo');
+    }
+  }
+
+  void _snack(String msg) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 
   Future<void> _toggleLike() async {
     final api = ref.read(apiProvider);
@@ -205,7 +222,8 @@ class _PostCardState extends ConsumerState<PostCard> {
                   _relativeTime(p.createdAt),
                   style: const TextStyle(color: _fgMuted, fontSize: 12),
                 ),
-                if (me != null && me.id == p.authorId)
+                // ⋯ menu: Save photo on any image post; Delete only for the author.
+                if ((me != null && me.id == p.authorId) || (p.kind == 'image' && p.mediaId != null))
                   SizedBox(
                     height: 30,
                     width: 30,
@@ -219,18 +237,31 @@ class _PostCardState extends ConsumerState<PostCard> {
                       ),
                       onSelected: (v) {
                         if (v == 'delete') _confirmDelete();
+                        if (v == 'save') _savePhoto(p.mediaId!);
                       },
                       itemBuilder: (_) => [
-                        const PopupMenuItem(
-                          value: 'delete',
-                          child: Row(
-                            children: [
-                              Icon(Icons.delete_outline, size: 19, color: _like),
-                              SizedBox(width: 10),
-                              Text('Delete', style: TextStyle(color: _like)),
-                            ],
+                        if (p.kind == 'image' && p.mediaId != null)
+                          const PopupMenuItem(
+                            value: 'save',
+                            child: Row(
+                              children: [
+                                Icon(Icons.download_outlined, size: 19, color: _fgPrimary),
+                                SizedBox(width: 10),
+                                Text('Save photo', style: TextStyle(color: _fgPrimary)),
+                              ],
+                            ),
                           ),
-                        ),
+                        if (me != null && me.id == p.authorId)
+                          const PopupMenuItem(
+                            value: 'delete',
+                            child: Row(
+                              children: [
+                                Icon(Icons.delete_outline, size: 19, color: _like),
+                                SizedBox(width: 10),
+                                Text('Delete', style: TextStyle(color: _like)),
+                              ],
+                            ),
+                          ),
                       ],
                     ),
                   ),

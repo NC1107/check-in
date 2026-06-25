@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:gal/gal.dart';
 import 'package:intl/intl.dart';
 
 import '../../api/models.dart';
@@ -32,6 +33,21 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   late Future<(Post, List<Comment>)> _future;
   bool _sending = false;
   bool? _likeOverride; // null = use the post's server value
+
+  Future<void> _savePhoto(int mediaId) async {
+    try {
+      final bytes = await ref.read(apiProvider).downloadMedia(mediaId);
+      await Gal.putImageBytes(bytes);
+      if (mounted) _snack('Saved to your photos');
+    } on GalException catch (_) {
+      if (mounted) _snack('Allow photo access to save this');
+    } catch (_) {
+      if (mounted) _snack('Could not save the photo');
+    }
+  }
+
+  void _snack(String msg) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 
   Future<void> _toggleLike(Post post) async {
     final current = _likeOverride ?? post.likedByViewer;
@@ -257,6 +273,12 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
               ],
             ),
           ),
+          if (post.kind == 'image' && post.mediaId != null)
+            IconButton(
+              icon: const Icon(Icons.download_outlined, size: 22, color: kFgSecondary),
+              tooltip: 'Save photo',
+              onPressed: () => _savePhoto(post.mediaId!),
+            ),
         ],
       ),
     );
