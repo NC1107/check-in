@@ -9,6 +9,7 @@ import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/auth_image.dart';
+import '../../widgets/user_avatar.dart';
 import '../admin/admin_screen.dart';
 import '../feed/post_card.dart';
 
@@ -134,7 +135,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
       child: Column(
         children: [
-          Avatar(name: user.name, mediaId: user.profileMediaId, radius: 44),
+          UserAvatar(name: user.name, mediaId: user.profileMediaId, size: 88, colorSeed: user.id),
           const SizedBox(height: 14),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,

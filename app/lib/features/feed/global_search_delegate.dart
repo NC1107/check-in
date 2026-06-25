@@ -6,6 +6,7 @@ import '../../api/api_client.dart';
 import '../../api/models.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/auth_image.dart';
+import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
 import '../profile/profile_screen.dart';
 
@@ -135,7 +136,7 @@ class GlobalSearchDelegate extends SearchDelegate<void> {
 
   Widget _personTile(BuildContext context, User u) {
     return ListTile(
-      leading: Avatar(name: u.name, mediaId: u.profileMediaId, radius: 20),
+      leading: UserAvatar(name: u.name, mediaId: u.profileMediaId, size: 40, colorSeed: u.id),
       title: Text(u.name, style: const TextStyle(color: kFgPrimary, fontWeight: FontWeight.w600)),
       onTap: () {
         final nav = Navigator.of(context);
