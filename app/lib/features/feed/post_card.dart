@@ -3,17 +3,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/models.dart';
 import '../../state/app_state.dart';
+import '../../theme/tokens.dart';
 import '../../widgets/auth_image.dart';
 import '../post/post_detail_screen.dart';
 
-// Design tokens matching the Check-In design system
-const _bgSurface = Color(0xFF1C1C1E);
-const _border = Color(0xFF27272A);
-const _fgPrimary = Color(0xFFEDEDEF);
-const _fgSecondary = Color(0xFFABABB0);
-const _fgMuted = Color(0xFF848490);
-const _accent = Color(0xFF5557E0);
-const _like = Color(0xFFEF4444);
+// Theme tokens (centralized in theme/tokens.dart).
+const _bgSurface = kBgSurface;
+const _border = kBorder;
+const _fgPrimary = kFgPrimary;
+const _fgSecondary = kFgSecondary;
+const _fgMuted = kFgMuted;
+const _accent = kAccent;
+const _like = kLike;
 
 const _avatarPalette = [
   Color(0xFF5557E0), Color(0xFF13AF9D), Color(0xFFDD1C85),

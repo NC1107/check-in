@@ -6,18 +6,19 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../notifications/birthday_notifier.dart';
 import '../../state/app_state.dart';
+import '../../theme/tokens.dart';
 import '../admin/admin_screen.dart';
 import '../profile/profile_screen.dart';
 import 'feed_screen.dart';
 
-const _bgMain = Color(0xFF0A0A0B);
-const _bgSurface = Color(0xFF1C1C1E);
-const _bgSurfaceHover = Color(0xFF232326);
-const _border = Color(0xFF27272A);
-const _fgPrimary = Color(0xFFEDEDEF);
-const _fgSecondary = Color(0xFFABABB0);
-const _fgMuted = Color(0xFF848490);
-const _accent = Color(0xFF5557E0);
+const _bgMain = kBgMain;
+const _bgSurface = kBgSurface;
+const _bgSurfaceHover = kBgSurfaceHover;
+const _border = kBorder;
+const _fgPrimary = kFgPrimary;
+const _fgSecondary = kFgSecondary;
+const _fgMuted = kFgMuted;
+const _accent = kAccent;
 
 /// HomeShell hosts the main tabs once a user is logged in.
 class HomeShell extends ConsumerStatefulWidget {
