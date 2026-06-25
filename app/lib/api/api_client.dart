@@ -9,8 +9,13 @@ class ApiClient {
   ApiClient({required String baseUrl, String? token, void Function()? onUnauthorized})
       : _dio = Dio(BaseOptions(
           baseUrl: baseUrl,
-          connectTimeout: const Duration(seconds: 10),
-          receiveTimeout: const Duration(seconds: 20),
+          connectTimeout: const Duration(seconds: 15),
+          // Generous send/receive windows: image uploads are re-encoded server-side
+          // (EXIF/orientation), which can take a while on a loaded self-hosted box. A
+          // tight timeout made the first attempt look like a failure while the server
+          // actually succeeded, prompting a confusing retry.
+          sendTimeout: const Duration(seconds: 60),
+          receiveTimeout: const Duration(seconds: 60),
           headers: token == null ? null : {'Authorization': 'Bearer $token'},
         )) {
     if (onUnauthorized != null) {
