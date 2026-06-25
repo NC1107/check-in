@@ -143,6 +143,18 @@ func (d *DB) SetUserStatus(ctx context.Context, id int64, status string) error {
 	return nil
 }
 
+// SetUserAdmin promotes (or demotes) a user. Used by the operator dashboard.
+func (d *DB) SetUserAdmin(ctx context.Context, id int64, isAdmin bool) error {
+	ct, err := d.Pool.Exec(ctx, `UPDATE users SET is_admin = $2 WHERE id = $1`, id, isAdmin)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ---- allowed phones (the allowlist) ----
 
 // PhoneRegistered reports whether an account already exists for this phone (in any
@@ -181,6 +193,23 @@ func (d *DB) AddAllowedPhones(ctx context.Context, phones []string, addedBy int6
 		 SELECT unnest($1::text[]), $2
 		 ON CONFLICT (phone) DO NOTHING`,
 		phones, addedBy)
+	if err != nil {
+		return 0, err
+	}
+	return int(ct.RowsAffected()), nil
+}
+
+// AddAllowedPhonesNoUser adds allowlist entries with no "added by" attribution (added_by
+// NULL), for the operator dashboard, which acts without a logged-in member.
+func (d *DB) AddAllowedPhonesNoUser(ctx context.Context, phones []string) (int, error) {
+	if len(phones) == 0 {
+		return 0, nil
+	}
+	ct, err := d.Pool.Exec(ctx,
+		`INSERT INTO allowed_phones (phone)
+		 SELECT unnest($1::text[])
+		 ON CONFLICT (phone) DO NOTHING`,
+		phones)
 	if err != nil {
 		return 0, err
 	}
@@ -478,6 +507,54 @@ func (d *DB) DeletePost(ctx context.Context, postID, authorID int64) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// AdminDeletePost removes any post regardless of owner (operator dashboard moderation).
+// Comments and likes cascade via their foreign keys.
+func (d *DB) AdminDeletePost(ctx context.Context, postID int64) error {
+	ct, err := d.Pool.Exec(ctx, `DELETE FROM posts WHERE id = $1`, postID)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// AdminDeleteComment removes any comment by id (operator dashboard moderation).
+func (d *DB) AdminDeleteComment(ctx context.Context, commentID int64) error {
+	ct, err := d.Pool.Exec(ctx, `DELETE FROM comments WHERE id = $1`, commentID)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// RecentComments returns the latest comments across all posts with their author name,
+// for the operator dashboard's activity view.
+func (d *DB) RecentComments(ctx context.Context, limit int) ([]Comment, error) {
+	rows, err := d.Pool.Query(ctx, `
+		SELECT c.id, c.post_id, c.user_id, c.body, c.created_at, u.name
+		FROM comments c JOIN users u ON u.id = c.user_id
+		ORDER BY c.created_at DESC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Comment
+	for rows.Next() {
+		var c Comment
+		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.AuthorName); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 // ---- likes ----
