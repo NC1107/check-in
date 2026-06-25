@@ -97,6 +97,13 @@ Future<void> requestDeviceToken(ApiClient api) async {
     if (settings.authorizationStatus == AuthorizationStatus.denied) return;
 
     final platform = defaultTargetPlatform == TargetPlatform.iOS ? 'ios' : 'android';
+    // iOS hands FCM the APNs token asynchronously; getToken() stays null (or throws)
+    // until it's set. Wait briefly for it so the first launch registers reliably.
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      for (var i = 0; i < 10 && (await messaging.getAPNSToken()) == null; i++) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+    }
     final token = await messaging.getToken();
     if (token != null) {
       await api.registerDevice(token: token, platform: platform);
