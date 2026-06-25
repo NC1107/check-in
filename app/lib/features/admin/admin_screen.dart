@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../widgets/auth_image.dart';
+import 'contacts_picker_screen.dart';
 
 /// AdminScreen lets the admin build the signup allowlist by entering phone numbers
 /// and manage existing members.
@@ -51,11 +52,24 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
       _snack('Enter at least one phone number.');
       return;
     }
+    await _upload(phones);
+    if (mounted) _phonesCtrl.clear();
+  }
+
+  Future<void> _importFromContacts() async {
+    final phones = await Navigator.of(context).push<List<String>>(
+      MaterialPageRoute(builder: (_) => const ContactsPickerScreen()),
+    );
+    if (phones == null || phones.isEmpty) return;
+    await _upload(phones);
+  }
+
+  /// Shared upload path used by both contacts import and manual entry.
+  Future<void> _upload(List<String> phones) async {
     setState(() => _uploading = true);
     try {
       final result = await ref.read(apiProvider).uploadContacts(phones);
       _snack('Added ${result['added']} new numbers (${result['valid']} valid of ${result['received']}).');
-      _phonesCtrl.clear();
     } catch (e) {
       _snack('Upload failed: $e');
     } finally {
@@ -84,23 +98,32 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
                     Text('Invite list', style: Theme.of(context).textTheme.titleMedium),
                     const SizedBox(height: 8),
                     const Text(
-                        'Add phone numbers to choose who can sign up. Each number becomes their '
-                        'invite — they just enter it to join. One per line, or separated by commas.'),
+                        'Choose who can sign up. Each number becomes their invite — they just '
+                        'enter it to join. You can change this anytime.'),
                     const SizedBox(height: 12),
+                    FilledButton.icon(
+                      icon: const Icon(Icons.contacts),
+                      label: Text(_uploading ? 'Adding…' : 'Pick from contacts'),
+                      onPressed: _uploading ? null : _importFromContacts,
+                    ),
+                    const SizedBox(height: 16),
+                    const Text('Or add numbers manually',
+                        style: TextStyle(color: Color(0xFF848490), fontSize: 12, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 8),
                     TextField(
                       controller: _phonesCtrl,
                       keyboardType: TextInputType.phone,
-                      minLines: 3,
-                      maxLines: 8,
+                      minLines: 2,
+                      maxLines: 6,
                       decoration: const InputDecoration(
                         hintText: '+15551234567\n+15557654321',
                         border: OutlineInputBorder(),
                       ),
                     ),
                     const SizedBox(height: 12),
-                    FilledButton.icon(
+                    OutlinedButton.icon(
                       icon: const Icon(Icons.person_add_alt),
-                      label: Text(_uploading ? 'Adding…' : 'Add to invite list'),
+                      label: const Text('Add typed numbers'),
                       onPressed: _uploading ? null : _uploadPhones,
                     ),
                   ],
