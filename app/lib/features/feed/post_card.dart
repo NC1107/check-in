@@ -27,9 +27,12 @@ String _relativeTime(DateTime dt) {
 
 /// PostCard renders one post in the feed with the design-system dark card style.
 class PostCard extends ConsumerStatefulWidget {
-  const PostCard({super.key, required this.post});
+  const PostCard({super.key, required this.post, this.onDeleted});
 
   final Post post;
+
+  /// Called after this post is deleted so the host list (feed/profile) can refresh.
+  final VoidCallback? onDeleted;
 
   @override
   ConsumerState<PostCard> createState() => _PostCardState();
@@ -42,10 +45,57 @@ class _PostCardState extends ConsumerState<PostCard> {
   final _commentCtrl = TextEditingController();
   bool _postingComment = false;
 
+  // If this State gets re-bound to a different post (e.g. the list shifts when a new
+  // post is prepended), resync the like/comment state so counts don't bleed between
+  // posts. A ValueKey on each card normally prevents this; this is a safety net.
+  @override
+  void didUpdateWidget(PostCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.post.id != widget.post.id) {
+      _liked = widget.post.likedByViewer;
+      _likes = widget.post.likeCount;
+      _comments = widget.post.commentCount;
+    }
+  }
+
   @override
   void dispose() {
     _commentCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _confirmDelete() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _bgSurface,
+        title: const Text('Delete this check-in?', style: TextStyle(color: _fgPrimary)),
+        content: const Text('This permanently removes the post for everyone.',
+            style: TextStyle(color: _fgSecondary)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: _fgSecondary)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: _like, foregroundColor: Colors.white),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await ref.read(apiProvider).deletePost(widget.post.id);
+      ref.invalidate(feedProvider); // drop it from the feed immediately
+      widget.onDeleted?.call();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Could not delete the post')));
+      }
+    }
   }
 
   Future<void> _toggleLike() async {
@@ -82,6 +132,39 @@ class _PostCardState extends ConsumerState<PostCard> {
     } finally {
       if (mounted) setState(() => _postingComment = false);
     }
+  }
+
+  /// One tappable feed action (like / comment) with a Material ripple so presses give
+  /// clear visual feedback.
+  Widget _action({
+    required IconData icon,
+    required Color iconColor,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkResponse(
+        onTap: onTap,
+        radius: 28,
+        containedInkWell: true,
+        highlightShape: BoxShape.rectangle,
+        borderRadius: BorderRadius.circular(9),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 22, color: iconColor),
+              const SizedBox(width: 6),
+              Text(label,
+                  style: const TextStyle(
+                      color: _fgSecondary, fontWeight: FontWeight.w600, fontSize: 13)),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -122,6 +205,35 @@ class _PostCardState extends ConsumerState<PostCard> {
                   _relativeTime(p.createdAt),
                   style: const TextStyle(color: _fgMuted, fontSize: 12),
                 ),
+                if (me != null && me.id == p.authorId)
+                  SizedBox(
+                    height: 30,
+                    width: 30,
+                    child: PopupMenuButton<String>(
+                      icon: const Icon(Icons.more_horiz, size: 20, color: _fgMuted),
+                      padding: EdgeInsets.zero,
+                      color: _bgSurface,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        side: const BorderSide(color: _border),
+                      ),
+                      onSelected: (v) {
+                        if (v == 'delete') _confirmDelete();
+                      },
+                      itemBuilder: (_) => [
+                        const PopupMenuItem(
+                          value: 'delete',
+                          child: Row(
+                            children: [
+                              Icon(Icons.delete_outline, size: 19, color: _like),
+                              SizedBox(width: 10),
+                              Text('Delete', style: TextStyle(color: _like)),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
               ],
             ),
           ),
@@ -144,52 +256,21 @@ class _PostCardState extends ConsumerState<PostCard> {
             ),
           // Actions row
           Padding(
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 6),
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
             child: Row(
               children: [
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
+                _action(
+                  icon: _liked ? Icons.favorite : Icons.favorite_border,
+                  iconColor: _liked ? _like : _fgSecondary,
+                  label: '$_likes',
                   onTap: _toggleLike,
-                  child: Row(
-                    children: [
-                      Icon(
-                        _liked ? Icons.favorite : Icons.favorite_border,
-                        size: 22,
-                        color: _liked ? _like : _fgSecondary,
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        '$_likes',
-                        style: const TextStyle(
-                          color: _fgSecondary,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
-                const SizedBox(width: 18),
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
+                _action(
+                  icon: Icons.chat_bubble_outline,
+                  iconColor: _fgSecondary,
+                  label: '$_comments',
                   onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => PostDetailScreen(postId: p.id),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.chat_bubble_outline, size: 21, color: _fgSecondary),
-                      const SizedBox(width: 6),
-                      Text(
-                        '$_comments',
-                        style: const TextStyle(
-                          color: _fgSecondary,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
+                    MaterialPageRoute(builder: (_) => PostDetailScreen(postId: p.id)),
                   ),
                 ),
               ],

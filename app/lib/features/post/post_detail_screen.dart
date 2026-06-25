@@ -31,6 +31,19 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   final _comment = TextEditingController();
   late Future<(Post, List<Comment>)> _future;
   bool _sending = false;
+  bool? _likeOverride; // null = use the post's server value
+
+  Future<void> _toggleLike(Post post) async {
+    final current = _likeOverride ?? post.likedByViewer;
+    final next = !current;
+    setState(() => _likeOverride = next);
+    try {
+      final api = ref.read(apiProvider);
+      next ? await api.like(post.id) : await api.unlike(post.id);
+    } catch (_) {
+      if (mounted) setState(() => _likeOverride = current);
+    }
+  }
 
   @override
   void initState() {
@@ -122,7 +135,9 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                           ),
                         ),
                       ),
-                    const SizedBox(height: 18),
+                    const SizedBox(height: 8),
+                    _actions(post, comments.length),
+                    const SizedBox(height: 8),
                     Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                       child: Text(
@@ -150,6 +165,56 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
             ),
           ),
           _composer(),
+        ],
+      ),
+    );
+  }
+
+  /// Like + comment counts under the post, with a tappable (ripple) like button.
+  Widget _actions(Post post, int commentCount) {
+    final liked = _likeOverride ?? post.likedByViewer;
+    final likes = post.likeCount + (liked == post.likedByViewer ? 0 : (liked ? 1 : -1));
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Row(
+        children: [
+          Material(
+            color: Colors.transparent,
+            child: InkResponse(
+              onTap: () => _toggleLike(post),
+              radius: 28,
+              containedInkWell: true,
+              highlightShape: BoxShape.rectangle,
+              borderRadius: BorderRadius.circular(9),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(liked ? Icons.favorite : Icons.favorite_border,
+                        size: 22, color: liked ? kLike : kFgSecondary),
+                    const SizedBox(width: 6),
+                    Text('$likes',
+                        style: const TextStyle(
+                            color: kFgSecondary, fontWeight: FontWeight.w600, fontSize: 13)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.chat_bubble_outline, size: 21, color: kFgSecondary),
+                const SizedBox(width: 6),
+                Text('$commentCount',
+                    style: const TextStyle(
+                        color: kFgSecondary, fontWeight: FontWeight.w600, fontSize: 13)),
+              ],
+            ),
+          ),
         ],
       ),
     );

@@ -239,7 +239,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     return switch (item) {
       _DividerItem(:final label) => _DateDivider(label: label),
       _GapItem() => const _GapConnector(),
-      _PostItem(:final post) => PostCard(post: post),
+      _PostItem(:final post) => PostCard(key: ValueKey(post.id), post: post),
     };
   }
 

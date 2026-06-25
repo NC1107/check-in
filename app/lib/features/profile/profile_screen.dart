@@ -119,7 +119,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                                 color: kAccent, fontWeight: FontWeight.w600, fontSize: 12),
                           ),
                         ),
-                        PostCard(post: p),
+                        PostCard(key: ValueKey(p.id), post: p, onDeleted: _reload),
                       ],
                     ),
                   )),
