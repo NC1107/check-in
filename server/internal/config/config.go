@@ -29,6 +29,9 @@ type Config struct {
 	// national phone numbers so a contact saved as "+1 (415) 555-0148" matches a friend
 	// who types "(415) 555-0148". Numbers entered with a leading '+' are taken as-is.
 	DefaultCountryCode string
+	// FCMCredentialsFile points to a Firebase service-account JSON used to send push
+	// notifications via FCM (reaches Android directly, iOS through APNs). Unset = no push.
+	FCMCredentialsFile string
 }
 
 // Load reads configuration from the environment, applying sensible defaults so the
@@ -43,6 +46,7 @@ func Load() (Config, error) {
 		MaxUploadBytes:     getint64("CHECKIN_MAX_UPLOAD_BYTES", 10<<20), // 10 MiB
 		DebugToken:         getenv("CHECKIN_DEBUG_TOKEN", ""),
 		DefaultCountryCode: getenv("CHECKIN_DEFAULT_COUNTRY_CODE", "1"),
+		FCMCredentialsFile: getenv("CHECKIN_FCM_CREDENTIALS_FILE", ""),
 	}
 	if cfg.DatabaseURL == "" {
 		return cfg, fmt.Errorf("CHECKIN_DATABASE_URL is required")

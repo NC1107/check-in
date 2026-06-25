@@ -354,6 +354,77 @@ func (d *DB) DeleteUserSessions(ctx context.Context, userID int64) error {
 	return err
 }
 
+// ---- push notifications ----
+
+// UpsertDeviceToken records (or refreshes) an FCM token for a user. Tokens are globally
+// unique; if one moves to a different account, it's reassigned.
+func (d *DB) UpsertDeviceToken(ctx context.Context, userID int64, token, platform string) error {
+	_, err := d.Pool.Exec(ctx, `
+		INSERT INTO device_tokens (user_id, token, platform)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (token) DO UPDATE SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform`,
+		userID, token, platform)
+	return err
+}
+
+// DeleteDeviceToken removes a single token (e.g. on logout).
+func (d *DB) DeleteDeviceToken(ctx context.Context, token string) error {
+	_, err := d.Pool.Exec(ctx, `DELETE FROM device_tokens WHERE token = $1`, token)
+	return err
+}
+
+// NotificationPrefs reports a user's opt-out toggles.
+func (d *DB) NotificationPrefs(ctx context.Context, userID int64) (posts, replies bool, err error) {
+	err = d.Pool.QueryRow(ctx,
+		`SELECT notify_posts, notify_replies FROM users WHERE id = $1`, userID,
+	).Scan(&posts, &replies)
+	return posts, replies, err
+}
+
+// SetNotificationPrefs updates a user's notification toggles.
+func (d *DB) SetNotificationPrefs(ctx context.Context, userID int64, posts, replies bool) error {
+	_, err := d.Pool.Exec(ctx,
+		`UPDATE users SET notify_posts = $2, notify_replies = $3 WHERE id = $1`, userID, posts, replies)
+	return err
+}
+
+// TokensForNewPost returns the device tokens of every active member who wants new-post
+// notifications, excluding the post's author.
+func (d *DB) TokensForNewPost(ctx context.Context, authorID int64) ([]string, error) {
+	return d.scanTokens(ctx, `
+		SELECT dt.token FROM device_tokens dt
+		JOIN users u ON u.id = dt.user_id
+		WHERE u.status = 'active' AND u.notify_posts = TRUE AND u.id <> $1`, authorID)
+}
+
+// TokensForReply returns the post author's device tokens when they want reply
+// notifications and aren't the one who just commented.
+func (d *DB) TokensForReply(ctx context.Context, postID, commenterID int64) ([]string, error) {
+	return d.scanTokens(ctx, `
+		SELECT dt.token FROM device_tokens dt
+		JOIN posts p ON p.id = $1
+		JOIN users u ON u.id = p.author_id
+		WHERE dt.user_id = p.author_id AND u.status = 'active'
+		  AND u.notify_replies = TRUE AND p.author_id <> $2`, postID, commenterID)
+}
+
+func (d *DB) scanTokens(ctx context.Context, sql string, args ...any) ([]string, error) {
+	rows, err := d.Pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var tokens []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, t)
+	}
+	return tokens, rows.Err()
+}
+
 // ---- media ----
 
 // CreateMedia records an uploaded file.
