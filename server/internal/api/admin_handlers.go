@@ -32,7 +32,7 @@ func (s *Server) handleUploadContacts(w http.ResponseWriter, r *http.Request) {
 	seen := make(map[string]struct{}, len(req.Phones))
 	normalized := make([]string, 0, len(req.Phones))
 	for _, p := range req.Phones {
-		n := auth.NormalizePhone(p)
+		n := auth.NormalizePhone(p, s.cfg.DefaultCountryCode)
 		if n == "" {
 			continue
 		}

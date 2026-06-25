@@ -25,6 +25,10 @@ type Config struct {
 	// DebugToken, when non-empty, enables the /debug web view (stats, phone numbers,
 	// and a destructive DB reset) guarded by this token. Leave unset to disable entirely.
 	DebugToken string
+	// DefaultCountryCode is the calling code (e.g. "1" for US/Canada) applied to bare
+	// national phone numbers so a contact saved as "+1 (415) 555-0148" matches a friend
+	// who types "(415) 555-0148". Numbers entered with a leading '+' are taken as-is.
+	DefaultCountryCode string
 }
 
 // Load reads configuration from the environment, applying sensible defaults so the
@@ -37,7 +41,8 @@ func Load() (Config, error) {
 		ServerName:     getenv("CHECKIN_SERVER_NAME", "Check-In"),
 		SessionTTL:     getdur("CHECKIN_SESSION_TTL", 30*24*time.Hour),
 		MaxUploadBytes: getint64("CHECKIN_MAX_UPLOAD_BYTES", 10<<20), // 10 MiB
-		DebugToken:     getenv("CHECKIN_DEBUG_TOKEN", ""),
+		DebugToken:         getenv("CHECKIN_DEBUG_TOKEN", ""),
+		DefaultCountryCode: getenv("CHECKIN_DEFAULT_COUNTRY_CODE", "1"),
 	}
 	if cfg.DatabaseURL == "" {
 		return cfg, fmt.Errorf("CHECKIN_DATABASE_URL is required")

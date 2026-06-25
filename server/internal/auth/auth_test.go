@@ -35,17 +35,29 @@ func TestTokenRoundTrip(t *testing.T) {
 }
 
 func TestNormalizePhone(t *testing.T) {
+	// With a US default country code, the same number matches no matter how it's written.
 	cases := map[string]string{
-		"+1 (555) 123-4567": "+15551234567",
-		"555-123-4567":      "5551234567",
-		"  +44 20 7946 0958": "+442079460958",
-		"":                  "",
-		"abc":               "",
-		"+1+2+3":            "+123", // only a leading + is kept
+		"+1 (555) 123-4567":  "15551234567",
+		"555-123-4567":       "15551234567", // 10-digit national → default code prepended
+		"(555) 123-4567":     "15551234567",
+		"15551234567":        "15551234567", // already has the country code
+		"  +44 20 7946 0958": "442079460958", // explicit + kept as international
+		"":                   "",
+		"abc":                "",
 	}
 	for in, want := range cases {
-		if got := NormalizePhone(in); got != want {
-			t.Errorf("NormalizePhone(%q) = %q, want %q", in, got, want)
+		if got := NormalizePhone(in, "1"); got != want {
+			t.Errorf("NormalizePhone(%q, \"1\") = %q, want %q", in, got, want)
 		}
+	}
+
+	// A contact saved with +1 must match a friend who types the bare national number.
+	if NormalizePhone("+1 (555) 123-4567", "1") != NormalizePhone("555-123-4567", "1") {
+		t.Error("contact (+1) and typed (no +1) forms should normalize equal")
+	}
+
+	// With defaulting disabled, formatting is still stripped but no code is added.
+	if got := NormalizePhone("555-123-4567", ""); got != "5551234567" {
+		t.Errorf("NormalizePhone with empty defaultCC = %q, want %q", got, "5551234567")
 	}
 }

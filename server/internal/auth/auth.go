@@ -80,20 +80,39 @@ func HashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// NormalizePhone reduces a phone number to a canonical comparable form: it keeps a
-// leading '+' if present and strips all other non-digit characters. This lets the
-// allowlist match regardless of spaces, dashes, or parentheses from contacts.
-func NormalizePhone(phone string) string {
+// NormalizePhone reduces a phone number to a canonical, digits-only comparable form for
+// allowlist matching. All formatting (spaces, dashes, parentheses, '+') is stripped, and
+// a default country code is applied to bare national numbers so the same person matches
+// no matter how the number was written:
+//
+//	"+1 (415) 555-0148"  → "14155550148"
+//	"(415) 555-0148"     → "14155550148"   (defaultCC "1" prepended)
+//	"415-555-0148"       → "14155550148"
+//	"+44 20 7946 0958"   → "442079460958"  (explicit '+' kept as-is)
+//
+// defaultCC is the calling code (e.g. "1"); pass "" to disable defaulting. A number
+// written with a leading '+' is treated as already international and never altered.
+func NormalizePhone(phone, defaultCC string) string {
 	phone = strings.TrimSpace(phone)
+	hadPlus := strings.HasPrefix(phone, "+")
+
 	var b strings.Builder
-	for i, r := range phone {
-		if r == '+' && i == 0 {
-			b.WriteRune(r)
-			continue
-		}
+	for _, r := range phone {
 		if r >= '0' && r <= '9' {
 			b.WriteRune(r)
 		}
 	}
-	return b.String()
+	digits := b.String()
+	if digits == "" {
+		return ""
+	}
+	if hadPlus || defaultCC == "" {
+		return digits
+	}
+	// Bare 10-digit national number (US/Canada style) → prepend the default code.
+	if len(digits) == 10 {
+		return defaultCC + digits
+	}
+	// Otherwise assume the country code is already present (e.g. "14155550148").
+	return digits
 }
