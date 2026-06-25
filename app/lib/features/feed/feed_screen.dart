@@ -277,7 +277,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                         return ListView(children: const [
                           SizedBox(height: 180),
                           Center(
-                            child: Text('No posts yet.\nTap + to share an update.',
+                            child: Text('No check-ins yet.\nTap + to share an update.',
                                 textAlign: TextAlign.center, style: TextStyle(color: _fgMuted)),
                           ),
                         ]);
@@ -293,7 +293,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                             return const Padding(
                               padding: EdgeInsets.only(top: 60),
                               child: Center(
-                                child: Text('No posts match your filters.',
+                                child: Text('No check-ins match your filters.',
                                     style: TextStyle(color: _fgMuted)),
                               ),
                             );
