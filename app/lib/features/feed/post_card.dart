@@ -80,6 +80,7 @@ class PostCard extends ConsumerStatefulWidget {
 class _PostCardState extends ConsumerState<PostCard> {
   late bool _liked = widget.post.likedByViewer;
   late int _likes = widget.post.likeCount;
+  late int _comments = widget.post.commentCount;
   final _commentCtrl = TextEditingController();
   bool _postingComment = false;
 
@@ -109,10 +110,17 @@ class _PostCardState extends ConsumerState<PostCard> {
     final text = _commentCtrl.text.trim();
     if (text.isEmpty || _postingComment) return;
     setState(() => _postingComment = true);
+    FocusScope.of(context).unfocus(); // close the keyboard
     try {
       await ref.read(apiProvider).addComment(widget.post.id, text);
       _commentCtrl.clear();
+      if (mounted) setState(() => _comments++);
     } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not add comment')),
+        );
+      }
     } finally {
       if (mounted) setState(() => _postingComment = false);
     }
@@ -215,7 +223,7 @@ class _PostCardState extends ConsumerState<PostCard> {
                       const Icon(Icons.chat_bubble_outline, size: 21, color: _fgSecondary),
                       const SizedBox(width: 6),
                       Text(
-                        '${p.commentCount}',
+                        '$_comments',
                         style: const TextStyle(
                           color: _fgSecondary,
                           fontWeight: FontWeight.w600,

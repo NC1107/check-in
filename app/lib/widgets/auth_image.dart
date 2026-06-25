@@ -17,8 +17,11 @@ class AuthImage extends ConsumerWidget {
     final api = ref.watch(apiProvider);
     return CachedNetworkImage(
       imageUrl: api.imageUrl(mediaId),
+      cacheKey: 'media-$mediaId', // stable across rebuilds → no re-fetch flash
       httpHeaders: api.authHeaders,
       fit: fit,
+      fadeInDuration: Duration.zero,
+      fadeOutDuration: Duration.zero,
       placeholder: (c, _) => const ColoredBox(
         color: Color(0x11000000),
         child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
