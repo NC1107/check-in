@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 
 import '../../api/models.dart';
+import '../../notifications/push_messaging.dart';
 import '../../state/app_state.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
@@ -13,6 +14,7 @@ import '../../widgets/auth_image.dart';
 import '../../widgets/user_avatar.dart';
 import '../admin/admin_screen.dart';
 import '../feed/post_card.dart';
+import '../settings/notification_settings_screen.dart';
 
 /// ProfileScreen shows a person's profile and their timeline. For the signed-in user it
 /// also offers profile editing and (for admins) member/invite management.
@@ -72,11 +74,22 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         actions: [
           if (widget.isSelf)
             IconButton(
+              tooltip: 'Notifications',
+              icon: const Icon(Icons.notifications_none_rounded, color: kFgSecondary),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const NotificationSettingsScreen()),
+              ),
+            ),
+          if (widget.isSelf)
+            IconButton(
               tooltip: 'Log out',
               icon: const Icon(Icons.logout, color: kFgSecondary),
               onPressed: () async {
+                final api = ref.read(apiProvider);
+                // Drop this device's push token while the session is still valid.
+                await clearDeviceToken(api);
                 try {
-                  await ref.read(apiProvider).logout();
+                  await api.logout();
                 } catch (_) {}
                 await ref.read(sessionProvider.notifier).signOut();
               },

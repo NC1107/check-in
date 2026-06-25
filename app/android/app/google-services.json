@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "527514990799",
+    "project_id": "check-in-48fdc",
+    "storage_bucket": "check-in-48fdc.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:527514990799:android:a1106bd40eda78589d9fba",
+        "android_client_info": {
+          "package_name": "top.npcserver.checkin"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAml__oKz3WovSLvtCym8h34toExVWPjTU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

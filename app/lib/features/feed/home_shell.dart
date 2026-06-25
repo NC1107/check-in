@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:native_exif/native_exif.dart';
 
 import '../../notifications/birthday_notifier.dart';
+import '../../notifications/push_messaging.dart';
 import '../../state/app_state.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/user_avatar.dart';
@@ -38,7 +39,10 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      scheduleBirthdayNotifications(ref.read(apiProvider));
+      final api = ref.read(apiProvider);
+      scheduleBirthdayNotifications(api);
+      // Logged in by the time the shell mounts, so register for cloud push now.
+      requestDeviceToken(api);
     });
   }
 
