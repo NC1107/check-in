@@ -104,12 +104,10 @@ class _ConnectScreenState extends ConsumerState<ConnectScreen> {
       _error = null;
     });
     try {
-      // Probe the server before committing the URL.
-      final info = await ApiClient(baseUrl: url).serverInfo();
+      // Probe the server before committing the URL. Once it responds, setServer swaps
+      // this screen for the auth flow — no toast needed (the transition is the feedback).
+      await ApiClient(baseUrl: url).serverInfo();
       await ref.read(sessionProvider.notifier).setServer(url);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Connected to ${info.name}')));
     } on DioException catch (_) {
       setState(() => _error = 'Could not reach that server. Check the address.');
     } catch (_) {
