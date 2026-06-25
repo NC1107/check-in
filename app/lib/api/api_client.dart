@@ -68,6 +68,13 @@ class ApiClient {
     return User.fromJson(r.data as Map<String, dynamic>);
   }
 
+  /// setProfilePhoto attaches an already-uploaded media item as the current user's
+  /// avatar and returns the updated user. Used during signup once a token exists.
+  Future<User> setProfilePhoto(int mediaId) async {
+    final r = await _dio.put('/api/me/photo', data: {'mediaId': mediaId});
+    return User.fromJson(r.data as Map<String, dynamic>);
+  }
+
   // ---- feed / content ----
 
   Future<List<Post>> feed({int? authorId, DateTime? before}) async {
