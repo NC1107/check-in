@@ -3,7 +3,9 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geocoding/geocoding.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:native_exif/native_exif.dart';
 
 import '../../notifications/birthday_notifier.dart';
 import '../../state/app_state.dart';
@@ -166,6 +168,8 @@ class _ComposeSheet extends ConsumerStatefulWidget {
 class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   final _bodyCtrl = TextEditingController();
   XFile? _image;
+  String? _location; // coarse "City, Country" read from the photo, if any
+  bool _resolvingLocation = false;
   bool _busy = false;
   String? _error;
 
@@ -176,8 +180,45 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   }
 
   Future<void> _pickImage(ImageSource source) async {
-    final x = await ImagePicker().pickImage(source: source, imageQuality: 90);
-    if (x != null && mounted) setState(() => _image = x);
+    // No imageQuality here: that re-encodes and strips EXIF, which we need to read the
+    // photo's GPS. The server downscales + strips metadata on its end.
+    final x = await ImagePicker().pickImage(source: source);
+    if (x == null || !mounted) return;
+    setState(() {
+      _image = x;
+      _location = null;
+      _resolvingLocation = true;
+    });
+    final place = await _photoPlace(x.path);
+    if (mounted) {
+      setState(() {
+        _location = place;
+        _resolvingLocation = false;
+      });
+    }
+  }
+
+  /// Reads the photo's GPS on-device and reverse-geocodes it to a coarse "City, Country".
+  /// Returns null when there's no location data. Raw coordinates never leave the phone.
+  Future<String?> _photoPlace(String path) async {
+    try {
+      final exif = await Exif.fromPath(path);
+      final coords = await exif.getLatLong();
+      await exif.close();
+      if (coords == null) return null;
+      final marks = await placemarkFromCoordinates(coords.latitude, coords.longitude);
+      if (marks.isEmpty) return null;
+      final p = marks.first;
+      final city = [p.locality, p.subAdministrativeArea, p.administrativeArea]
+          .firstWhere((s) => s != null && s.isNotEmpty, orElse: () => null);
+      final parts = <String>[
+        if (city != null) city,
+        if (p.country != null && p.country!.isNotEmpty) p.country!,
+      ];
+      return parts.isEmpty ? null : parts.join(', ');
+    } catch (_) {
+      return null; // no permission, no GPS, or geocoder unavailable → just skip it
+    }
   }
 
   Widget _mediaButton(IconData icon, String label, VoidCallback onTap) {
@@ -204,7 +245,8 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
       final api = ref.read(apiProvider);
       if (_image != null) {
         final mediaId = await api.uploadImage(_image!.path);
-        await api.createPost(kind: 'image', body: _bodyCtrl.text.trim(), mediaId: mediaId);
+        await api.createPost(
+            kind: 'image', body: _bodyCtrl.text.trim(), mediaId: mediaId, location: _location);
       } else {
         await api.createPost(kind: 'text', body: _bodyCtrl.text.trim());
       }
@@ -298,6 +340,32 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                   width: double.infinity,
                   fit: BoxFit.cover,
                 ),
+              ),
+            ),
+          // Detected location (read from the photo, removable before posting)
+          if (_image != null && (_resolvingLocation || _location != null))
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: Row(
+                children: [
+                  const Icon(Icons.place_outlined, size: 16, color: _accent),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      _resolvingLocation ? 'Checking location…' : _location!,
+                      style: const TextStyle(color: _fgSecondary, fontSize: 13),
+                    ),
+                  ),
+                  if (_location != null && !_resolvingLocation)
+                    GestureDetector(
+                      onTap: () => setState(() => _location = null),
+                      behavior: HitTestBehavior.opaque,
+                      child: const Padding(
+                        padding: EdgeInsets.all(2),
+                        child: Icon(Icons.close, size: 16, color: _fgMuted),
+                      ),
+                    ),
+                ],
               ),
             ),
           // Text input

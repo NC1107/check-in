@@ -36,6 +36,7 @@ type Post struct {
 	Kind      string    `json:"kind"`
 	Body      string    `json:"body"`
 	MediaID   *int64    `json:"mediaId,omitempty"`
+	Location  *string   `json:"location,omitempty"` // coarse "City, Country", optional
 	CreatedAt time.Time `json:"createdAt"`
 
 	// Joined/derived fields populated by feed and detail queries.

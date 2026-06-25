@@ -16,6 +16,8 @@ dependencies:
   flutter_secure_storage: ^9.2.2
   shared_preferences: ^2.3.2
   image_picker: ^1.1.2
+  native_exif: ^0.6.0      # read a picked photo's GPS (on-device)
+  geocoding: ^3.0.0        # reverse-geocode lat/lng → "City, Country" (on-device)
   cached_network_image: ^3.4.1
   flutter_cache_manager: ^3.4.1
   flutter_contacts: ^2.1.0
