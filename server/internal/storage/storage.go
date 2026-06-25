@@ -59,6 +59,16 @@ func (s *Store) SaveImage(r io.Reader, maxBytes int64) (SavedImage, error) {
 		return SavedImage{}, fmt.Errorf("image exceeds %d bytes", maxBytes)
 	}
 
+	// Guard against decompression/"pixel bomb" attacks: a few KB of input can declare
+	// enormous dimensions, and image.Decode allocates a buffer proportional to W*H.
+	// Check the header first and reject anything beyond a generous real-camera size.
+	const maxPixels = 50_000_000 // 50 MP — covers high-end phone cameras with margin
+	if cfg, _, err := image.DecodeConfig(bytes.NewReader(data)); err != nil {
+		return SavedImage{}, fmt.Errorf("decode image: %w", err)
+	} else if int64(cfg.Width)*int64(cfg.Height) > maxPixels {
+		return SavedImage{}, fmt.Errorf("image dimensions too large")
+	}
+
 	img, format, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return SavedImage{}, fmt.Errorf("decode image: %w", err)
