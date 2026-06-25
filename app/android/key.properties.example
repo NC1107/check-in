@@ -1,0 +1,15 @@
+# Copy to `key.properties` (which is gitignored) to build a Play-ready signed release
+# locally. Without it, `flutter build apk --release` falls back to debug signing — fine
+# for sideloading, not accepted by the Play Store.
+#
+# 1. Generate an upload keystore once and keep it somewhere safe (NOT in git):
+#      keytool -genkey -v -keystore upload-keystore.jks \
+#        -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+# 2. Point storeFile at it (absolute path, or relative to app/android/app/).
+# 3. For CI, base64 the .jks into the ANDROID_KEYSTORE_BASE64 secret and put these
+#    four lines in ANDROID_KEY_PROPERTIES (see docs/DEPLOYMENT.md).
+
+storePassword=your-store-password
+keyPassword=your-key-password
+keyAlias=upload
+storeFile=upload-keystore.jks
