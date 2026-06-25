@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import '../../api/api_client.dart';
 import '../../api/models.dart';
 import '../../state/app_state.dart';
+import '../admin/contacts_picker_screen.dart';
 
 // Design tokens — Check-In dark design system
 const _bgMain = Color(0xFF0A0A0B);
@@ -23,7 +24,7 @@ const _accentLight = Color(0x295557E0);
 const _online = Color(0xFF22C55E);
 const _danger = Color(0xFFEF4444);
 
-enum _Step { phone, profile, done }
+enum _Step { phone, profile, invite, done }
 
 /// AuthScreen is the stepped onboarding/signup flow that runs after the user has
 /// connected to a server: verify number → set up profile → done. A login path is
@@ -52,6 +53,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   bool _isFirstAdmin = false;
   bool? _phoneAllowed; // null = not yet checked
   AuthResult? _pendingAuth; // captured from signup, applied on "Enter Check-In"
+  int? _invited; // number of invitees added on the host invite step (null = not done)
   // Whether the server already has an admin. Seeded from the connect probe, then
   // refreshed on load so a fresh server shows host-setup framing, not invite-list copy.
   bool _serverInitialized = true;
@@ -163,10 +165,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           // Keep the photo-less account; the user can add a picture later.
         }
       }
-      // Hold the credentials so the Done screen can show before we enter the app.
+      // Hold the credentials so the Done (or host invite) screen can show before we enter.
       setState(() {
         _pendingAuth = res;
-        _step = _Step.done;
+        _step = _isFirstAdmin ? _Step.invite : _Step.done;
       });
     } on DioException catch (e) {
       setState(() => _error = _msg(e, 'Sign up failed'));
@@ -179,6 +181,26 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     final auth = _pendingAuth;
     if (auth == null) return;
     await ref.read(sessionProvider.notifier).signIn(auth.token, auth.user);
+  }
+
+  /// Host invite step: pick contacts and add them to the allowlist using the freshly
+  /// issued token (we haven't entered the app yet, so build an authed client by hand).
+  Future<void> _pickInvitees() async {
+    final phones = await Navigator.of(context).push<List<String>>(
+      MaterialPageRoute(builder: (_) => const ContactsPickerScreen()),
+    );
+    if (phones == null || phones.isEmpty) return;
+    setState(() => _busy = true);
+    try {
+      final baseUrl = ref.read(sessionProvider).baseUrl ?? '';
+      final api = ApiClient(baseUrl: baseUrl, token: _pendingAuth!.token);
+      final result = await api.uploadContacts(phones);
+      setState(() => _invited = (result['added'] as int?) ?? phones.length);
+    } catch (_) {
+      setState(() => _error = "Couldn't add those right now — you can invite from the Admin tab later.");
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   void _back() {
@@ -224,11 +246,12 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       body: SafeArea(
         child: Column(
           children: [
-            if (_step != _Step.done) _header(),
+            if (_step == _Step.phone || _step == _Step.profile) _header(),
             Expanded(
               child: switch (_step) {
                 _Step.phone => _phoneStep(),
                 _Step.profile => _profileStep(),
+                _Step.invite => _inviteStep(),
                 _Step.done => _doneStep(),
               },
             ),
@@ -578,6 +601,68 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           obscure: true,
           onChanged: (_) => setState(() {}),
         ),
+        if (_error != null) _errorRow(_error!),
+      ],
+    );
+  }
+
+  // ---- Step: host invite ----
+
+  Widget _inviteStep() {
+    final done = _invited != null;
+    return _StepScaffold(
+      footer: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _PrimaryButton(
+            label: done ? 'Continue' : 'Pick from contacts',
+            enabled: !_busy,
+            busy: _busy,
+            onTap: done ? () => setState(() => _step = _Step.done) : _pickInvitees,
+          ),
+          if (!done) ...[
+            const SizedBox(height: 12),
+            GestureDetector(
+              onTap: () => setState(() => _step = _Step.done),
+              behavior: HitTestBehavior.opaque,
+              child: const Text('Skip for now',
+                  style: TextStyle(color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 13)),
+            ),
+          ],
+        ],
+      ),
+      children: [
+        const SizedBox(height: 8),
+        Container(
+          width: 56,
+          height: 56,
+          decoration: BoxDecoration(color: _accentLight, borderRadius: BorderRadius.circular(16)),
+          child: const Icon(Icons.group_add, size: 28, color: _accent),
+        ),
+        const SizedBox(height: 20),
+        const Text('Invite your circle',
+            style: TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 22)),
+        const SizedBox(height: 8),
+        const Text(
+          'Check-In is invite-only, and you’re the host. Add the people who can join — their '
+          'phone number becomes their invite. You can always do this later from the Admin tab.',
+          style: TextStyle(color: _fgSecondary, fontSize: 14, height: 1.5),
+        ),
+        if (done) ...[
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              const Icon(Icons.check_circle, size: 18, color: _online),
+              const SizedBox(width: 7),
+              Text(
+                _invited == 0
+                    ? 'Those numbers were already on the list.'
+                    : '$_invited ${_invited == 1 ? 'person' : 'people'} invited.',
+                style: const TextStyle(color: _online, fontWeight: FontWeight.w500, fontSize: 13),
+              ),
+            ],
+          ),
+        ],
         if (_error != null) _errorRow(_error!),
       ],
     );
