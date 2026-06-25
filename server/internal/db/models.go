@@ -39,11 +39,18 @@ type Post struct {
 	CreatedAt time.Time `json:"createdAt"`
 
 	// Joined/derived fields populated by feed and detail queries.
-	AuthorName     string `json:"authorName,omitempty"`
-	AuthorPhotoID  *int64 `json:"authorPhotoId,omitempty"`
-	LikeCount      int    `json:"likeCount"`
-	CommentCount   int    `json:"commentCount"`
-	LikedByViewer  bool   `json:"likedByViewer"`
+	AuthorName      string           `json:"authorName,omitempty"`
+	AuthorPhotoID   *int64           `json:"authorPhotoId,omitempty"`
+	LikeCount       int              `json:"likeCount"`
+	CommentCount    int              `json:"commentCount"`
+	LikedByViewer   bool             `json:"likedByViewer"`
+	CommentsPreview []CommentPreview `json:"commentsPreview,omitempty"`
+}
+
+// CommentPreview is a lightweight comment (author + body) for inline feed previews.
+type CommentPreview struct {
+	AuthorName string `json:"authorName"`
+	Body       string `json:"body"`
 }
 
 // Comment is a reply on a post.

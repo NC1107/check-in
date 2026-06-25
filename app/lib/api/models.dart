@@ -55,6 +55,7 @@ class Post {
     required this.likedByViewer,
     this.mediaId,
     this.authorPhotoId,
+    this.commentsPreview = const [],
   });
 
   final int id;
@@ -68,6 +69,7 @@ class Post {
   final bool likedByViewer;
   final int? mediaId;
   final int? authorPhotoId;
+  final List<CommentPreview> commentsPreview;
 
   factory Post.fromJson(Map<String, dynamic> j) => Post(
         id: j['id'] as int,
@@ -81,6 +83,22 @@ class Post {
         likedByViewer: j['likedByViewer'] as bool? ?? false,
         mediaId: j['mediaId'] as int?,
         authorPhotoId: j['authorPhotoId'] as int?,
+        commentsPreview: ((j['commentsPreview'] as List?) ?? [])
+            .map((e) => CommentPreview.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+/// A lightweight comment (author + body) shown inline as a preview on feed cards.
+class CommentPreview {
+  CommentPreview({required this.authorName, required this.body});
+
+  final String authorName;
+  final String body;
+
+  factory CommentPreview.fromJson(Map<String, dynamic> j) => CommentPreview(
+        authorName: j['authorName'] as String? ?? '',
+        body: j['body'] as String? ?? '',
       );
 }
 
