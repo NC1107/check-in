@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'features/feed/home_shell.dart';
 import 'features/onboarding/auth_screen.dart';
-import 'features/onboarding/connect_screen.dart';
 import 'state/app_state.dart';
 import 'theme/tokens.dart';
 
@@ -37,14 +36,9 @@ class CheckInApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final session = ref.watch(sessionProvider);
 
-    Widget home;
-    if (!session.hasServer) {
-      home = const ConnectScreen();
-    } else if (!session.isLoggedIn) {
-      home = const AuthScreen();
-    } else {
-      home = const HomeShell();
-    }
+    // AuthScreen now owns server-connect + login/signup as one flow, so anyone not yet
+    // logged in lands there (it pre-fills the last server used).
+    final Widget home = session.isLoggedIn ? const HomeShell() : const AuthScreen();
 
     return MaterialApp(
       title: 'Check-In',

@@ -52,7 +52,16 @@ func (s *Server) handleCheckPhone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !initialized {
-		writeJSON(w, http.StatusOK, map[string]any{"allowed": true, "isFirstAdmin": true})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"allowed": true, "registered": false, "isFirstAdmin": true,
+		})
+		return
+	}
+	// An existing account → the caller should log in, not sign up. This includes the
+	// host, whose number is never on the allowlist.
+	registered, err := s.db.PhoneRegistered(r.Context(), phone)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
 	allowed, used, err := s.db.PhoneAllowed(r.Context(), phone)
@@ -61,7 +70,8 @@ func (s *Server) handleCheckPhone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"allowed":      allowed && !used,
+		"allowed":      allowed && !used, // may still claim an invite (sign up)
+		"registered":   registered,       // already has an account (log in)
 		"isFirstAdmin": false,
 	})
 }
@@ -205,22 +215,39 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 }
 
 type updateMeReq struct {
-	Name string `json:"name"` // display name
+	Name      string `json:"name"`      // display name
+	FirstName string `json:"firstName"` // optional; preserved if omitted
+	LastName  string `json:"lastName"`  // optional; preserved if omitted
 }
 
-// handleUpdateMe updates the authenticated user's display name.
+// handleUpdateMe updates the authenticated user's display name and, optionally, their
+// first/last name. Omitted name parts keep their current value.
 func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 	var req updateMeReq
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
+	me := userFrom(r)
 	name := strings.TrimSpace(req.Name)
 	if name == "" || len(name) > 100 {
 		writeErr(w, http.StatusBadRequest, "name must be 1–100 characters")
 		return
 	}
-	user, err := s.db.UpdateUserName(r.Context(), userFrom(r).ID, name)
+	// Treat empty first/last as "leave unchanged" so older clients (display name only)
+	// don't wipe the legal name.
+	first, last := strings.TrimSpace(req.FirstName), strings.TrimSpace(req.LastName)
+	if first == "" {
+		first = me.FirstName
+	}
+	if last == "" {
+		last = me.LastName
+	}
+	if len(first) > 100 || len(last) > 100 {
+		writeErr(w, http.StatusBadRequest, "name too long (max 100 characters)")
+		return
+	}
+	user, err := s.db.UpdateUserProfile(r.Context(), me.ID, name, first, last)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return

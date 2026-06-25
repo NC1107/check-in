@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/app_widgets.dart';
 import '../../widgets/auth_image.dart';
 import '../../widgets/user_avatar.dart';
 import '../admin/admin_screen.dart';
@@ -218,6 +219,8 @@ class _EditProfileSheet extends ConsumerStatefulWidget {
 
 class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
   late final _name = TextEditingController(text: widget.user.name);
+  late final _firstName = TextEditingController(text: widget.user.firstName);
+  late final _lastName = TextEditingController(text: widget.user.lastName);
   XFile? _photo;
   bool _busy = false;
   String? _error;
@@ -225,6 +228,8 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
   @override
   void dispose() {
     _name.dispose();
+    _firstName.dispose();
+    _lastName.dispose();
     super.dispose();
   }
 
@@ -235,8 +240,10 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
 
   Future<void> _save() async {
     final name = _name.text.trim();
+    final first = _firstName.text.trim();
+    final last = _lastName.text.trim();
     if (name.isEmpty) {
-      setState(() => _error = 'Name cannot be empty.');
+      setState(() => _error = 'Display name cannot be empty.');
       return;
     }
     setState(() {
@@ -246,7 +253,11 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
     try {
       final api = ref.read(apiProvider);
       var updated = widget.user;
-      if (name != widget.user.name) updated = await api.updateProfile(name: name);
+      final nameChanged =
+          name != widget.user.name || first != widget.user.firstName || last != widget.user.lastName;
+      if (nameChanged) {
+        updated = await api.updateProfile(name: name, firstName: first, lastName: last);
+      }
       if (_photo != null) {
         final mediaId = await api.uploadImage(_photo!.path);
         updated = await api.setProfilePhoto(mediaId);
@@ -331,50 +342,46 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
             ),
           ),
           const SizedBox(height: 22),
-          const Text('Display name',
-              style: TextStyle(color: kFgMuted, fontWeight: FontWeight.w600, fontSize: 12)),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _name,
-            style: const TextStyle(color: kFgPrimary, fontSize: 15),
-            cursorColor: kAccent,
-            decoration: InputDecoration(
-              filled: true,
-              fillColor: kBgMain,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: kBorder),
+          const FieldLabel('Full name'),
+          Row(
+            children: [
+              Expanded(
+                child: AppTextField(
+                  controller: _firstName,
+                  hint: 'First',
+                  onChanged: (_) => setState(() {}),
+                ),
               ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: const BorderSide(color: kAccent),
+              const SizedBox(width: 10),
+              Expanded(
+                child: AppTextField(
+                  controller: _lastName,
+                  hint: 'Last',
+                  onChanged: (_) => setState(() {}),
+                ),
               ),
-            ),
+            ],
           ),
+          const SizedBox(height: 18),
+          const FieldLabel('Display name'),
+          AppTextField(
+            controller: _name,
+            hint: 'What your circle sees',
+            onChanged: (_) => setState(() {}),
+          ),
+          const SizedBox(height: 6),
+          const Text('This is the name shown on your check-ins and comments.',
+              style: TextStyle(color: kFgMuted, fontSize: 12, height: 1.4)),
           if (_error != null) ...[
             const SizedBox(height: 10),
             Text(_error!, style: const TextStyle(color: kLike, fontSize: 13)),
           ],
           const SizedBox(height: 20),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: _busy ? null : _save,
-              style: FilledButton.styleFrom(
-                backgroundColor: kAccent,
-                foregroundColor: kOnAccent,
-                disabledBackgroundColor: kBgSurfaceHover,
-                padding: const EdgeInsets.symmetric(vertical: 15),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              child: _busy
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: kOnAccent))
-                  : const Text('Save', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-            ),
+          PrimaryButton(
+            label: 'Save',
+            enabled: _name.text.trim().isNotEmpty && !_busy,
+            busy: _busy,
+            onTap: _save,
           ),
         ],
       ),
