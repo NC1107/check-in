@@ -28,6 +28,7 @@ class AppTextField extends StatelessWidget {
     this.onChanged,
     this.minLines,
     this.maxLines = 1,
+    this.errorText,
   });
 
   final TextEditingController controller;
@@ -38,9 +39,13 @@ class AppTextField extends StatelessWidget {
   final int? minLines;
   final int maxLines;
 
+  /// When set, the field shows a red border and this message beneath it.
+  final String? errorText;
+
   @override
   Widget build(BuildContext context) {
-    return TextField(
+    final hasError = errorText != null;
+    final field = TextField(
       controller: controller,
       keyboardType: keyboardType,
       obscureText: obscure,
@@ -57,13 +62,36 @@ class AppTextField extends StatelessWidget {
         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: kBorder),
+          borderSide: BorderSide(color: hasError ? kLike : kBorder),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: kAccent),
+          borderSide: BorderSide(color: hasError ? kLike : kAccent),
         ),
       ),
+    );
+    // Keep the bare field when there's no error so existing layouts are unchanged.
+    if (!hasError) return field;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        field,
+        Padding(
+          padding: const EdgeInsets.only(top: 6, left: 2),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.error_outline, size: 14, color: kLike),
+              const SizedBox(width: 5),
+              Expanded(
+                child: Text(errorText!,
+                    style: const TextStyle(color: kLike, fontSize: 12, height: 1.3)),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

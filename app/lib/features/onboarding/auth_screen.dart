@@ -52,9 +52,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   XFile? _photo;
 
   bool _busy = false;
-  String? _error;
+  String? _error; // general / login error, shown at the bottom
+  String? _serverError; // shown inline under the server-address field
+  String? _phoneError; // shown inline under the phone field (bad number / not invited)
   bool _isFirstAdmin = false;
-  bool? _phoneAllowed; // null = not yet checked; false = rejected
   AuthResult? _pendingAuth; // captured from signup, applied on "Enter Check-In"
   int? _invited; // number of invitees added on the host invite step (null = not done)
   // The server URL we've successfully reached and bound the session to. Null until the
@@ -98,7 +99,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   Future<bool> _ensureServer() async {
     final url = _normalizeServer(_server.text);
     if (url == null) {
-      setState(() => _error = 'Enter your server address.');
+      setState(() => _serverError = 'Enter your server address.');
       return false;
     }
     if (url == _connectedUrl) return true;
@@ -108,7 +109,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       _connectedUrl = url;
       return true;
     } on DioException catch (_) {
-      setState(() => _error = 'Could not reach that server. Check the address.');
+      setState(() => _serverError =
+          "Couldn't reach that server. Check the address and your connection.");
       return false;
     }
   }
@@ -119,23 +121,25 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     setState(() {
       _busy = true;
       _error = null;
-      _phoneAllowed = null;
+      _serverError = null;
+      _phoneError = null;
     });
     try {
       if (!await _ensureServer()) return;
       final res = await ref.read(apiProvider).checkPhone(_phone.text.trim());
       if (res.registered) {
-        setState(() => _loginMode = true); // reveal the password field
+        setState(() => _loginMode = true); // existing account → reveal the password field
       } else if (res.allowed) {
         setState(() {
           _isFirstAdmin = res.isFirstAdmin;
           _step = _Step.profile;
         });
       } else {
-        setState(() => _phoneAllowed = false);
+        setState(() => _phoneError =
+            "This number isn't on the invite list. Ask the host to add it, then try again.");
       }
     } on DioException catch (e) {
-      setState(() => _error = _msg(e, 'Could not check that number. Try again.'));
+      setState(() => _phoneError = _msg(e, "Couldn't check that number. Try again."));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -145,6 +149,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     setState(() {
       _busy = true;
       _error = null;
+      _serverError = null;
+      _phoneError = null;
     });
     try {
       if (!await _ensureServer()) return;
@@ -153,7 +159,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           .login(phone: _phone.text.trim(), password: _password.text);
       await ref.read(sessionProvider.notifier).signIn(res.token, res.user);
     } on DioException catch (e) {
-      setState(() => _error = _msg(e, 'Login failed'));
+      setState(() => _error = _msg(e, 'Incorrect phone or password.'));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -234,12 +240,12 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   void _back() {
     setState(() {
       _error = null;
+      _phoneError = null;
       if (_step == _Step.profile) {
         _step = _Step.entry;
       } else if (_loginMode) {
         // From login, step back to the neutral state so the number/server can be fixed.
         _loginMode = false;
-        _phoneAllowed = null;
       }
     });
   }
@@ -355,7 +361,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     final canSubmit = _loginMode
         ? (hasServer && digits.length >= 7 && _password.text.isNotEmpty)
         : (hasServer && digits.length >= 7);
-    final rejected = !_loginMode && _phoneAllowed == false;
 
     return _StepScaffold(
       footer: PrimaryButton(
@@ -384,43 +389,27 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           controller: _server,
           hint: 'checkin.myhome.net',
           keyboardType: TextInputType.url,
+          errorText: _serverError,
           onChanged: (_) => setState(() {
             // A changed address invalidates any prior probe and the login decision.
             _connectedUrl = null;
             _loginMode = false;
-            _phoneAllowed = null;
+            _serverError = null;
+            _phoneError = null;
           }),
         ),
         const SizedBox(height: 16),
         const FieldLabel('Phone number'),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 13),
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: _bgSurface,
-                border: Border.all(color: _border),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: const Text('+1',
-                  style: TextStyle(color: _fgSecondary, fontWeight: FontWeight.w500, fontSize: 15)),
-            ),
-            const SizedBox(width: 9),
-            Expanded(
-              child: AppTextField(
-                controller: _phone,
-                hint: '(415) 555-0148',
-                keyboardType: TextInputType.phone,
-                onChanged: (_) => setState(() {
-                  // Editing the number invalidates the login decision for it.
-                  _loginMode = false;
-                  _phoneAllowed = null;
-                }),
-              ),
-            ),
-          ],
+        AppTextField(
+          controller: _phone,
+          hint: '(415) 555-0148',
+          keyboardType: TextInputType.phone,
+          errorText: _phoneError,
+          onChanged: (_) => setState(() {
+            // Editing the number invalidates the login decision for it.
+            _loginMode = false;
+            _phoneError = null;
+          }),
         ),
         if (_loginMode) ...[
           const SizedBox(height: 16),
@@ -432,8 +421,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             onChanged: (_) => setState(() {}),
           ),
         ],
-        if (rejected) _statusRow(),
-        if (!_loginMode && !rejected) ...[
+        if (!_loginMode && _phoneError == null) ...[
           const SizedBox(height: 16),
           const Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -454,22 +442,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       ],
     );
   }
-
-  Widget _statusRow() => const Padding(
-        padding: EdgeInsets.only(top: 14),
-        child: Row(
-          children: [
-            Icon(Icons.cancel, size: 18, color: _danger),
-            SizedBox(width: 7),
-            Expanded(
-              child: Text(
-                "This number isn't on the invite list. Ask the host to add it, then try again.",
-                style: TextStyle(color: _danger, fontWeight: FontWeight.w500, fontSize: 13),
-              ),
-            ),
-          ],
-        ),
-      );
 
   // ---- Step: profile ----
 
