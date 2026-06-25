@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../notifications/birthday_notifier.dart';
 import '../../state/app_state.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/user_avatar.dart';
 import '../profile/profile_screen.dart';
 import 'feed_screen.dart';
 
@@ -70,43 +71,84 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     return Scaffold(
       backgroundColor: _bgMain,
       body: IndexedStack(index: _index, children: pages),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _showCompose,
-        backgroundColor: _accent,
-        foregroundColor: kOnAccent,
-        elevation: 6,
-        child: const Icon(Icons.add, size: 26),
+      floatingActionButton: SizedBox(
+        height: 58,
+        width: 58,
+        child: FloatingActionButton(
+          onPressed: _showCompose,
+          backgroundColor: _accent,
+          foregroundColor: kOnAccent,
+          elevation: 4,
+          shape: const CircleBorder(),
+          child: const Icon(Icons.add, size: 28),
+        ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       bottomNavigationBar: BottomAppBar(
         color: _bgMain,
         elevation: 0,
+        height: 64,
+        padding: EdgeInsets.zero,
         shape: const CircularNotchedRectangle(),
-        notchMargin: 8,
-        child: SizedBox(
-          height: 50,
+        notchMargin: 9,
+        child: DecoratedBox(
+          decoration: const BoxDecoration(border: Border(top: BorderSide(color: _border))),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              IconButton(
-                icon: Icon(
-                  _index == 0 ? Icons.home : Icons.home_outlined,
-                  size: 24,
-                ),
-                color: _index == 0 ? _accent : _fgMuted,
-                onPressed: () => setState(() => _index = 0),
+              _NavItem(
+                icon: Icons.home_outlined,
+                activeIcon: Icons.home_rounded,
+                label: 'Feed',
+                selected: _index == 0,
+                onTap: () => setState(() => _index = 0),
               ),
-              const SizedBox(width: 56), // notch gap
-              IconButton(
-                icon: Icon(
-                  _index == 1 ? Icons.person : Icons.person_outline,
-                  size: 24,
-                ),
-                color: _index == 1 ? _accent : _fgMuted,
-                onPressed: me != null ? () => setState(() => _index = 1) : null,
+              const SizedBox(width: 64), // FAB notch
+              _NavItem(
+                icon: Icons.person_outline,
+                activeIcon: Icons.person_rounded,
+                label: 'You',
+                selected: _index == 1,
+                onTap: me != null ? () => setState(() => _index = 1) : null,
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One bottom-bar destination: icon + label, tinted by selection.
+class _NavItem extends StatelessWidget {
+  const _NavItem({
+    required this.icon,
+    required this.activeIcon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final IconData activeIcon;
+  final String label;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = selected ? _accent : _fgMuted;
+    return Expanded(
+      child: InkResponse(
+        onTap: onTap,
+        radius: 42,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(selected ? activeIcon : icon, size: 23, color: color),
+            const SizedBox(height: 3),
+            Text(label,
+                style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600)),
+          ],
         ),
       ),
     );
@@ -265,21 +307,8 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (me != null) ...[
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: const BoxDecoration(color: _accent, shape: BoxShape.circle),
-                    alignment: Alignment.center,
-                    child: Text(
-                      me.name.isNotEmpty ? me.name[0].toUpperCase() : 'Y',
-                      style: const TextStyle(
-                        color: kOnAccent,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 15,
-                        height: 1,
-                      ),
-                    ),
-                  ),
+                  UserAvatar(
+                      name: me.name, size: 38, mediaId: me.profileMediaId, colorSeed: me.id),
                   const SizedBox(width: 12),
                 ],
                 Expanded(

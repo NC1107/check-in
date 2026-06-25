@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'features/feed/home_shell.dart';
 import 'features/onboarding/auth_screen.dart';
@@ -11,37 +10,24 @@ import 'features/onboarding/connect_screen.dart';
 import 'state/app_state.dart';
 import 'theme/tokens.dart';
 
-// Key used to persist the most recent crash report across launches.
-const kLastCrashKey = '_last_crash';
-
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-
-  // Catch synchronous Flutter framework errors (e.g. build-phase exceptions).
-  FlutterError.onError = (details) {
-    FlutterError.presentError(details);
-    _saveCrash('FlutterError: ${details.exceptionAsString()}\n${details.stack}');
-  };
-
-  // Catch errors on the root isolate that escape the zone.
-  PlatformDispatcher.instance.onError = (error, stack) {
-    _saveCrash('PlatformDispatcher: $error\n$stack');
-    return true;
-  };
-
+void main() {
+  // Ensure plugins (secure storage, prefs) are ready before providers spin up, and route
+  // all uncaught errors to one place so a stray exception can't silently kill startup.
   runZonedGuarded(
-    () => runApp(const ProviderScope(child: CheckInApp())),
-    (error, stack) => _saveCrash('Zone: $error\n$stack'),
+    () {
+      WidgetsFlutterBinding.ensureInitialized();
+      FlutterError.onError = (details) {
+        FlutterError.presentError(details);
+        debugPrint('[CHECKIN] FlutterError: ${details.exceptionAsString()}');
+      };
+      PlatformDispatcher.instance.onError = (error, stack) {
+        debugPrint('[CHECKIN] $error');
+        return true;
+      };
+      runApp(const ProviderScope(child: CheckInApp()));
+    },
+    (error, stack) => debugPrint('[CHECKIN] uncaught: $error'),
   );
-}
-
-Future<void> _saveCrash(String message) async {
-  debugPrint('[CHECKIN-CRASH] $message');
-  try {
-    final prefs = await SharedPreferences.getInstance();
-    final ts = DateTime.now().toIso8601String();
-    await prefs.setString(kLastCrashKey, '[$ts]\n$message');
-  } catch (_) {}
 }
 
 class CheckInApp extends ConsumerWidget {

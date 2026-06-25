@@ -3,7 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/models.dart';
 import '../../state/app_state.dart';
-import '../../widgets/auth_image.dart';
+import '../../widgets/user_avatar.dart';
 import 'contacts_picker_screen.dart';
 
 /// AdminScreen lets the admin build the signup allowlist by entering phone numbers
@@ -146,7 +146,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
               return Column(
                 children: users
                     .map((u) => ListTile(
-                          leading: Avatar(name: u.name, mediaId: u.profileMediaId),
+                          leading: UserAvatar(name: u.name, mediaId: u.profileMediaId, size: 40, colorSeed: u.id),
                           title: Text(u.name),
                           subtitle: Text(u.isAdmin ? 'Admin' : u.phone),
                           trailing: u.isAdmin

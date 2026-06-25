@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../widgets/auth_image.dart';
+import '../../widgets/user_avatar.dart';
 
 /// PostDetailScreen shows a single post with its full comment thread and a composer.
 class PostDetailScreen extends ConsumerStatefulWidget {
@@ -67,7 +68,11 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                 return ListView(
                   children: [
                     ListTile(
-                      leading: Avatar(name: post.authorName, mediaId: post.authorPhotoId),
+                      leading: UserAvatar(
+                          name: post.authorName,
+                          mediaId: post.authorPhotoId,
+                          size: 40,
+                          colorSeed: post.authorId),
                       title: Text(post.authorName,
                           style: const TextStyle(fontWeight: FontWeight.w600)),
                       subtitle: Text(DateFormat.yMMMd().add_jm().format(post.createdAt.toLocal())),
@@ -83,7 +88,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                         child: Center(child: Text('No comments yet. Say hi!')),
                       ),
                     ...comments.map((c) => ListTile(
-                          leading: Avatar(name: c.authorName, mediaId: c.authorPhotoId, radius: 16),
+                          leading: UserAvatar(name: c.authorName, mediaId: c.authorPhotoId, size: 32),
                           title: Text(c.authorName,
                               style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
                           subtitle: Text(c.body),

@@ -11,12 +11,12 @@ import '../../api/api_client.dart';
 import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/app_widgets.dart';
 import '../admin/contacts_picker_screen.dart';
 
 // Theme tokens (centralized in theme/tokens.dart).
 const _bgMain = kBgMain;
 const _bgSurface = kBgSurface;
-const _bgSurfaceHover = kBgSurfaceHover;
 const _border = kBorder;
 const _fgPrimary = kFgPrimary;
 const _fgSecondary = kFgSecondary;
@@ -334,7 +334,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       footer: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _PrimaryButton(
+          PrimaryButton(
             label: _loginMode ? 'Log in' : 'Continue',
             enabled: canSubmit && !_busy,
             busy: _busy,
@@ -386,7 +386,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           style: const TextStyle(color: _fgSecondary, fontSize: 14, height: 1.5),
         ),
         const SizedBox(height: 22),
-        const _FieldLabel('Phone number'),
+        const FieldLabel('Phone number'),
         Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -403,7 +403,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             ),
             const SizedBox(width: 9),
             Expanded(
-              child: _DarkInput(
+              child: AppTextField(
                 controller: _phone,
                 hint: '(415) 555-0148',
                 keyboardType: TextInputType.phone,
@@ -414,8 +414,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         ),
         if (_loginMode) ...[
           const SizedBox(height: 16),
-          const _FieldLabel('Password'),
-          _DarkInput(
+          const FieldLabel('Password'),
+          AppTextField(
             controller: _password,
             hint: 'Your password',
             obscure: true,
@@ -492,7 +492,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         _password.text.length >= 6 &&
         !_busy;
     return _StepScaffold(
-      footer: _PrimaryButton(
+      footer: PrimaryButton(
         label: 'Finish',
         enabled: canFinish,
         busy: _busy,
@@ -557,11 +557,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           ),
         ),
         const SizedBox(height: 24),
-        const _FieldLabel('Full name'),
+        const FieldLabel('Full name'),
         Row(
           children: [
             Expanded(
-              child: _DarkInput(
+              child: AppTextField(
                 controller: _firstName,
                 hint: 'First',
                 onChanged: (_) => setState(() {}),
@@ -569,7 +569,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             ),
             const SizedBox(width: 10),
             Expanded(
-              child: _DarkInput(
+              child: AppTextField(
                 controller: _lastName,
                 hint: 'Last',
                 onChanged: (_) => setState(() {}),
@@ -578,8 +578,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           ],
         ),
         const SizedBox(height: 18),
-        const _FieldLabel('Display name'),
-        _DarkInput(
+        const FieldLabel('Display name'),
+        AppTextField(
           controller: _displayName,
           hint: 'Optional — defaults to your full name',
         ),
@@ -587,7 +587,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         const Text("This is what your circle sees. Leave blank to use your full name.",
             style: TextStyle(color: _fgMuted, fontSize: 12, height: 1.4)),
         const SizedBox(height: 18),
-        const _FieldLabel('Birthday'),
+        const FieldLabel('Birthday'),
         GestureDetector(
           onTap: _pickBirthday,
           behavior: HitTestBehavior.opaque,
@@ -625,8 +625,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           ],
         ),
         const SizedBox(height: 18),
-        const _FieldLabel('Password'),
-        _DarkInput(
+        const FieldLabel('Password'),
+        AppTextField(
           controller: _password,
           hint: 'At least 6 characters',
           obscure: true,
@@ -645,7 +645,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       footer: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _PrimaryButton(
+          PrimaryButton(
             label: done ? 'Continue' : 'Pick from contacts',
             enabled: !_busy,
             busy: _busy,
@@ -730,7 +730,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             style: const TextStyle(color: _fgSecondary, fontSize: 15, height: 1.55),
           ),
           const SizedBox(height: 34),
-          _PrimaryButton(label: 'Enter Check-In', enabled: !_busy, busy: _busy, onTap: _enterApp),
+          PrimaryButton(label: 'Enter Check-In', enabled: !_busy, busy: _busy, onTap: _enterApp),
         ],
       ),
     );
@@ -783,99 +783,6 @@ class _ProgressDot extends StatelessWidget {
       decoration: BoxDecoration(
         color: active ? _accent : _border,
         borderRadius: BorderRadius.circular(9999),
-      ),
-    );
-  }
-}
-
-class _FieldLabel extends StatelessWidget {
-  const _FieldLabel(this.text);
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Text(text,
-          style: const TextStyle(color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 12)),
-    );
-  }
-}
-
-class _DarkInput extends StatelessWidget {
-  const _DarkInput({
-    required this.controller,
-    required this.hint,
-    this.keyboardType,
-    this.obscure = false,
-    this.onChanged,
-  });
-
-  final TextEditingController controller;
-  final String hint;
-  final TextInputType? keyboardType;
-  final bool obscure;
-  final ValueChanged<String>? onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return TextField(
-      controller: controller,
-      keyboardType: keyboardType,
-      obscureText: obscure,
-      onChanged: onChanged,
-      style: const TextStyle(color: _fgPrimary, fontSize: 15),
-      cursorColor: _accent,
-      decoration: InputDecoration(
-        hintText: hint,
-        hintStyle: const TextStyle(color: _fgMuted),
-        filled: true,
-        fillColor: _bgSurface,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: _border),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: _accent),
-        ),
-      ),
-    );
-  }
-}
-
-class _PrimaryButton extends StatelessWidget {
-  const _PrimaryButton({
-    required this.label,
-    required this.enabled,
-    required this.onTap,
-    this.busy = false,
-  });
-
-  final String label;
-  final bool enabled;
-  final VoidCallback onTap;
-  final bool busy;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      child: FilledButton(
-        onPressed: enabled ? onTap : null,
-        style: FilledButton.styleFrom(
-          backgroundColor: _accent,
-          disabledBackgroundColor: _bgSurfaceHover,
-          foregroundColor: kOnAccent,
-          disabledForegroundColor: _fgMuted,
-          padding: const EdgeInsets.symmetric(vertical: 15),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ),
-        child: busy
-            ? const SizedBox(
-                height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: kOnAccent))
-            : Text(label, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
       ),
     );
   }

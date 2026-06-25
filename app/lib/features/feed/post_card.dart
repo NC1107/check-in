@@ -5,6 +5,7 @@ import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/auth_image.dart';
+import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
 
 // Theme tokens (centralized in theme/tokens.dart).
@@ -16,68 +17,12 @@ const _fgMuted = kFgMuted;
 const _accent = kAccent;
 const _like = kLike;
 
-const _avatarPalette = [
-  Color(0xFF5557E0), Color(0xFF13AF9D), Color(0xFFDD1C85),
-  Color(0xFFE9960A), Color(0xFF8458E9), Color(0xFF22C55E),
-  Color(0xFFEF4444), Color(0xFF3B82F6),
-];
-
-Color _avatarColor(int id) => _avatarPalette[id.abs() % _avatarPalette.length];
-
 String _relativeTime(DateTime dt) {
   final diff = DateTime.now().difference(dt);
   if (diff.inMinutes < 1) return 'now';
   if (diff.inMinutes < 60) return '${diff.inMinutes}m';
   if (diff.inHours < 24) return '${diff.inHours}h';
   return '${diff.inDays}d';
-}
-
-/// Circular avatar: the user's profile photo when they have one, otherwise their
-/// initial on a consistent color.
-class AuthorAvatar extends StatelessWidget {
-  const AuthorAvatar({
-    super.key,
-    required this.userId,
-    required this.name,
-    required this.size,
-    this.mediaId,
-  });
-
-  final int userId;
-  final String name;
-  final double size;
-  final int? mediaId;
-
-  @override
-  Widget build(BuildContext context) {
-    if (mediaId != null) {
-      return ClipOval(
-        child: SizedBox(
-          width: size,
-          height: size,
-          child: AuthImage(mediaId: mediaId!),
-        ),
-      );
-    }
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: _avatarColor(userId),
-        shape: BoxShape.circle,
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        name.isNotEmpty ? name[0].toUpperCase() : '?',
-        style: TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.w700,
-          fontSize: size * 0.39,
-          height: 1,
-        ),
-      ),
-    );
-  }
 }
 
 /// PostCard renders one post in the feed with the design-system dark card style.
@@ -160,8 +105,8 @@ class _PostCardState extends ConsumerState<PostCard> {
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
             child: Row(
               children: [
-                AuthorAvatar(
-                    userId: p.authorId, name: p.authorName, size: 38, mediaId: p.authorPhotoId),
+                UserAvatar(
+                    name: p.authorName, size: 38, mediaId: p.authorPhotoId, colorSeed: p.authorId),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -296,8 +241,8 @@ class _PostCardState extends ConsumerState<PostCard> {
             child: Row(
               children: [
                 if (me != null)
-                  AuthorAvatar(
-                      userId: me.id, name: me.name, size: 26, mediaId: me.profileMediaId),
+                  UserAvatar(
+                      name: me.name, size: 26, mediaId: me.profileMediaId, colorSeed: me.id),
                 const SizedBox(width: 9),
                 Expanded(
                   child: TextField(

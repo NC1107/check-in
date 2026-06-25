@@ -34,29 +34,3 @@ class AuthImage extends ConsumerWidget {
   }
 }
 
-/// Avatar shows a user's profile picture (by media id) or a fallback initial.
-class Avatar extends StatelessWidget {
-  const Avatar({super.key, required this.name, this.mediaId, this.radius = 20});
-
-  final String name;
-  final int? mediaId;
-  final double radius;
-
-  @override
-  Widget build(BuildContext context) {
-    if (mediaId == null) {
-      final initial = name.isEmpty ? '?' : name.characters.first.toUpperCase();
-      return CircleAvatar(radius: radius, child: Text(initial));
-    }
-    return CircleAvatar(
-      radius: radius,
-      child: ClipOval(
-        child: SizedBox(
-          width: radius * 2,
-          height: radius * 2,
-          child: AuthImage(mediaId: mediaId!),
-        ),
-      ),
-    );
-  }
-}
