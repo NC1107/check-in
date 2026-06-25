@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -72,7 +73,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       floatingActionButton: FloatingActionButton(
         onPressed: _showCompose,
         backgroundColor: _accent,
-        foregroundColor: Colors.white,
+        foregroundColor: kOnAccent,
         elevation: 6,
         child: const Icon(Icons.add, size: 26),
       ),
@@ -166,6 +167,12 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
         await api.createPost(kind: 'text', body: _bodyCtrl.text.trim());
       }
       if (mounted) Navigator.of(context).pop(true);
+    } on DioException catch (e) {
+      final data = e.response?.data;
+      final msg = (data is Map && data['error'] is String)
+          ? data['error'] as String
+          : 'Could not share your check-in. Check your connection and try again.';
+      if (mounted) setState(() => _error = msg);
     } catch (_) {
       if (mounted) setState(() => _error = 'Could not share your check-in. Try again.');
     } finally {
@@ -220,7 +227,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                     onPressed: hasContent && !_busy ? _submit : null,
                     style: TextButton.styleFrom(
                       backgroundColor: hasContent ? _accent : _bgSurfaceHover,
-                      foregroundColor: hasContent ? Colors.white : _fgMuted,
+                      foregroundColor: hasContent ? kOnAccent : _fgMuted,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9999)),
                       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
                       minimumSize: Size.zero,
@@ -229,7 +236,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                     child: _busy
                         ? const SizedBox(
                             width: 16, height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                            child: CircularProgressIndicator(strokeWidth: 2, color: kOnAccent))
                         : const Text('Share', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
                   ),
                 ),
@@ -266,7 +273,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                     child: Text(
                       me.name.isNotEmpty ? me.name[0].toUpperCase() : 'Y',
                       style: const TextStyle(
-                        color: Colors.white,
+                        color: kOnAccent,
                         fontWeight: FontWeight.w700,
                         fontSize: 15,
                         height: 1,

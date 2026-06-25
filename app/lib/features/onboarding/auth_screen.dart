@@ -91,24 +91,23 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   // --- actions ---
 
   Future<void> _verifyPhone() async {
-    // Second tap once verified → advance to profile.
-    if (_phoneAllowed == true) {
-      setState(() {
-        _step = _Step.profile;
-        _error = null;
-      });
-      return;
-    }
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
       final res = await ref.read(apiProvider).checkPhone(_phone.text.trim());
-      setState(() {
-        _phoneAllowed = res.allowed;
-        _isFirstAdmin = res.isFirstAdmin;
-      });
+      if (res.allowed) {
+        // Valid → go straight to profile setup (no confusing second tap).
+        setState(() {
+          _phoneAllowed = true;
+          _isFirstAdmin = res.isFirstAdmin;
+          _step = _Step.profile;
+        });
+      } else {
+        // Not on the list → show the red status row.
+        setState(() => _phoneAllowed = false);
+      }
     } on DioException catch (e) {
       setState(() => _error = _msg(e, 'Could not check that number'));
     } finally {
@@ -336,9 +335,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           _PrimaryButton(
-            label: _loginMode
-                ? 'Log in'
-                : (_phoneAllowed == true || fresh ? 'Continue' : 'Verify'),
+            label: _loginMode ? 'Log in' : 'Continue',
             enabled: canSubmit && !_busy,
             busy: _busy,
             onTap: _loginMode ? _login : _verifyPhone,
@@ -551,7 +548,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                         shape: BoxShape.circle,
                         border: Border.all(color: _bgMain, width: 3),
                       ),
-                      child: const Icon(Icons.photo_camera, size: 16, color: Colors.white),
+                      child: const Icon(Icons.photo_camera, size: 16, color: kOnAccent),
                     ),
                   ),
                 ],
@@ -721,7 +718,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               shape: BoxShape.circle,
               boxShadow: [BoxShadow(color: _accentLight, blurRadius: 0, spreadRadius: 8)],
             ),
-            child: const Icon(Icons.check, size: 44, color: Colors.white),
+            child: const Icon(Icons.check, size: 44, color: kOnAccent),
           ),
           const SizedBox(height: 26),
           const Text("You're all set",
@@ -870,14 +867,14 @@ class _PrimaryButton extends StatelessWidget {
         style: FilledButton.styleFrom(
           backgroundColor: _accent,
           disabledBackgroundColor: _bgSurfaceHover,
-          foregroundColor: Colors.white,
+          foregroundColor: kOnAccent,
           disabledForegroundColor: _fgMuted,
           padding: const EdgeInsets.symmetric(vertical: 15),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
         child: busy
             ? const SizedBox(
-                height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: kOnAccent))
             : Text(label, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
       ),
     );

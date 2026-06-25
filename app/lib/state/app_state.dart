@@ -101,7 +101,13 @@ final sessionProvider = StateNotifierProvider<SessionController, Session>(
 /// session changes.
 final apiProvider = Provider<ApiClient>((ref) {
   final s = ref.watch(sessionProvider);
-  return ApiClient(baseUrl: s.baseUrl ?? '', token: s.token);
+  return ApiClient(
+    baseUrl: s.baseUrl ?? '',
+    token: s.token,
+    // If an authenticated request 401s, the session is dead — sign out so the user can
+    // re-login instead of being stuck on errors.
+    onUnauthorized: () => ref.read(sessionProvider.notifier).signOut(),
+  );
 });
 
 /// The home feed as a refreshable provider. Invalidate it (e.g. after creating a post)
