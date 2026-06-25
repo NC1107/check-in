@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../theme/tokens.dart';
 
@@ -29,6 +30,7 @@ class AppTextField extends StatelessWidget {
     this.minLines,
     this.maxLines = 1,
     this.errorText,
+    this.inputFormatters,
   });
 
   final TextEditingController controller;
@@ -42,6 +44,8 @@ class AppTextField extends StatelessWidget {
   /// When set, the field shows a red border and this message beneath it.
   final String? errorText;
 
+  final List<TextInputFormatter>? inputFormatters;
+
   @override
   Widget build(BuildContext context) {
     final hasError = errorText != null;
@@ -49,6 +53,7 @@ class AppTextField extends StatelessWidget {
       controller: controller,
       keyboardType: keyboardType,
       obscureText: obscure,
+      inputFormatters: inputFormatters,
       onChanged: onChanged,
       minLines: obscure ? 1 : minLines,
       maxLines: obscure ? 1 : maxLines,
