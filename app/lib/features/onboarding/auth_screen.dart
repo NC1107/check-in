@@ -9,20 +9,21 @@ import 'package:intl/intl.dart';
 import '../../api/api_client.dart';
 import '../../api/models.dart';
 import '../../state/app_state.dart';
+import '../../theme/tokens.dart';
 import '../admin/contacts_picker_screen.dart';
 
-// Design tokens — Check-In dark design system
-const _bgMain = Color(0xFF0A0A0B);
-const _bgSurface = Color(0xFF1C1C1E);
-const _bgSurfaceHover = Color(0xFF232326);
-const _border = Color(0xFF27272A);
-const _fgPrimary = Color(0xFFEDEDEF);
-const _fgSecondary = Color(0xFFABABB0);
-const _fgMuted = Color(0xFF848490);
-const _accent = Color(0xFF5557E0);
-const _accentLight = Color(0x295557E0);
-const _online = Color(0xFF22C55E);
-const _danger = Color(0xFFEF4444);
+// Theme tokens (centralized in theme/tokens.dart).
+const _bgMain = kBgMain;
+const _bgSurface = kBgSurface;
+const _bgSurfaceHover = kBgSurfaceHover;
+const _border = kBorder;
+const _fgPrimary = kFgPrimary;
+const _fgSecondary = kFgSecondary;
+const _fgMuted = kFgMuted;
+const _accent = kAccent;
+const _accentLight = kAccentLight;
+const _online = kSuccess;
+const _danger = kLike;
 
 enum _Step { phone, profile, invite, done }
 

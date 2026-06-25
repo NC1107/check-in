@@ -1,16 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 
-// Design tokens — Check-In dark design system
-const _bgMain = Color(0xFF0A0A0B);
-const _bgSurfaceHover = Color(0xFF232326);
-const _border = Color(0xFF27272A);
-const _fgPrimary = Color(0xFFEDEDEF);
-const _fgSecondary = Color(0xFFABABB0);
-const _fgMuted = Color(0xFF848490);
-const _accent = Color(0xFF5557E0);
-const _accentLight = Color(0x295557E0);
-const _onAccent = Colors.white;
+import '../../theme/tokens.dart';
+
+// Theme tokens (centralized in theme/tokens.dart).
+const _bgMain = kBgMain;
+const _bgSurfaceHover = kBgSurfaceHover;
+const _border = kBorder;
+const _fgPrimary = kFgPrimary;
+const _fgSecondary = kFgSecondary;
+const _fgMuted = kFgMuted;
+const _accent = kAccent;
+const _accentLight = kAccentLight;
+const _onAccent = kOnAccent;
 
 const _avatarPalette = [
   Color(0xFF5557E0), Color(0xFF13AF9D), Color(0xFFDD1C85),

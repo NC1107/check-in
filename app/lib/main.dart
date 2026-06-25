@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -10,6 +9,7 @@ import 'features/feed/home_shell.dart';
 import 'features/onboarding/auth_screen.dart';
 import 'features/onboarding/connect_screen.dart';
 import 'state/app_state.dart';
+import 'theme/tokens.dart';
 
 // Key used to persist the most recent crash report across launches.
 const kLastCrashKey = '_last_crash';
@@ -66,17 +66,17 @@ class CheckInApp extends ConsumerWidget {
       theme: ThemeData(
         brightness: Brightness.dark,
         colorScheme: const ColorScheme.dark(
-          primary: Color(0xFF5557E0),
-          onPrimary: Colors.white,
-          secondary: Color(0xFF818CF8),
-          surface: Color(0xFF1C1C1E),
-          onSurface: Color(0xFFEDEDEF),
-          outline: Color(0xFF27272A),
-          error: Color(0xFFEF4444),
+          primary: kAccent,
+          onPrimary: kOnAccent,
+          secondary: kAccentHover,
+          surface: kBgSurface,
+          onSurface: kFgPrimary,
+          outline: kBorder,
+          error: kLike,
         ),
-        scaffoldBackgroundColor: const Color(0xFF0A0A0B),
-        cardColor: const Color(0xFF1C1C1E),
-        dividerColor: const Color(0xFF27272A),
+        scaffoldBackgroundColor: kBgMain,
+        cardColor: kBgSurface,
+        dividerColor: kBorder,
         useMaterial3: true,
       ),
       home: home,
