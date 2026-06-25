@@ -48,7 +48,7 @@ func (s *Server) handleServeMedia(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	media, err := s.db.GetMedia(r.Context(), id)
+	media, err := s.db.GetVisibleMedia(r.Context(), id, userFrom(r).ID)
 	if errors.Is(err, db.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "media not found")
 		return

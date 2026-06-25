@@ -380,6 +380,28 @@ func (d *DB) GetMedia(ctx context.Context, id int64) (Media, error) {
 	return m, err
 }
 
+// GetVisibleMedia returns a media item only if the viewer is allowed to see it: they
+// uploaded it, it's attached to a post (the feed is shared within the group), or it's
+// someone's profile photo. This prevents enumerating arbitrary media ids (e.g. another
+// member's not-yet-posted upload or media from a deleted post). Returns ErrNotFound
+// otherwise, so existence isn't confirmed.
+func (d *DB) GetVisibleMedia(ctx context.Context, id, viewerID int64) (Media, error) {
+	var m Media
+	err := d.Pool.QueryRow(ctx, `
+		SELECT m.id, m.owner_id, m.path, m.mime, m.width, m.height, m.created_at
+		FROM media m
+		WHERE m.id = $1 AND (
+			m.owner_id = $2
+			OR EXISTS (SELECT 1 FROM posts p WHERE p.media_id = m.id)
+			OR EXISTS (SELECT 1 FROM users u WHERE u.profile_media_id = m.id)
+		)`, id, viewerID,
+	).Scan(&m.ID, &m.OwnerID, &m.Path, &m.Mime, &m.Width, &m.Height, &m.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return m, ErrNotFound
+	}
+	return m, err
+}
+
 // SetUserProfileMedia attaches a profile picture to a user.
 func (d *DB) SetUserProfileMedia(ctx context.Context, userID, mediaID int64) error {
 	_, err := d.Pool.Exec(ctx, `UPDATE users SET profile_media_id = $2 WHERE id = $1`, userID, mediaID)
