@@ -35,6 +35,27 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"posts": posts})
 }
 
+// handleSearch is full-content search: it returns check-ins whose caption or comments
+// match, plus people whose name matches. Queries shorter than 2 chars return empty.
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len([]rune(q)) < 2 {
+		writeJSON(w, http.StatusOK, map[string]any{"posts": []any{}, "people": []any{}})
+		return
+	}
+	posts, err := s.db.SearchPosts(r.Context(), userFrom(r).ID, q, parseLimit(r, 30, 50))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	people, err := s.db.SearchUsers(r.Context(), q, 10)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"posts": posts, "people": people})
+}
+
 func (s *Server) handleSearchUsers(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("search"))
 	users, err := s.db.SearchUsers(r.Context(), q, parseLimit(r, 50, 200))

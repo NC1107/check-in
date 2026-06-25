@@ -111,6 +111,17 @@ func (d *DB) ListAllUsers(ctx context.Context) ([]User, error) {
 	return users, rows.Err()
 }
 
+// UpdateUserName changes a user's display name and returns the updated user.
+func (d *DB) UpdateUserName(ctx context.Context, id int64, name string) (User, error) {
+	var u User
+	err := d.Pool.QueryRow(ctx, `
+		UPDATE users SET name = $2 WHERE id = $1
+		RETURNING id, phone, name, first_name, last_name, birthday, profile_media_id, is_admin, status, created_at`,
+		id, name,
+	).Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt)
+	return u, err
+}
+
 // SetUserStatus updates a user's status (e.g. 'revoked'), used by admin to kick users.
 func (d *DB) SetUserStatus(ctx context.Context, id int64, status string) error {
 	ct, err := d.Pool.Exec(ctx, `UPDATE users SET status = $2 WHERE id = $1`, id, status)
@@ -343,6 +354,39 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, before *
 		  AND u.status = 'active'
 		ORDER BY p.created_at DESC
 		LIMIT $4`, viewerID, authorID, before, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var posts []Post
+	for rows.Next() {
+		var p Post
+		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.CreatedAt,
+			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer); err != nil {
+			return nil, err
+		}
+		posts = append(posts, p)
+	}
+	return posts, rows.Err()
+}
+
+// SearchPosts returns posts whose caption OR any of their comments match the query
+// (case-insensitive substring), newest first — powering full-content feed search.
+func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limit int) ([]Post, error) {
+	rows, err := d.Pool.Query(ctx, `
+		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.created_at,
+		       u.name, u.profile_media_id,
+		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
+		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
+		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)
+		FROM posts p
+		JOIN users u ON u.id = p.author_id
+		WHERE u.status = 'active' AND (
+		      p.body ILIKE '%' || $2 || '%'
+		   OR EXISTS (SELECT 1 FROM comments c WHERE c.post_id = p.id AND c.body ILIKE '%' || $2 || '%')
+		)
+		ORDER BY p.created_at DESC
+		LIMIT $3`, viewerID, query, limit)
 	if err != nil {
 		return nil, err
 	}

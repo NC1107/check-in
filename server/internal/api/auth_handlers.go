@@ -204,6 +204,30 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, userFrom(r))
 }
 
+type updateMeReq struct {
+	Name string `json:"name"` // display name
+}
+
+// handleUpdateMe updates the authenticated user's display name.
+func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
+	var req updateMeReq
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" || len(name) > 100 {
+		writeErr(w, http.StatusBadRequest, "name must be 1–100 characters")
+		return
+	}
+	user, err := s.db.UpdateUserName(r.Context(), userFrom(r).ID, name)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
 type setPhotoReq struct {
 	MediaID int64 `json:"mediaId"`
 }
