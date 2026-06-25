@@ -9,7 +9,7 @@ per-IP auth rate limiting with idle eviction, server-side image re-encode that s
 EXIF/GPS, and a sensible secure-headers/CSP baseline. The items below are the gaps found.
 
 ## Summary
-**Fixed in this pass: 4 · Remaining (documented): 7** — Critical: 0 · High: 0 · Medium: 3 · Low: 4
+**Fixed in this pass: 6 · Remaining (documented): 5** — Critical: 0 · High: 0 · Medium: 1 · Low: 4
 
 ---
 
@@ -27,21 +27,23 @@ EXIF/GPS, and a sensible secure-headers/CSP baseline. The items below are the ga
   added CI gates (`gofmt -l`, `dart format --set-exit-if-changed`) so it can't drift again.
 - **[hygiene] Stray files committed** — removed `play-review.md` / `tf-testers.md`
   (leftover Playwright snapshots) and gitignored `.playwright-mcp/`.
+- **[security] Media IDOR — fixed** — `handleServeMedia` now uses `GetVisibleMedia`, which
+  only serves media the requester owns, that's attached to a post, or that's a profile
+  photo (404 otherwise). Closes enumeration of others' unposted uploads / deleted-post media.
+- **[testing] Coverage raised** — added pure unit tests (no DB needed, so they run in CI):
+  rate limiter, signup display-name derivation, image DoS guards (Go); plus Flutter model
+  tests (post location, invite) and widget tests (UserAvatar, AppTextField, PrimaryButton).
+  DB-backed HTTP handler/integration tests are still a gap (see below).
 
 ---
 
 ## Remaining (documented)
 
 ### Medium
-- **[security] Media IDOR** — `server/internal/api/media_handlers.go:42` `handleServeMedia`
-  serves any media id to any authenticated member (sequential ids are enumerable). Low
-  practical impact because the feed is fully shared within a trusted group, but it leaks
-  media from *deleted* posts and not-yet-posted uploads. *Fix:* only serve media the
-  requester owns or that is referenced by a post/profile they can see. Effort: medium.
-- **[testing] Thin test coverage** — only `auth`, `storage`, `models`, and a placeholder
-  widget test exist. No HTTP handler/integration tests, no Flutter widget tests for the
-  core flows (auth, feed, compose). *Fix:* add handler tests (httptest) and a few widget
-  tests. Effort: large.
+- **[testing] No DB-backed handler/integration tests** — the new tests cover pure logic and
+  widgets, but the HTTP handlers (signup/login/feed/post flows) aren't exercised end-to-end.
+  *Fix:* stand up a throwaway Postgres in CI (service container) and add httptest-based
+  handler tests. Effort: large.
 - **[performance] Feed correlated subqueries** — `server/internal/db/queries.go` `Feed`
   runs 4 per-row subqueries (like count, comment count, liked-exists, comment preview).
   Fine at current scale; revisit with JOINs/aggregates if the feed grows. Effort: medium.
@@ -63,8 +65,9 @@ EXIF/GPS, and a sensible secure-headers/CSP baseline. The items below are the ga
 - [x] Upload disk-exhaustion DoS
 - [x] Formatting + CI gates
 - [x] Stray-file cleanup
-- [ ] Media IDOR (per-resource authz)
-- [ ] Test coverage (handler + widget tests)
+- [x] Media IDOR (per-resource authz)
+- [x] Unit + widget test coverage (pure-logic + widgets)
+- [ ] DB-backed handler/integration tests
 - [ ] Feed query optimization
 - [ ] Content-endpoint throttling
 - [ ] Expired-session cleanup

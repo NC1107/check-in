@@ -43,4 +43,38 @@ void main() {
     expect(b.month, 12);
     expect(b.day, 25);
   });
+
+  test('Post parses optional location and tolerates its absence', () {
+    final withLoc = Post.fromJson({
+      'id': 1,
+      'authorId': 1,
+      'kind': 'image',
+      'createdAt': '2026-06-24T09:00:00Z',
+      'location': 'Brooklyn, United States',
+    });
+    expect(withLoc.location, 'Brooklyn, United States');
+
+    final without = Post.fromJson({
+      'id': 2,
+      'authorId': 1,
+      'kind': 'text',
+      'createdAt': '2026-06-24T09:00:00Z',
+    });
+    expect(without.location, isNull);
+  });
+
+  test('Invite parses phone, used flag, and date', () {
+    final joined = Invite.fromJson({
+      'phone': '12025550142',
+      'used': true,
+      'createdAt': '2026-06-25T11:00:00Z',
+    });
+    expect(joined.phone, '12025550142');
+    expect(joined.used, isTrue);
+    expect(joined.createdAt, isNotNull);
+
+    final pending = Invite.fromJson({'phone': '13015550000'});
+    expect(pending.used, isFalse);
+    expect(pending.createdAt, isNull);
+  });
 }
