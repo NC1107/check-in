@@ -118,6 +118,20 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   padding: const EdgeInsets.only(bottom: 12),
                   children: [
                     _postHeader(post),
+                    if (post.location != null && post.location!.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.place_outlined, size: 14, color: kFgMuted),
+                            const SizedBox(width: 5),
+                            Expanded(
+                              child: Text(post.location!,
+                                  style: const TextStyle(color: kFgMuted, fontSize: 13)),
+                            ),
+                          ],
+                        ),
+                      ),
                     if (post.body.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),

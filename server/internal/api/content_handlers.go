@@ -107,9 +107,10 @@ func (s *Server) handleUserPosts(w http.ResponseWriter, r *http.Request) {
 }
 
 type createPostReq struct {
-	Kind    string `json:"kind"`    // "text" or "image"
-	Body    string `json:"body"`    // text body or image caption
-	MediaID *int64 `json:"mediaId"` // required when kind == "image"
+	Kind     string  `json:"kind"`     // "text" or "image"
+	Body     string  `json:"body"`     // text body or image caption
+	MediaID  *int64  `json:"mediaId"`  // required when kind == "image"
+	Location *string `json:"location"` // optional coarse "City, Country" from the photo
 }
 
 func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +141,18 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	post, err := s.db.CreatePost(r.Context(), userFrom(r).ID, req.Kind, req.Body, req.MediaID)
+	// Coarse, optional, image-only place label. Trim, cap length, and drop if blank.
+	var location *string
+	if req.Location != nil && req.Kind == "image" {
+		if loc := strings.TrimSpace(*req.Location); loc != "" {
+			if len(loc) > 120 {
+				loc = loc[:120]
+			}
+			location = &loc
+		}
+	}
+
+	post, err := s.db.CreatePost(r.Context(), userFrom(r).ID, req.Kind, req.Body, req.MediaID, location)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not create post")
 		return

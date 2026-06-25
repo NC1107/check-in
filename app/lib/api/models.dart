@@ -55,6 +55,7 @@ class Post {
     required this.likedByViewer,
     this.mediaId,
     this.authorPhotoId,
+    this.location,
     this.commentsPreview = const [],
   });
 
@@ -69,6 +70,7 @@ class Post {
   final bool likedByViewer;
   final int? mediaId;
   final int? authorPhotoId;
+  final String? location; // coarse "City, Country", null for most posts
   final List<CommentPreview> commentsPreview;
 
   factory Post.fromJson(Map<String, dynamic> j) => Post(
@@ -83,6 +85,7 @@ class Post {
         likedByViewer: j['likedByViewer'] as bool? ?? false,
         mediaId: j['mediaId'] as int?,
         authorPhotoId: j['authorPhotoId'] as int?,
+        location: j['location'] as String?,
         commentsPreview: ((j['commentsPreview'] as List?) ?? [])
             .map((e) => CommentPreview.fromJson(e as Map<String, dynamic>))
             .toList(),

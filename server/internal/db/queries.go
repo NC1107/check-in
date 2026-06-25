@@ -360,14 +360,14 @@ func (d *DB) SetUserProfileMedia(ctx context.Context, userID, mediaID int64) err
 // ---- posts ----
 
 // CreatePost inserts a post.
-func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, mediaID *int64) (Post, error) {
+func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, mediaID *int64, location *string) (Post, error) {
 	var p Post
 	err := d.Pool.QueryRow(ctx, `
-		INSERT INTO posts (author_id, kind, body, media_id)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, author_id, kind, body, media_id, created_at`,
-		authorID, kind, body, mediaID,
-	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.CreatedAt)
+		INSERT INTO posts (author_id, kind, body, media_id, location)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, author_id, kind, body, media_id, location, created_at`,
+		authorID, kind, body, mediaID, location,
+	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt)
 	return p, err
 }
 
@@ -375,7 +375,7 @@ func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, 
 // filtered to a single author and/or to posts created strictly before a cursor time.
 func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, before *time.Time, limit int) ([]Post, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.created_at,
+		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at,
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
@@ -395,7 +395,7 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, before *
 	for rows.Next() {
 		var p Post
 		var preview []byte
-		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.CreatedAt,
+		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt,
 			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview); err != nil {
 			return nil, err
 		}
@@ -411,7 +411,7 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, before *
 // (case-insensitive substring), newest first — powering full-content feed search.
 func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limit int) ([]Post, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.created_at,
+		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at,
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
@@ -432,7 +432,7 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 	for rows.Next() {
 		var p Post
 		var preview []byte
-		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.CreatedAt,
+		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt,
 			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview); err != nil {
 			return nil, err
 		}
@@ -449,14 +449,14 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 	var p Post
 	var preview []byte
 	err := d.Pool.QueryRow(ctx, `
-		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.created_at,
+		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at,
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
 		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+`
 		FROM posts p JOIN users u ON u.id = p.author_id
 		WHERE p.id = $2 AND u.status = 'active'`, viewerID, postID,
-	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.CreatedAt,
+	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt,
 		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, ErrNotFound

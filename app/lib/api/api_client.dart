@@ -161,11 +161,13 @@ class ApiClient {
     return Post.fromJson(r.data as Map<String, dynamic>);
   }
 
-  Future<Post> createPost({required String kind, required String body, int? mediaId}) async {
+  Future<Post> createPost(
+      {required String kind, required String body, int? mediaId, String? location}) async {
     final r = await _dio.post('/api/posts', data: {
       'kind': kind,
       'body': body,
       if (mediaId != null) 'mediaId': mediaId,
+      if (location != null && location.isNotEmpty) 'location': location,
     });
     return Post.fromJson(r.data as Map<String, dynamic>);
   }

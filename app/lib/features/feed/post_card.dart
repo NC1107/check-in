@@ -237,6 +237,23 @@ class _PostCardState extends ConsumerState<PostCard> {
               ],
             ),
           ),
+          // Location (from the photo), under the header
+          if (p.location != null && p.location!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
+              child: Row(
+                children: [
+                  const Icon(Icons.place_outlined, size: 13, color: _fgMuted),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(p.location!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: _fgMuted, fontSize: 12)),
+                  ),
+                ],
+              ),
+            ),
           // Caption
           if (p.body.isNotEmpty)
             Padding(
