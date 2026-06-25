@@ -40,7 +40,7 @@ func TestNormalizePhone(t *testing.T) {
 		"+1 (555) 123-4567":  "15551234567",
 		"555-123-4567":       "15551234567", // 10-digit national → default code prepended
 		"(555) 123-4567":     "15551234567",
-		"15551234567":        "15551234567", // already has the country code
+		"15551234567":        "15551234567",  // already has the country code
 		"  +44 20 7946 0958": "442079460958", // explicit + kept as international
 		"":                   "",
 		"abc":                "",

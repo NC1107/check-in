@@ -13,8 +13,7 @@ class FieldLabel extends StatelessWidget {
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: Text(text,
-            style:
-                const TextStyle(color: kFgMuted, fontWeight: FontWeight.w600, fontSize: 12)),
+            style: const TextStyle(color: kFgMuted, fontWeight: FontWeight.w600, fontSize: 12)),
       );
 }
 

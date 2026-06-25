@@ -110,8 +110,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       _connectedUrl = url;
       return true;
     } on DioException catch (_) {
-      setState(() => _serverError =
-          "Couldn't reach that server. Check the address and your connection.");
+      setState(() =>
+          _serverError = "Couldn't reach that server. Check the address and your connection.");
       return false;
     }
   }
@@ -155,9 +155,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     });
     try {
       if (!await _ensureServer()) return;
-      final res = await ref
-          .read(apiProvider)
-          .login(phone: _phone.text.trim(), password: _password.text);
+      final res =
+          await ref.read(apiProvider).login(phone: _phone.text.trim(), password: _password.text);
       await ref.read(sessionProvider.notifier).signIn(res.token, res.user);
     } on DioException catch (e) {
       setState(() => _error = _msg(e, 'Incorrect phone or password.'));
@@ -232,7 +231,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       final result = await api.uploadContacts(phones);
       setState(() => _invited = (result['added'] as int?) ?? phones.length);
     } catch (_) {
-      setState(() => _error = "Couldn't add those right now — you can invite from the Admin tab later.");
+      setState(
+          () => _error = "Couldn't add those right now — you can invite from the Admin tab later.");
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -508,7 +508,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                       decoration: BoxDecoration(
                         color: _bgSurface,
                         shape: BoxShape.circle,
-                        border: Border.all(color: const Color(0xFF3A3A3F), style: BorderStyle.solid),
+                        border:
+                            Border.all(color: const Color(0xFF3A3A3F), style: BorderStyle.solid),
                       ),
                       child: const Column(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -516,7 +517,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                           Icon(Icons.add_a_photo, size: 26, color: _fgMuted),
                           SizedBox(height: 5),
                           Text('Add photo',
-                              style: TextStyle(color: _fgMuted, fontSize: 11, fontWeight: FontWeight.w500)),
+                              style: TextStyle(
+                                  color: _fgMuted, fontSize: 11, fontWeight: FontWeight.w500)),
                         ],
                       ),
                     ),

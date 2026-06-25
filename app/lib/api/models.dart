@@ -141,8 +141,7 @@ class Invite {
   factory Invite.fromJson(Map<String, dynamic> j) => Invite(
         phone: j['phone'] as String? ?? '',
         used: j['used'] as bool? ?? false,
-        createdAt:
-            j['createdAt'] != null ? DateTime.tryParse(j['createdAt'] as String) : null,
+        createdAt: j['createdAt'] != null ? DateTime.tryParse(j['createdAt'] as String) : null,
       );
 }
 

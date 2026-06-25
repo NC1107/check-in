@@ -108,8 +108,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                     child: Padding(
                       padding: const EdgeInsets.all(24),
                       child: Text('Could not load post.\n${snap.error}',
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(color: kFgSecondary)),
+                          textAlign: TextAlign.center, style: const TextStyle(color: kFgSecondary)),
                     ),
                   );
                 }
@@ -167,8 +166,8 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                       const Padding(
                         padding: EdgeInsets.fromLTRB(16, 28, 16, 28),
                         child: Center(
-                          child: Text('No comments yet. Say hi!',
-                              style: TextStyle(color: kFgMuted)),
+                          child:
+                              Text('No comments yet. Say hi!', style: TextStyle(color: kFgMuted)),
                         ),
                       )
                     else
@@ -348,8 +347,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                           height: 18,
                           width: 18,
                           child: CircularProgressIndicator(strokeWidth: 2, color: kAccent))
-                      : Icon(Icons.arrow_upward_rounded,
-                          color: canSend ? kAccent : kFgMuted),
+                      : Icon(Icons.arrow_upward_rounded, color: canSend ? kAccent : kFgMuted),
                   style: IconButton.styleFrom(
                     backgroundColor: canSend ? kAccentLight : kBgSurface,
                     shape: const CircleBorder(),

@@ -18,6 +18,8 @@ jobs:
         with:
           go-version: "1.24"
           cache-dependency-path: server/go.sum
+      - name: Check formatting (gofmt)
+        run: test -z "$(gofmt -l .)" || { echo 'These files need gofmt:'; gofmt -l .; exit 1; }
       - run: go vet ./...
       - run: go build ./...
       - run: go test ./... -race
@@ -34,5 +36,7 @@ jobs:
         with:
           channel: stable
       - run: flutter pub get
+      - name: Check formatting (dart format)
+        run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze
       - run: flutter test

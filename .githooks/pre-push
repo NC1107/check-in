@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Pre-push formatting gate — mirrors the CI checks so a push never bounces on style.
+# Enable once per clone:  git config core.hooksPath .githooks
+set -uo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+fail=0
+
+# Make the Flutter SDK's dart reachable even from a minimal hook environment.
+for d in "$HOME/.flutter/bin" "$HOME/flutter/bin" "$HOME/development/flutter/bin"; do
+  [ -x "$d/dart" ] && PATH="$d:$PATH"
+done
+
+# --- Go (gofmt) — use a local toolchain if present, else fall back to Docker ---
+gofmt_list() {
+  if command -v gofmt >/dev/null 2>&1; then
+    (cd "$root/server" && gofmt -l .)
+  elif command -v docker >/dev/null 2>&1; then
+    docker run --rm -v "$root/server":/src -w /src golang:1.24-alpine gofmt -l . 2>/dev/null
+  else
+    echo "__no_tool__"
+  fi
+}
+unformatted="$(gofmt_list)"
+if [ "$unformatted" = "__no_tool__" ]; then
+  echo "• no gofmt/docker — skipping Go format check (CI will catch it)" >&2
+elif [ -n "$unformatted" ]; then
+  echo "✗ gofmt: these files need formatting:" >&2
+  echo "$unformatted" | sed 's#^#    server/#' >&2
+  echo "  fix: (cd server && gofmt -w .)   # or: docker run --rm -v \$PWD/server:/src -w /src golang:1.24-alpine gofmt -w ." >&2
+  fail=1
+fi
+
+# --- Dart (dart format) ---
+if command -v dart >/dev/null 2>&1; then
+  if ! (cd "$root/app" && dart format --output=none --set-exit-if-changed lib test >/dev/null 2>&1); then
+    echo "✗ dart format: app files need formatting." >&2
+    echo "  fix: (cd app && dart format lib test)" >&2
+    fail=1
+  fi
+else
+  echo "• dart not found on PATH — skipping Dart format check" >&2
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo "" >&2
+  echo "Push blocked by formatting. Run the fix command(s) above, commit, and re-push." >&2
+  echo "(To bypass once: git push --no-verify)" >&2
+  exit 1
+fi
+exit 0

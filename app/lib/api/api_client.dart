@@ -123,12 +123,10 @@ class ApiClient {
   Future<({List<Post> posts, List<User> people})> search(String query) async {
     final r = await _dio.get('/api/search', queryParameters: {'q': query});
     final j = r.data as Map<String, dynamic>;
-    final posts = (j['posts'] as List? ?? [])
-        .map((e) => Post.fromJson(e as Map<String, dynamic>))
-        .toList();
-    final people = (j['people'] as List? ?? [])
-        .map((e) => User.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final posts =
+        (j['posts'] as List? ?? []).map((e) => Post.fromJson(e as Map<String, dynamic>)).toList();
+    final people =
+        (j['people'] as List? ?? []).map((e) => User.fromJson(e as Map<String, dynamic>)).toList();
     return (posts: posts, people: people);
   }
 
@@ -242,8 +240,7 @@ class ApiClient {
 
   Future<void> revokeUser(int id) => _dio.delete('/api/admin/users/$id');
 
-  List<Post> _posts(dynamic data) =>
-      ((data as Map<String, dynamic>)['posts'] as List? ?? [])
-          .map((e) => Post.fromJson(e as Map<String, dynamic>))
-          .toList();
+  List<Post> _posts(dynamic data) => ((data as Map<String, dynamic>)['posts'] as List? ?? [])
+      .map((e) => Post.fromJson(e as Map<String, dynamic>))
+      .toList();
 }

@@ -332,8 +332,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     final chips = <Widget>[
       for (final id in _people)
         _filterChip(names[id] ?? 'Someone', () => setState(() => _people.remove(id))),
-      if (_datePreset != null)
-        _filterChip(_datePreset!, () => setState(() => _datePreset = null)),
+      if (_datePreset != null) _filterChip(_datePreset!, () => setState(() => _datePreset = null)),
     ];
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
@@ -390,7 +389,8 @@ class _SearchBar extends StatelessWidget {
           border: Border.all(color: _border),
           borderRadius: BorderRadius.circular(12),
           boxShadow: [
-            BoxShadow(color: Colors.black.withAlpha(76), blurRadius: 26, offset: const Offset(0, 10)),
+            BoxShadow(
+                color: Colors.black.withAlpha(76), blurRadius: 26, offset: const Offset(0, 10)),
           ],
         ),
         padding: const EdgeInsets.fromLTRB(13, 6, 6, 6),
@@ -449,9 +449,14 @@ class _FilterSheetState extends State<_FilterSheet> {
   String _personQuery = '';
 
   static const _palette = [
-    Color(0xFF5557E0), Color(0xFF13AF9D), Color(0xFFDD1C85),
-    Color(0xFFE9960A), Color(0xFF8458E9), Color(0xFF22C55E),
-    Color(0xFFEF4444), Color(0xFF0EA5E9),
+    Color(0xFF5557E0),
+    Color(0xFF13AF9D),
+    Color(0xFFDD1C85),
+    Color(0xFFE9960A),
+    Color(0xFF8458E9),
+    Color(0xFF22C55E),
+    Color(0xFFEF4444),
+    Color(0xFF0EA5E9),
   ];
 
   void _apply() => Navigator.of(context).pop((people: _people, date: _date));
@@ -466,7 +471,8 @@ class _FilterSheetState extends State<_FilterSheet> {
         children: [
           Center(
             child: Container(
-              width: 38, height: 4,
+              width: 38,
+              height: 4,
               margin: const EdgeInsets.only(bottom: 14),
               decoration: BoxDecoration(color: _border, borderRadius: BorderRadius.circular(9999)),
             ),
@@ -479,7 +485,8 @@ class _FilterSheetState extends State<_FilterSheet> {
               GestureDetector(
                 onTap: () => Navigator.of(context).pop(),
                 child: Container(
-                  width: 30, height: 30,
+                  width: 30,
+                  height: 30,
                   decoration: const BoxDecoration(color: _bgSurfaceHover, shape: BoxShape.circle),
                   child: const Icon(Icons.close, size: 18, color: _fgSecondary),
                 ),
@@ -490,7 +497,10 @@ class _FilterSheetState extends State<_FilterSheet> {
           if (widget.authors.isNotEmpty) ...[
             const Text('PEOPLE',
                 style: TextStyle(
-                    color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 12, letterSpacing: 0.4)),
+                    color: _fgMuted,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    letterSpacing: 0.4)),
             const SizedBox(height: 10),
             if (widget.authors.length > 5) ...[
               TextField(
@@ -519,8 +529,8 @@ class _FilterSheetState extends State<_FilterSheet> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                for (final a in widget.authors.where((a) =>
-                    _personQuery.isEmpty || a.name.toLowerCase().contains(_personQuery)))
+                for (final a in widget.authors.where(
+                    (a) => _personQuery.isEmpty || a.name.toLowerCase().contains(_personQuery)))
                   _personChip(a),
               ],
             ),
@@ -564,8 +574,7 @@ class _FilterSheetState extends State<_FilterSheet> {
                     padding: const EdgeInsets.symmetric(vertical: 13),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
-                  child: const Text('Show results',
-                      style: TextStyle(fontWeight: FontWeight.w700)),
+                  child: const Text('Show results', style: TextStyle(fontWeight: FontWeight.w700)),
                 ),
               ),
             ],
@@ -591,16 +600,20 @@ class _FilterSheetState extends State<_FilterSheet> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 24, height: 24,
+              width: 24,
+              height: 24,
               decoration: BoxDecoration(color: color, shape: BoxShape.circle),
               alignment: Alignment.center,
               child: Text(a.name.isNotEmpty ? a.name[0].toUpperCase() : '?',
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 11)),
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w700, fontSize: 11)),
             ),
             const SizedBox(width: 7),
             Text(a.name,
                 style: TextStyle(
-                    color: on ? _onAccent : _fgSecondary, fontWeight: FontWeight.w600, fontSize: 13)),
+                    color: on ? _onAccent : _fgSecondary,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13)),
           ],
         ),
       ),
