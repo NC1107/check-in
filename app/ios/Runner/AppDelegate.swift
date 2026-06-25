@@ -19,6 +19,13 @@ import UIKit
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
+    // Configure Firebase *before* registering plugins: firebase_messaging's auto-init runs
+    // during registration and needs the default app to already exist. In this implicit-
+    // engine template that happens before didFinishLaunchingWithOptions, so configuring
+    // there alone was too late ("default Firebase app has not yet been configured").
+    if FirebaseApp.app() == nil {
+      FirebaseApp.configure()
+    }
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
   }
 }
