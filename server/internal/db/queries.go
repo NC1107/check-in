@@ -162,6 +162,88 @@ func (d *DB) MarkPhoneUsed(ctx context.Context, phone string) error {
 	return err
 }
 
+// AllowedPhone is one allowlist entry, for the debug view.
+type AllowedPhone struct {
+	Phone     string
+	Used      bool
+	CreatedAt time.Time
+}
+
+// ListAllowedPhones returns every allowlist entry, newest first (debug view).
+func (d *DB) ListAllowedPhones(ctx context.Context) ([]AllowedPhone, error) {
+	rows, err := d.Pool.Query(ctx,
+		`SELECT phone, used, created_at FROM allowed_phones ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AllowedPhone
+	for rows.Next() {
+		var a AllowedPhone
+		if err := rows.Scan(&a.Phone, &a.Used, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ---- debug / maintenance ----
+
+// Stats is a snapshot of row counts for the debug dashboard.
+type Stats struct {
+	Initialized   bool
+	Users         int
+	Admins        int
+	AllowedPhones int
+	UsedPhones    int
+	Posts         int
+	Comments      int
+	Likes         int
+	Sessions      int
+	Media         int
+}
+
+// Stats returns aggregate counts across the database in a single round-trip.
+func (d *DB) Stats(ctx context.Context) (Stats, error) {
+	var s Stats
+	err := d.Pool.QueryRow(ctx, `
+		SELECT
+			COALESCE((SELECT initialized FROM server_config WHERE id = 1), FALSE),
+			(SELECT count(*) FROM users),
+			(SELECT count(*) FROM users WHERE is_admin),
+			(SELECT count(*) FROM allowed_phones),
+			(SELECT count(*) FROM allowed_phones WHERE used),
+			(SELECT count(*) FROM posts),
+			(SELECT count(*) FROM comments),
+			(SELECT count(*) FROM likes),
+			(SELECT count(*) FROM sessions),
+			(SELECT count(*) FROM media)
+	`).Scan(&s.Initialized, &s.Users, &s.Admins, &s.AllowedPhones, &s.UsedPhones,
+		&s.Posts, &s.Comments, &s.Likes, &s.Sessions, &s.Media)
+	return s, err
+}
+
+// ResetDatabase wipes all user data and returns the server to its fresh, uninitialized
+// state so the next signup becomes the first admin. Destructive — debug use only.
+func (d *DB) ResetDatabase(ctx context.Context) error {
+	tx, err := d.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	// One TRUNCATE with CASCADE handles the circular users<->media FK and resets identities.
+	if _, err := tx.Exec(ctx,
+		`TRUNCATE comments, likes, posts, sessions, allowed_phones, users, media RESTART IDENTITY CASCADE`); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE server_config SET initialized = FALSE WHERE id = 1`); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // ---- sessions ----
 
 // CreateSession stores a hashed session token for a user.

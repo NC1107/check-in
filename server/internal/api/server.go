@@ -42,6 +42,16 @@ func (s *Server) Router() http.Handler {
 	r.Get("/api/health", s.handleHealth)
 	r.Get("/api/server-info", s.handleServerInfo)
 
+	// Debug/maintenance web view — only mounted when a debug token is configured,
+	// and every request must carry it. Disabled by default in production.
+	if s.cfg.DebugToken != "" {
+		r.Group(func(r chi.Router) {
+			r.Use(s.requireDebugToken)
+			r.Get("/debug", s.handleDebugDashboard)
+			r.Post("/debug/reset", s.handleDebugReset)
+		})
+	}
+
 	// Auth / onboarding (rate-limited).
 	r.Group(func(r chi.Router) {
 		r.Use(s.rateLimitAuth)

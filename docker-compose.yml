@@ -51,6 +51,8 @@ services:
       CHECKIN_DATABASE_URL: "postgres://${POSTGRES_USER:-checkin}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-checkin}?sslmode=disable"
       CHECKIN_MEDIA_DIR: "/data/media"
       CHECKIN_SERVER_NAME: ${CHECKIN_SERVER_NAME:-Check-In}
+      # Optional debug web view at /debug?token=... — unset/empty disables it.
+      CHECKIN_DEBUG_TOKEN: ${CHECKIN_DEBUG_TOKEN:-}
     volumes:
       - media_data:/data/media
     deploy:
