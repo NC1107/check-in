@@ -18,11 +18,15 @@ class User {
     required this.name,
     required this.phone,
     required this.isAdmin,
+    this.firstName = '',
+    this.lastName = '',
     this.profileMediaId,
   });
 
   final int id;
-  final String name;
+  final String name; // display name
+  final String firstName;
+  final String lastName;
   final String phone;
   final bool isAdmin;
   final int? profileMediaId;
@@ -30,6 +34,8 @@ class User {
   factory User.fromJson(Map<String, dynamic> j) => User(
         id: j['id'] as int,
         name: j['name'] as String,
+        firstName: j['firstName'] as String? ?? '',
+        lastName: j['lastName'] as String? ?? '',
         phone: j['phone'] as String? ?? '',
         isAdmin: j['isAdmin'] as bool? ?? false,
         profileMediaId: j['profileMediaId'] as int?,

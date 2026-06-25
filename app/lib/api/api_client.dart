@@ -40,14 +40,18 @@ class ApiClient {
 
   Future<AuthResult> signup({
     required String phone,
-    required String name,
+    required String firstName,
+    required String lastName,
+    String? displayName,
     required String birthday, // YYYY-MM-DD
     required String password,
     int? mediaId,
   }) async {
     final r = await _dio.post('/api/auth/signup', data: {
       'phone': phone,
-      'name': name,
+      'firstName': firstName,
+      'lastName': lastName,
+      if (displayName != null && displayName.trim().isNotEmpty) 'displayName': displayName.trim(),
       'birthday': birthday,
       'password': password,
       if (mediaId != null) 'mediaId': mediaId,
