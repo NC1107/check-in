@@ -3,9 +3,14 @@ import 'package:flutter/material.dart';
 import 'auth_image.dart';
 
 const _avatarPalette = [
-  Color(0xFF5557E0), Color(0xFF13AF9D), Color(0xFFDD1C85),
-  Color(0xFFE9960A), Color(0xFF8458E9), Color(0xFF22C55E),
-  Color(0xFFEF4444), Color(0xFF3B82F6),
+  Color(0xFF5557E0),
+  Color(0xFF13AF9D),
+  Color(0xFFDD1C85),
+  Color(0xFFE9960A),
+  Color(0xFF8458E9),
+  Color(0xFF22C55E),
+  Color(0xFFEF4444),
+  Color(0xFF3B82F6),
 ];
 
 /// A stable, pleasant color for an initial avatar, seeded by a user id (or name hash).

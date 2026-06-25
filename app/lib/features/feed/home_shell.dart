@@ -148,8 +148,7 @@ class _NavItem extends StatelessWidget {
           children: [
             Icon(selected ? activeIcon : icon, size: 23, color: color),
             const SizedBox(height: 3),
-            Text(label,
-                style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600)),
+            Text(label, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600)),
           ],
         ),
       ),
@@ -296,7 +295,8 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                     foregroundColor: _fgSecondary,
                     padding: const EdgeInsets.symmetric(horizontal: 6),
                   ),
-                  child: const Text('Cancel', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+                  child: const Text('Cancel',
+                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
                 ),
                 const Expanded(
                   child: Text(
@@ -319,9 +319,11 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                     ),
                     child: _busy
                         ? const SizedBox(
-                            width: 16, height: 16,
+                            width: 16,
+                            height: 16,
                             child: CircularProgressIndicator(strokeWidth: 2, color: kOnAccent))
-                        : const Text('Share', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                        : const Text('Share',
+                            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
                   ),
                 ),
               ],
@@ -375,8 +377,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (me != null) ...[
-                  UserAvatar(
-                      name: me.name, size: 38, mediaId: me.profileMediaId, colorSeed: me.id),
+                  UserAvatar(name: me.name, size: 38, mediaId: me.profileMediaId, colorSeed: me.id),
                   const SizedBox(width: 12),
                 ],
                 Expanded(

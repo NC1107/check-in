@@ -44,7 +44,8 @@ class GlobalSearchDelegate extends SearchDelegate<void> {
   ThemeData appBarTheme(BuildContext context) {
     return Theme.of(context).copyWith(
       scaffoldBackgroundColor: kBgMain,
-      appBarTheme: const AppBarTheme(backgroundColor: kBgMain, elevation: 0, foregroundColor: kFgPrimary),
+      appBarTheme:
+          const AppBarTheme(backgroundColor: kBgMain, elevation: 0, foregroundColor: kFgPrimary),
       inputDecorationTheme: const InputDecorationTheme(
         hintStyle: TextStyle(color: kFgMuted),
         border: InputBorder.none,
@@ -159,7 +160,8 @@ class GlobalSearchDelegate extends SearchDelegate<void> {
           : Container(
               width: 40,
               height: 40,
-              decoration: BoxDecoration(color: kBgSurfaceHover, borderRadius: BorderRadius.circular(8)),
+              decoration:
+                  BoxDecoration(color: kBgSurfaceHover, borderRadius: BorderRadius.circular(8)),
               child: const Icon(Icons.chat_bubble_outline, size: 18, color: kFgMuted),
             ),
       title: Text(p.authorName,

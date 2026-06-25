@@ -35,12 +35,12 @@ type Config struct {
 // server runs out of the box for local development.
 func Load() (Config, error) {
 	cfg := Config{
-		HTTPAddr:       getenv("CHECKIN_HTTP_ADDR", ":8080"),
-		DatabaseURL:    getenv("CHECKIN_DATABASE_URL", "postgres://checkin:checkin@localhost:5432/checkin?sslmode=disable"),
-		MediaDir:       getenv("CHECKIN_MEDIA_DIR", "./data/media"),
-		ServerName:     getenv("CHECKIN_SERVER_NAME", "Check-In"),
-		SessionTTL:     getdur("CHECKIN_SESSION_TTL", 30*24*time.Hour),
-		MaxUploadBytes: getint64("CHECKIN_MAX_UPLOAD_BYTES", 10<<20), // 10 MiB
+		HTTPAddr:           getenv("CHECKIN_HTTP_ADDR", ":8080"),
+		DatabaseURL:        getenv("CHECKIN_DATABASE_URL", "postgres://checkin:checkin@localhost:5432/checkin?sslmode=disable"),
+		MediaDir:           getenv("CHECKIN_MEDIA_DIR", "./data/media"),
+		ServerName:         getenv("CHECKIN_SERVER_NAME", "Check-In"),
+		SessionTTL:         getdur("CHECKIN_SESSION_TTL", 30*24*time.Hour),
+		MaxUploadBytes:     getint64("CHECKIN_MAX_UPLOAD_BYTES", 10<<20), // 10 MiB
 		DebugToken:         getenv("CHECKIN_DEBUG_TOKEN", ""),
 		DefaultCountryCode: getenv("CHECKIN_DEFAULT_COUNTRY_CODE", "1"),
 	}

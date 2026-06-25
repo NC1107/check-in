@@ -15,9 +15,14 @@ const _accentLight = kAccentLight;
 const _onAccent = kOnAccent;
 
 const _avatarPalette = [
-  Color(0xFF5557E0), Color(0xFF13AF9D), Color(0xFFDD1C85),
-  Color(0xFFE9960A), Color(0xFF8458E9), Color(0xFF22C55E),
-  Color(0xFFEF4444), Color(0xFF0EA5E9),
+  Color(0xFF5557E0),
+  Color(0xFF13AF9D),
+  Color(0xFFDD1C85),
+  Color(0xFFE9960A),
+  Color(0xFF8458E9),
+  Color(0xFF22C55E),
+  Color(0xFFEF4444),
+  Color(0xFF0EA5E9),
 ];
 
 /// A contact with one or more phone numbers, flattened for the picker. All numbers are
@@ -94,8 +99,8 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
       setState(() {
         // Once permanently denied/restricted, request() won't prompt again — the user
         // has to enable it from system Settings.
-        _permanentlyBlocked = status == PermissionStatus.permanentlyDenied ||
-            status == PermissionStatus.restricted;
+        _permanentlyBlocked =
+            status == PermissionStatus.permanentlyDenied || status == PermissionStatus.restricted;
         _phase = _Phase.blocked;
       });
     }
@@ -110,10 +115,7 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
       final list = <_PickContact>[];
       var i = 0;
       for (final c in raw) {
-        final nums = c.phones
-            .map((p) => p.number.trim())
-            .where((s) => s.isNotEmpty)
-            .toList();
+        final nums = c.phones.map((p) => p.number.trim()).where((s) => s.isNotEmpty).toList();
         if (nums.isEmpty) continue;
         final display = (c.displayName ?? '').trim();
         final name = display.isEmpty ? nums.first : display;
@@ -160,10 +162,8 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
 
   void _continue() {
     // Upload every number of each selected contact so they match whichever they use.
-    final phones = _contacts
-        .where((c) => _selected.contains(c.id))
-        .expand((c) => c.phones)
-        .toList();
+    final phones =
+        _contacts.where((c) => _selected.contains(c.id)).expand((c) => c.phones).toList();
     Navigator.of(context).pop(phones);
   }
 
@@ -259,9 +259,8 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
           : 'Contacts access was denied. You can try again, or go back and add numbers '
               'manually.',
       primaryLabel: _permanentlyBlocked ? 'Open Settings' : 'Try again',
-      onPrimary: _permanentlyBlocked
-          ? () => FlutterContacts.permissions.openSettings()
-          : _requestThenLoad,
+      onPrimary:
+          _permanentlyBlocked ? () => FlutterContacts.permissions.openSettings() : _requestThenLoad,
       secondaryLabel: 'Back',
       onSecondary: () => Navigator.of(context).pop(),
     );

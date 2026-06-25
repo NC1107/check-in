@@ -339,8 +339,7 @@ class _PostCardState extends ConsumerState<PostCard> {
             child: Row(
               children: [
                 if (me != null)
-                  UserAvatar(
-                      name: me.name, size: 26, mediaId: me.profileMediaId, colorSeed: me.id),
+                  UserAvatar(name: me.name, size: 26, mediaId: me.profileMediaId, colorSeed: me.id),
                 const SizedBox(width: 9),
                 Expanded(
                   child: TextField(

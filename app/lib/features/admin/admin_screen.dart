@@ -36,10 +36,8 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
     super.dispose();
   }
 
-  void _refreshInvites() =>
-      setState(() => _invites = ref.read(apiProvider).adminListAllowed());
-  void _refreshUsers() =>
-      setState(() => _users = ref.read(apiProvider).adminListUsers());
+  void _refreshInvites() => setState(() => _invites = ref.read(apiProvider).adminListAllowed());
+  void _refreshUsers() => setState(() => _users = ref.read(apiProvider).adminListUsers());
 
   /// Parse the free-text field into phone numbers separated by newlines, commas, or
   /// semicolons.
@@ -188,9 +186,11 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _sectionHeader('Invite list', snap.connectionState == ConnectionState.waiting
-                ? null
-                : '$pending pending · ${invites.length - pending} joined'),
+            _sectionHeader(
+                'Invite list',
+                snap.connectionState == ConnectionState.waiting
+                    ? null
+                    : '$pending pending · ${invites.length - pending} joined'),
             const SizedBox(height: 10),
             if (snap.connectionState == ConnectionState.waiting)
               _loading()
@@ -226,7 +226,8 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
           const SizedBox(width: 12),
           Expanded(
             child: Text(inv.phone,
-                style: const TextStyle(color: kFgPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
+                style:
+                    const TextStyle(color: kFgPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
           ),
           _statusChip(inv.used),
           if (!inv.used)

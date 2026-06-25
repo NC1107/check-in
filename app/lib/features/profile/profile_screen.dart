@@ -103,8 +103,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               if (posts.isEmpty)
                 const Padding(
                   padding: EdgeInsets.all(40),
-                  child: Center(
-                      child: Text('No check-ins yet.', style: TextStyle(color: kFgMuted))),
+                  child:
+                      Center(child: Text('No check-ins yet.', style: TextStyle(color: kFgMuted))),
                 ),
               ...posts.map((p) => Padding(
                     padding: const EdgeInsets.only(top: 8),
@@ -156,7 +156,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   ),
                   child: const Text('HOST',
                       style: TextStyle(
-                          color: kAccent, fontWeight: FontWeight.w700, fontSize: 11, letterSpacing: 0.5)),
+                          color: kAccent,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 11,
+                          letterSpacing: 0.5)),
                 ),
               ],
             ],
@@ -253,8 +256,9 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
     try {
       final api = ref.read(apiProvider);
       var updated = widget.user;
-      final nameChanged =
-          name != widget.user.name || first != widget.user.firstName || last != widget.user.lastName;
+      final nameChanged = name != widget.user.name ||
+          first != widget.user.firstName ||
+          last != widget.user.lastName;
       if (nameChanged) {
         updated = await api.updateProfile(name: name, firstName: first, lastName: last);
       }
@@ -284,8 +288,7 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
               width: 38,
               height: 4,
               margin: const EdgeInsets.only(bottom: 16),
-              decoration:
-                  BoxDecoration(color: kBorder, borderRadius: BorderRadius.circular(9999)),
+              decoration: BoxDecoration(color: kBorder, borderRadius: BorderRadius.circular(9999)),
             ),
           ),
           const Text('Edit profile',

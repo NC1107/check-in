@@ -69,3 +69,11 @@ cd app
 flutter pub get
 flutter run            # against a running server; enter its URL on first launch
 ```
+
+Enable the formatting pre-push hook once per clone so style is caught before CI:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Code style is enforced (`gofmt` + `dart format`, 100-col) in CI and by that hook.
