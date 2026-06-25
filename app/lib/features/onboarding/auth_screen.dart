@@ -49,6 +49,27 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   bool _isFirstAdmin = false;
   bool? _phoneAllowed; // null = not yet checked
   AuthResult? _pendingAuth; // captured from signup, applied on "Enter Check-In"
+  // Whether the server already has an admin. Seeded from the connect probe, then
+  // refreshed on load so a fresh server shows host-setup framing, not invite-list copy.
+  bool _serverInitialized = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _serverInitialized = ref.read(sessionProvider).serverInitialized;
+    _refreshServerState();
+  }
+
+  /// Re-checks whether the server has an admin yet. Handles the case where the session
+  /// was restored from disk (where the flag isn't persisted) rather than freshly probed.
+  Future<void> _refreshServerState() async {
+    try {
+      final info = await ref.read(apiProvider).serverInfo();
+      if (mounted) setState(() => _serverInitialized = info.initialized);
+    } catch (_) {
+      // Leave the seeded value; the verify call will still gate signup correctly.
+    }
+  }
 
   @override
   void dispose() {
@@ -229,6 +250,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         ? (digits.length >= 7 && _password.text.isNotEmpty)
         : digits.length >= 7;
     final showStatus = !_loginMode && _phoneAllowed != null;
+    // Fresh server with no admin yet → this user is claiming the host account, so show
+    // setup framing instead of the invite-list verify copy, and hide the login link
+    // (there are no accounts to log into yet).
+    final fresh = !_serverInitialized && !_loginMode;
 
     return _StepScaffold(
       footer: Column(
@@ -237,24 +262,26 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           _PrimaryButton(
             label: _loginMode
                 ? 'Log in'
-                : (_phoneAllowed == true ? 'Continue' : 'Verify'),
+                : (_phoneAllowed == true || fresh ? 'Continue' : 'Verify'),
             enabled: canSubmit && !_busy,
             busy: _busy,
             onTap: _loginMode ? _login : _verifyPhone,
           ),
-          const SizedBox(height: 12),
-          GestureDetector(
-            onTap: () => setState(() {
-              _loginMode = !_loginMode;
-              _phoneAllowed = null;
-              _error = null;
-            }),
-            behavior: HitTestBehavior.opaque,
-            child: Text(
-              _loginMode ? 'New here? Verify your number' : 'Already a member? Log in',
-              style: const TextStyle(color: _accent, fontWeight: FontWeight.w600, fontSize: 13),
+          if (!fresh) ...[
+            const SizedBox(height: 12),
+            GestureDetector(
+              onTap: () => setState(() {
+                _loginMode = !_loginMode;
+                _phoneAllowed = null;
+                _error = null;
+              }),
+              behavior: HitTestBehavior.opaque,
+              child: Text(
+                _loginMode ? 'New here? Verify your number' : 'Already a member? Log in',
+                style: const TextStyle(color: _accent, fontWeight: FontWeight.w600, fontSize: 13),
+              ),
             ),
-          ),
+          ],
         ],
       ),
       children: [
@@ -266,18 +293,23 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             borderRadius: BorderRadius.circular(12),
           ),
           alignment: Alignment.center,
-          child: const Icon(Icons.verified_user, size: 24, color: _accent),
+          child: Icon(fresh ? Icons.add_moderator : Icons.verified_user, size: 24, color: _accent),
         ),
         const SizedBox(height: 20),
         Text(
-          _loginMode ? 'Welcome back' : 'Verify your number',
+          _loginMode
+              ? 'Welcome back'
+              : (fresh ? 'Set up your server' : 'Verify your number'),
           style: const TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 22),
         ),
         const SizedBox(height: 8),
         Text(
           _loginMode
               ? 'Enter your number and password to sign back in.'
-              : "Your phone number must be on the host's invite list to join this server.",
+              : (fresh
+                  ? "You're the first here, so this account becomes the host. Enter your phone "
+                      'number to claim it.'
+                  : "Your phone number must be on the host's invite list to join this server."),
           style: const TextStyle(color: _fgSecondary, fontSize: 14, height: 1.5),
         ),
         const SizedBox(height: 22),
@@ -318,7 +350,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           ),
         ],
         if (showStatus) _statusRow(),
-        if (!_loginMode) ...[
+        if (!_loginMode && !fresh) ...[
           const SizedBox(height: 16),
           const Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -328,6 +360,22 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               Expanded(
                 child: Text(
                   'Not on the list? Ask whoever set up the server to add your number.',
+                  style: TextStyle(color: _fgMuted, fontSize: 12, height: 1.5),
+                ),
+              ),
+            ],
+          ),
+        ],
+        if (fresh) ...[
+          const SizedBox(height: 16),
+          const Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.info_outline, size: 17, color: _fgMuted),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  "Next you'll set up your profile, then you can invite your circle.",
                   style: TextStyle(color: _fgMuted, fontSize: 12, height: 1.5),
                 ),
               ),
