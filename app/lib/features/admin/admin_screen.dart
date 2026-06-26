@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/models.dart';
@@ -309,6 +310,11 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
               ],
             ),
           ),
+          IconButton(
+            icon: const Icon(Icons.vpn_key_outlined, size: 20, color: kFgMuted),
+            tooltip: 'Issue password reset code',
+            onPressed: () => _issueResetCode(u),
+          ),
           if (!u.isAdmin)
             IconButton(
               icon: const Icon(Icons.person_remove_outlined, size: 20, color: kFgMuted),
@@ -318,6 +324,71 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _issueResetCode(User u) async {
+    try {
+      final res = await ref.read(apiProvider).issueResetCode(u.id);
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: kBgSurface,
+          title: Text('Reset code for ${res.name}', style: const TextStyle(color: kFgPrimary)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Share this with them. On the login screen they tap "Forgot password?", '
+                'enter their number, this code, and a new password.',
+                style: TextStyle(color: kFgSecondary, fontSize: 13, height: 1.4),
+              ),
+              const SizedBox(height: 16),
+              GestureDetector(
+                onTap: () {
+                  Clipboard.setData(ClipboardData(text: res.code));
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(const SnackBar(content: Text('Code copied')));
+                },
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  decoration: BoxDecoration(
+                    color: kBgMain,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: kBorder),
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(res.code,
+                      style: const TextStyle(
+                          color: kFgPrimary,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 24,
+                          letterSpacing: 4)),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text('Tap to copy · expires in 24 hours',
+                  style: TextStyle(color: kFgMuted, fontSize: 12)),
+            ],
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              style: FilledButton.styleFrom(
+                  backgroundColor: context.accent, foregroundColor: context.onAccent),
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Could not generate code: $e')));
+      }
+    }
   }
 
   Future<void> _confirmRevoke(User u) async {

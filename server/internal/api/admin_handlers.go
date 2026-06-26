@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/nc1107/check-in/server/internal/auth"
 	"github.com/nc1107/check-in/server/internal/db"
@@ -132,4 +133,44 @@ func (s *Server) handleAdminRevokeUser(w http.ResponseWriter, r *http.Request) {
 	// Invalidate all existing sessions so the revoked user is kicked immediately.
 	_ = s.db.DeleteUserSessions(r.Context(), id)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleAdminIssueResetCode generates a single-use recovery code for a member. The admin
+// relays it out-of-band (in person / text); the member redeems it via
+// /api/auth/reset-password within 24 hours to set a new password.
+func (s *Server) handleAdminIssueResetCode(w http.ResponseWriter, r *http.Request) {
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	user, err := s.db.GetUser(r.Context(), id)
+	if errors.Is(err, db.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "user not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	code, err := auth.NewResetCode()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	hash, err := auth.HashPassword(code)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	expires := time.Now().Add(24 * time.Hour)
+	if err := s.db.SetResetCode(r.Context(), id, hash, expires); err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"code":      code,
+		"name":      user.Name,
+		"expiresAt": expires,
+	})
 }

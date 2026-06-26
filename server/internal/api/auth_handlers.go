@@ -202,6 +202,50 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.issueSession(w, r, user)
 }
 
+type resetPasswordReq struct {
+	Phone       string `json:"phone"`
+	Code        string `json:"code"`
+	NewPassword string `json:"newPassword"`
+}
+
+// handleResetPassword lets a member redeem a host-issued reset code to set a new password,
+// logging the device in on success. In the rate-limited auth group.
+func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
+	var req resetPasswordReq
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if len(req.NewPassword) < 8 {
+		writeErr(w, http.StatusBadRequest, "password must be at least 8 characters")
+		return
+	}
+	phone := auth.NormalizePhone(req.Phone, s.cfg.DefaultCountryCode)
+	userID, codeHash, expires, err := s.db.ResetCode(r.Context(), phone)
+	if err != nil || time.Now().After(expires) ||
+		!auth.VerifyPassword(auth.NormalizeResetCode(req.Code), codeHash) {
+		writeErr(w, http.StatusBadRequest, "invalid or expired reset code")
+		return
+	}
+	newHash, err := auth.HashPassword(req.NewPassword)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	if err := s.db.SetPasswordAndClearReset(r.Context(), userID, newHash); err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	// Sign out everywhere, then log this device in fresh.
+	_ = s.db.DeleteUserSessions(r.Context(), userID)
+	user, err := s.db.GetUser(r.Context(), userID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	s.issueSession(w, r, user)
+}
+
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.DeleteSession(r.Context(), auth.HashToken(tokenFrom(r))); err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")

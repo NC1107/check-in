@@ -14,6 +14,7 @@ import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
+import 'reset_password_screen.dart';
 import '../admin/contacts_picker_screen.dart';
 
 // Theme tokens (centralized in theme/tokens.dart).
@@ -161,6 +162,21 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       setState(() => _error = _msg(e, 'Incorrect phone or password.'));
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _openForgotPassword() async {
+    setState(() => _busy = true);
+    final connected = await _ensureServer();
+    if (mounted) setState(() => _busy = false);
+    if (!connected || !mounted) return;
+    final res = await Navigator.of(context).push<AuthResult>(
+      MaterialPageRoute(
+        builder: (_) => ResetPasswordScreen(initialPhone: _phone.text.trim()),
+      ),
+    );
+    if (res != null && mounted) {
+      await ref.read(sessionProvider.notifier).signIn(res.token, res.user);
     }
   }
 
@@ -441,6 +457,20 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             hint: 'Your password',
             obscure: true,
             onChanged: (_) => setState(() {}),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: _busy ? null : _openForgotPassword,
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.only(top: 6),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Text('Forgot password?',
+                  style:
+                      TextStyle(color: context.accent, fontSize: 13, fontWeight: FontWeight.w600)),
+            ),
           ),
         ],
         if (!_loginMode && _phoneError == null) ...[
