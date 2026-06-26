@@ -144,8 +144,19 @@ final apiProvider = Provider<ApiClient>((ref) {
   );
 });
 
+/// The location filter applied to the home feed — null means all places. Set it and the
+/// feed refetches server-side (so you see every check-in from that place, not just the
+/// loaded page).
+final feedLocationProvider = StateProvider<String?>((ref) => null);
+
 /// The home feed as a refreshable provider. Invalidate it (e.g. after creating a post)
 /// and the feed list updates without a manual pull-to-refresh.
 final feedProvider = FutureProvider.autoDispose<List<Post>>((ref) {
-  return ref.watch(apiProvider).feed();
+  final location = ref.watch(feedLocationProvider);
+  return ref.watch(apiProvider).feed(location: location);
+});
+
+/// Distinct place labels across all check-ins (most-used first), for the location filter.
+final locationsProvider = FutureProvider.autoDispose<List<({String location, int count})>>((ref) {
+  return ref.watch(apiProvider).locations();
 });
