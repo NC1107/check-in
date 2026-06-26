@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -16,6 +17,14 @@ import (
 var dummyPasswordHash, _ = auth.HashPassword("timing-equalizer-not-a-real-password")
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	// Verify the DB is actually reachable so the container healthcheck (and watchtower's
+	// rollback) treats a DB-disconnected server as unhealthy rather than "ok".
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	if err := s.db.Pool.Ping(ctx); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "db unavailable"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

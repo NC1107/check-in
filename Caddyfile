@@ -12,6 +12,9 @@
 
 	# Security headers at the edge (server also sets these, belt-and-suspenders).
 	header {
+		# Pin HTTPS for a year so a network attacker can't SSL-strip the web/PWA client.
+		# Caddy already serves only HTTPS here; this tells browsers to as well.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "no-referrer"

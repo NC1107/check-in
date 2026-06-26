@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # Keep CI/release actions current (pin drift + security fixes).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  # Server base images (golang, distroless) and Go modules.
+  - package-ecosystem: docker
+    directory: /server
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /server
+    schedule:
+      interval: weekly
+  # Flutter / Dart packages.
+  - package-ecosystem: pub
+    directory: /app
+    schedule:
+      interval: weekly
