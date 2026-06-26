@@ -20,6 +20,17 @@ class GlobalSearchDelegate extends SearchDelegate<void> {
   Timer? _debounce;
   final _results = ValueNotifier<({List<Post> posts, List<User> people})?>(null);
   String _lastQueried = '';
+  bool _closed = false;
+
+  @override
+  void close(BuildContext context, void result) {
+    // SearchDelegate has no dispose hook; clean up here so a pending debounce timer and
+    // its network call don't fire (and write to the notifier) after the user leaves.
+    _closed = true;
+    _debounce?.cancel();
+    super.close(context, result);
+    _results.dispose();
+  }
 
   void _run(String q) {
     final query = q.trim();
@@ -34,9 +45,9 @@ class GlobalSearchDelegate extends SearchDelegate<void> {
     _debounce = Timer(const Duration(milliseconds: 300), () async {
       try {
         final r = await _api.search(query);
-        if (_lastQueried == query) _results.value = r;
+        if (!_closed && _lastQueried == query) _results.value = r;
       } catch (_) {
-        _results.value = (posts: <Post>[], people: <User>[]);
+        if (!_closed) _results.value = (posts: <Post>[], people: <User>[]);
       }
     });
   }

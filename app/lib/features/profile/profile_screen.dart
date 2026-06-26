@@ -114,8 +114,15 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           }
           if (snap.hasError) {
             return Center(
-              child: Text('Could not load profile.\n${snap.error}',
-                  textAlign: TextAlign.center, style: const TextStyle(color: kFgSecondary)),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Could not load profile.',
+                      textAlign: TextAlign.center, style: TextStyle(color: kFgSecondary)),
+                  const SizedBox(height: 12),
+                  TextButton(onPressed: _reload, child: const Text('Try again')),
+                ],
+              ),
             );
           }
           final (user, posts) = snap.data!;
