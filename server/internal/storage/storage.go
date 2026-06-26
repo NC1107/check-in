@@ -123,6 +123,17 @@ func (s *Store) Open(relPath string) (*os.File, error) {
 	return os.Open(abs)
 }
 
+// Delete removes a stored file given its relative path, confined to the base directory.
+// A missing file is treated as success, since the row may already be gone.
+func (s *Store) Delete(relPath string) error {
+	clean := filepath.Clean("/" + relPath) // force absolute, removes ../
+	abs := filepath.Join(s.baseDir, clean)
+	if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 func downscale(img image.Image) image.Image {
 	b := img.Bounds()
 	w, h := b.Dx(), b.Dy()

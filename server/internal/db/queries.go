@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // commentPreviewExpr is a SELECT-list fragment returning the 2 most recent comments on
@@ -726,28 +727,98 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 
 // DeletePost removes a post if owned by the given author. Returns ErrNotFound if no
 // matching row (wrong owner or missing).
-func (d *DB) DeletePost(ctx context.Context, postID, authorID int64) error {
-	ct, err := d.Pool.Exec(ctx, `DELETE FROM posts WHERE id = $1 AND author_id = $2`, postID, authorID)
-	if err != nil {
-		return err
-	}
-	if ct.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+// DeletePost removes a member's own post, plus any media that becomes orphaned as a
+// result, and returns the stored paths of the now-unreferenced files so the caller can
+// delete them from disk. Comments, likes, and post_media cascade via their foreign keys.
+func (d *DB) DeletePost(ctx context.Context, postID, authorID int64) ([]string, error) {
+	return d.deletePost(ctx, postID, &authorID)
 }
 
-// AdminDeletePost removes any post regardless of owner (operator dashboard moderation).
-// Comments and likes cascade via their foreign keys.
-func (d *DB) AdminDeletePost(ctx context.Context, postID int64) error {
-	ct, err := d.Pool.Exec(ctx, `DELETE FROM posts WHERE id = $1`, postID)
+// AdminDeletePost removes any post regardless of owner (operator dashboard moderation),
+// with the same orphaned-media cleanup as DeletePost.
+func (d *DB) AdminDeletePost(ctx context.Context, postID int64) ([]string, error) {
+	return d.deletePost(ctx, postID, nil)
+}
+
+// deletePost deletes a post (optionally constrained to an author) and garbage-collects any
+// media it referenced that is no longer used anywhere, returning their file paths.
+func (d *DB) deletePost(ctx context.Context, postID int64, authorID *int64) ([]string, error) {
+	tx, err := d.Pool.Begin(ctx)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	candidates, err := collectPostMedia(ctx, tx, postID)
+	if err != nil {
+		return nil, err
+	}
+	var ct pgconn.CommandTag
+	if authorID != nil {
+		ct, err = tx.Exec(ctx, `DELETE FROM posts WHERE id = $1 AND author_id = $2`, postID, *authorID)
+	} else {
+		ct, err = tx.Exec(ctx, `DELETE FROM posts WHERE id = $1`, postID)
+	}
+	if err != nil {
+		return nil, err
 	}
 	if ct.RowsAffected() == 0 {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
-	return nil
+	paths, err := deleteOrphanMedia(ctx, tx, candidates)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
+// collectPostMedia returns the media ids a post references — its cover plus every
+// post_media entry — so they can be re-checked for orphan status after the post is gone.
+func collectPostMedia(ctx context.Context, tx pgx.Tx, postID int64) ([]int64, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT media_id FROM post_media WHERE post_id = $1
+		UNION
+		SELECT media_id FROM posts WHERE id = $1 AND media_id IS NOT NULL`, postID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// deleteOrphanMedia removes any candidate media rows no longer referenced by a post cover,
+// post_media, or a profile photo, returning their stored file paths. Run after the post is
+// deleted so its own references are already gone.
+func deleteOrphanMedia(ctx context.Context, tx pgx.Tx, candidates []int64) ([]string, error) {
+	var paths []string
+	for _, mid := range candidates {
+		var path string
+		err := tx.QueryRow(ctx, `
+			DELETE FROM media m WHERE m.id = $1
+			  AND NOT EXISTS (SELECT 1 FROM posts p WHERE p.media_id = m.id)
+			  AND NOT EXISTS (SELECT 1 FROM post_media pm WHERE pm.media_id = m.id)
+			  AND NOT EXISTS (SELECT 1 FROM users u WHERE u.profile_media_id = m.id)
+			RETURNING m.path`, mid).Scan(&path)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue // still referenced elsewhere; keep it
+		}
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, path)
+	}
+	return paths, nil
 }
 
 // AdminDeleteComment removes any comment by id (operator dashboard moderation).
@@ -786,6 +857,19 @@ func (d *DB) RecentComments(ctx context.Context, limit int) ([]Comment, error) {
 }
 
 // ---- likes ----
+
+// PostVisible reports whether a post exists and is visible to members — i.e. its author
+// is still active. Used to reject likes/comments on missing or hidden posts with a clean
+// 404 instead of leaking a foreign-key 500 or letting members interact with content the
+// feed hides.
+func (d *DB) PostVisible(ctx context.Context, postID int64) (bool, error) {
+	var ok bool
+	err := d.Pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM posts p JOIN users u ON u.id = p.author_id
+			WHERE p.id = $1 AND u.status = 'active')`, postID).Scan(&ok)
+	return ok, err
+}
 
 // LikePost adds a like, ignoring duplicates.
 func (d *DB) LikePost(ctx context.Context, postID, userID int64) error {

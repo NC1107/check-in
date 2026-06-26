@@ -34,10 +34,30 @@ func Connect(ctx context.Context, url string) (*DB, error) {
 // Close releases the connection pool.
 func (d *DB) Close() { d.Pool.Close() }
 
+// migrationLockKey is an arbitrary fixed key for the session-level advisory lock that
+// serializes migration runs, so two server instances starting at once (e.g. during a
+// rolling redeploy) can't race the same migration.
+const migrationLockKey int64 = 4915012025
+
 // Migrate applies any embedded migrations that have not yet been recorded in the
-// schema_migrations table. Each migration runs in its own transaction.
+// schema_migrations table. Each migration runs in its own transaction. The whole run is
+// guarded by a Postgres advisory lock so concurrent instances apply migrations serially.
 func (d *DB) Migrate(ctx context.Context) error {
-	_, err := d.Pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+	conn, err := d.Pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire migration conn: %w", err)
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrationLockKey); err != nil {
+		return fmt.Errorf("advisory lock: %w", err)
+	}
+	defer func() {
+		// Release on the same connection; use a fresh context so unlock still runs even if
+		// ctx was cancelled.
+		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationLockKey)
+	}()
+
+	_, err = d.Pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		name TEXT PRIMARY KEY,
 		applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 	)`)

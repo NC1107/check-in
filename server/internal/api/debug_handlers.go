@@ -152,9 +152,13 @@ func (s *Server) handleDebugPostDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.db.AdminDeletePost(r.Context(), id); err != nil {
+	orphans, err := s.db.AdminDeletePost(r.Context(), id)
+	if err != nil {
 		s.renderDebug(w, r, "Could not delete that post.")
 		return
+	}
+	for _, p := range orphans {
+		_ = s.store.Delete(p)
 	}
 	s.renderDebug(w, r, "Post deleted.")
 }
