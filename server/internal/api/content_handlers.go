@@ -215,7 +215,7 @@ func (s *Server) handleDeletePost(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	err = s.db.DeletePost(r.Context(), id, userFrom(r).ID)
+	orphans, err := s.db.DeletePost(r.Context(), id, userFrom(r).ID)
 	if errors.Is(err, db.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "post not found or not yours")
 		return
@@ -224,6 +224,10 @@ func (s *Server) handleDeletePost(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
+	// Remove now-unreferenced media files from disk (best-effort; the rows are gone).
+	for _, p := range orphans {
+		_ = s.store.Delete(p)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -231,6 +235,13 @@ func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	if visible, err := s.db.PostVisible(r.Context(), id); err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	} else if !visible {
+		writeErr(w, http.StatusNotFound, "post not found")
 		return
 	}
 	if err := s.db.LikePost(r.Context(), id, userFrom(r).ID); err != nil {
@@ -285,6 +296,13 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	req.Body = strings.TrimSpace(req.Body)
 	if req.Body == "" || len(req.Body) > 2000 {
 		writeErr(w, http.StatusBadRequest, "comment must be 1-2000 characters")
+		return
+	}
+	if visible, err := s.db.PostVisible(r.Context(), id); err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	} else if !visible {
+		writeErr(w, http.StatusNotFound, "post not found")
 		return
 	}
 	me := userFrom(r)

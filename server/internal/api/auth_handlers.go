@@ -130,6 +130,10 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "birthday must be YYYY-MM-DD")
 		return
 	}
+	if birthday.Year() < 1900 || birthday.After(time.Now()) {
+		writeErr(w, http.StatusBadRequest, "birthday is not a valid date")
+		return
+	}
 
 	initialized, err := s.db.ServerInitialized(r.Context())
 	if err != nil {

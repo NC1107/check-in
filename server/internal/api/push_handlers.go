@@ -2,9 +2,11 @@ package api
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type deviceReq struct {
@@ -91,7 +93,16 @@ func (s *Server) notifyPost(authorID int64, authorName string, postID int64) {
 	if s.push == nil {
 		return
 	}
-	ctx := context.Background()
+	// This runs in its own goroutine off the request path, so it's outside chi's
+	// Recoverer — a panic here would crash the whole process. Recover, and bound the
+	// work with a timeout so a slow FCM call can't leak goroutines.
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("notifyPost: recovered: %v", rec)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	tokens, err := s.db.TokensForNewPost(ctx, authorID)
 	if err != nil || len(tokens) == 0 {
 		return
@@ -105,7 +116,13 @@ func (s *Server) notifyReply(commenterName string, postID, commenterID int64) {
 	if s.push == nil {
 		return
 	}
-	ctx := context.Background()
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("notifyReply: recovered: %v", rec)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	tokens, err := s.db.TokensForReply(ctx, postID, commenterID)
 	if err != nil || len(tokens) == 0 {
 		return

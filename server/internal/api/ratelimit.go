@@ -9,11 +9,11 @@ import (
 // client IP). It is sufficient for a small self-hosted server; for multi-instance
 // deployments this would move to a shared store.
 type rateLimiter struct {
-	mu      sync.Mutex
-	buckets map[string]*bucket
-	rate    float64 // tokens per second
-	burst   float64
-	calls   int
+	mu        sync.Mutex
+	buckets   map[string]*bucket
+	rate      float64 // tokens per second
+	burst     float64
+	lastEvict time.Time
 }
 
 type bucket struct {
@@ -21,11 +21,16 @@ type bucket struct {
 	last   time.Time
 }
 
+// evictInterval is how often idle buckets are swept. Driven by elapsed time rather than a
+// call counter so an idle server still releases memory.
+const evictInterval = 5 * time.Minute
+
 func newRateLimiter(perMinute, burst int) *rateLimiter {
 	return &rateLimiter{
-		buckets: make(map[string]*bucket),
-		rate:    float64(perMinute) / 60.0,
-		burst:   float64(burst),
+		buckets:   make(map[string]*bucket),
+		rate:      float64(perMinute) / 60.0,
+		burst:     float64(burst),
+		lastEvict: time.Now(),
 	}
 }
 
@@ -34,10 +39,11 @@ func (r *rateLimiter) allow(key string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
-	// Periodically evict idle buckets to bound memory usage.
-	r.calls++
-	if r.calls%1000 == 0 {
+	// Periodically evict idle buckets to bound memory usage. Time-based so this still
+	// happens on a server that goes idle after a burst.
+	if now.Sub(r.lastEvict) > evictInterval {
 		r.evictIdle(now)
+		r.lastEvict = now
 	}
 	b, ok := r.buckets[key]
 	if !ok {
