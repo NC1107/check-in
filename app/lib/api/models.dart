@@ -58,6 +58,7 @@ class Post {
     this.authorPhotoId,
     this.location,
     this.commentsPreview = const [],
+    this.people = const [],
   });
 
   final int id;
@@ -75,10 +76,25 @@ class Post {
   final String? location; // coarse "City, Country", null for most posts
   final List<CommentPreview> commentsPreview;
 
+  /// Members tagged as appearing in the post (id for filtering, name for display).
+  final List<({int id, String name})> people;
+
   /// The post's images in order. Prefers the multi-photo set, falling back to the legacy
   /// single cover so older posts still render.
   List<int> get images =>
       mediaIds.isNotEmpty ? mediaIds : (mediaId != null ? [mediaId!] : const []);
+
+  /// Ids of the tagged members, for the feed's "include posts they're in" filter.
+  List<int> get peopleIds => [for (final p in people) p.id];
+
+  /// A short "with Bob & Carol" summary of the tagged people, or '' when none.
+  String get peopleLabel {
+    final names = [for (final p in people) p.name];
+    if (names.isEmpty) return '';
+    if (names.length == 1) return 'with ${names[0]}';
+    if (names.length == 2) return 'with ${names[0]} & ${names[1]}';
+    return 'with ${names[0]}, ${names[1]} & ${names.length - 2} others';
+  }
 
   factory Post.fromJson(Map<String, dynamic> j) => Post(
         id: j['id'] as int,
@@ -96,6 +112,12 @@ class Post {
         location: j['location'] as String?,
         commentsPreview: ((j['commentsPreview'] as List?) ?? [])
             .map((e) => CommentPreview.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        people: ((j['people'] as List?) ?? const [])
+            .map((e) => (
+                  id: (e as Map<String, dynamic>)['id'] as int,
+                  name: e['name'] as String,
+                ))
             .toList(),
       );
 }

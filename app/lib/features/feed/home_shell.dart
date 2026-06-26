@@ -7,6 +7,8 @@ import 'package:geocoding/geocoding.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:native_exif/native_exif.dart';
 
+import '../../api/api_client.dart';
+import '../../api/models.dart';
 import '../../notifications/birthday_notifier.dart';
 import '../../notifications/push_messaging.dart';
 import '../../state/app_state.dart';
@@ -172,6 +174,8 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   static const _maxImages = 10;
   final _bodyCtrl = TextEditingController();
   final List<XFile> _images = [];
+  // Members the author tags as appearing in the post (id + name + photo for chip display).
+  final List<({int id, String name, int? photoId})> _tagged = [];
   String? _location; // coarse "City, Country" read from the photos, if any
   String? _locationSource; // path of the photo that supplied _location
   bool _locationCleared = false; // user removed the location manually; don't auto-refill
@@ -290,6 +294,29 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     );
   }
 
+  /// Opens the member picker, seeding it with the current selection. Excludes the author —
+  /// the post is implicitly theirs.
+  Future<void> _pickPeople() async {
+    final me = ref.read(sessionProvider).user;
+    final result = await showModalBottomSheet<List<({int id, String name, int? photoId})>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _bgMain,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
+      builder: (_) => _TagPeopleSheet(
+        api: ref.read(apiProvider),
+        excludeId: me?.id,
+        initial: _tagged,
+      ),
+    );
+    if (result != null && mounted) {
+      setState(() => _tagged
+        ..clear()
+        ..addAll(result));
+    }
+  }
+
   Widget _mediaButton(IconData icon, String label, VoidCallback onTap) {
     return OutlinedButton.icon(
       onPressed: onTap,
@@ -312,15 +339,20 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     });
     try {
       final api = ref.read(apiProvider);
+      final peopleIds = [for (final t in _tagged) t.id];
       if (_images.isNotEmpty) {
         final ids = <int>[];
         for (final x in _images) {
           ids.add(await api.uploadImage(x.path));
         }
         await api.createPost(
-            kind: 'image', body: _bodyCtrl.text.trim(), mediaIds: ids, location: _location);
+            kind: 'image',
+            body: _bodyCtrl.text.trim(),
+            mediaIds: ids,
+            location: _location,
+            peopleIds: peopleIds);
       } else {
-        await api.createPost(kind: 'text', body: _bodyCtrl.text.trim());
+        await api.createPost(kind: 'text', body: _bodyCtrl.text.trim(), peopleIds: peopleIds);
       }
       if (mounted) Navigator.of(context).pop(true);
     } on DioException catch (e) {
@@ -474,6 +506,41 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
               ],
             ),
           ),
+          // Tag people — who's in this post (drives the feed's "include posts they're in").
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+            child: InkWell(
+              onTap: _pickPeople,
+              borderRadius: BorderRadius.circular(10),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
+                  children: [
+                    Icon(Icons.person_add_alt_1_outlined, size: 18, color: context.accent),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _tagged.isEmpty
+                          ? const Text('Tag people',
+                              style: TextStyle(color: _fgSecondary, fontSize: 14))
+                          : Text(
+                              [for (final t in _tagged) t.name].join(', '),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: _fgPrimary, fontSize: 14),
+                            ),
+                    ),
+                    if (_tagged.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 4),
+                        child: Text('${_tagged.length}',
+                            style: const TextStyle(color: _fgMuted, fontSize: 13)),
+                      ),
+                    const Icon(Icons.chevron_right, size: 18, color: _fgMuted),
+                  ],
+                ),
+              ),
+            ),
+          ),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -497,6 +564,160 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Multi-select member picker for tagging who appears in a post. Loads the active roster
+/// once, filters by a search box, and returns the chosen members (or null on cancel).
+class _TagPeopleSheet extends StatefulWidget {
+  const _TagPeopleSheet({required this.api, required this.excludeId, required this.initial});
+
+  final ApiClient api;
+  final int? excludeId;
+  final List<({int id, String name, int? photoId})> initial;
+
+  @override
+  State<_TagPeopleSheet> createState() => _TagPeopleSheetState();
+}
+
+class _TagPeopleSheetState extends State<_TagPeopleSheet> {
+  late Future<List<User>> _roster;
+  final _selected = <int, ({int id, String name, int? photoId})>{};
+  String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    for (final t in widget.initial) {
+      _selected[t.id] = t;
+    }
+    // Empty search returns all active members.
+    _roster = widget.api.searchUsers('');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.7,
+        maxChildSize: 0.92,
+        builder: (context, scrollCtrl) => Column(
+          children: [
+            Container(
+              width: 38,
+              height: 4,
+              margin: const EdgeInsets.only(top: 10, bottom: 12),
+              decoration: BoxDecoration(color: _border, borderRadius: BorderRadius.circular(9999)),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  const Expanded(
+                    child: Text('Tag people',
+                        style: TextStyle(
+                            color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 16)),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(_selected.values.toList()),
+                    style: TextButton.styleFrom(
+                      backgroundColor: context.accent,
+                      foregroundColor: context.onAccent,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9999)),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: Text(_selected.isEmpty ? 'Done' : 'Done (${_selected.length})',
+                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: TextField(
+                onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
+                style: const TextStyle(color: _fgPrimary, fontSize: 14),
+                cursorColor: context.accent,
+                decoration: InputDecoration(
+                  hintText: 'Search members…',
+                  hintStyle: const TextStyle(color: _fgMuted),
+                  prefixIcon: const Icon(Icons.search, color: _fgMuted, size: 20),
+                  filled: true,
+                  fillColor: _bgSurface,
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 11),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: _border),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: _border),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: FutureBuilder<List<User>>(
+                future: _roster,
+                builder: (context, snap) {
+                  if (snap.connectionState == ConnectionState.waiting) {
+                    return Center(child: CircularProgressIndicator(color: context.accent));
+                  }
+                  if (snap.hasError) {
+                    return const Center(
+                        child:
+                            Text('Could not load members.', style: TextStyle(color: _fgSecondary)));
+                  }
+                  final members = (snap.data ?? [])
+                      .where((u) => u.id != widget.excludeId)
+                      .where((u) => _query.isEmpty || u.name.toLowerCase().contains(_query))
+                      .toList();
+                  if (members.isEmpty) {
+                    return const Center(
+                        child: Text('No members found.', style: TextStyle(color: _fgMuted)));
+                  }
+                  return ListView.builder(
+                    controller: scrollCtrl,
+                    padding: const EdgeInsets.only(bottom: 16),
+                    itemCount: members.length,
+                    itemBuilder: (_, i) {
+                      final u = members[i];
+                      final on = _selected.containsKey(u.id);
+                      return ListTile(
+                        onTap: () => setState(() {
+                          if (on) {
+                            _selected.remove(u.id);
+                          } else {
+                            _selected[u.id] = (id: u.id, name: u.name, photoId: u.profileMediaId);
+                          }
+                        }),
+                        leading: UserAvatar(
+                            name: u.name, size: 38, mediaId: u.profileMediaId, colorSeed: u.id),
+                        title:
+                            Text(u.name, style: const TextStyle(color: _fgPrimary, fontSize: 15)),
+                        trailing: Icon(
+                          on ? Icons.check_circle : Icons.circle_outlined,
+                          color: on ? context.accent : _fgMuted,
+                          size: 22,
+                        ),
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -306,6 +306,14 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                 Text(post.authorName,
                     style: const TextStyle(
                         color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 15)),
+                if (post.people.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 1),
+                    child: Text(post.peopleLabel,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: kFgMuted, fontSize: 12.5)),
+                  ),
                 const SizedBox(height: 2),
                 Tooltip(
                   message: _fullLocalTime(post.createdAt),

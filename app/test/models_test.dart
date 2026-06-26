@@ -63,6 +63,38 @@ void main() {
     expect(without.location, isNull);
   });
 
+  test('Post parses tagged people and exposes ids + label', () {
+    final post = Post.fromJson({
+      'id': 1,
+      'authorId': 1,
+      'kind': 'image',
+      'createdAt': '2026-06-24T09:00:00Z',
+      'people': [
+        {'id': 2, 'name': 'Bob'},
+        {'id': 3, 'name': 'Carol'},
+      ],
+    });
+    expect(post.people.length, 2);
+    expect(post.peopleIds, [2, 3]);
+    expect(post.peopleLabel, 'with Bob & Carol');
+  });
+
+  test('Post.peopleLabel summarizes by count and is empty when untagged', () {
+    Post tagged(List<String> names) => Post.fromJson({
+          'id': 1,
+          'authorId': 1,
+          'kind': 'text',
+          'createdAt': '2026-06-24T09:00:00Z',
+          'people': [
+            for (var i = 0; i < names.length; i++) {'id': i + 2, 'name': names[i]},
+          ],
+        });
+    expect(tagged([]).peopleLabel, '');
+    expect(tagged(['Bob']).peopleLabel, 'with Bob');
+    expect(tagged(['Bob', 'Carol']).peopleLabel, 'with Bob & Carol');
+    expect(tagged(['Bob', 'Carol', 'Dee', 'Eve']).peopleLabel, 'with Bob, Carol & 2 others');
+  });
+
   test('Invite parses phone, used flag, and date', () {
     final joined = Invite.fromJson({
       'phone': '12025550142',

@@ -222,13 +222,28 @@ class _PostCardState extends ConsumerState<PostCard> {
                     name: p.authorName, size: 38, mediaId: p.authorPhotoId, colorSeed: p.authorId),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: Text(
-                    p.authorName,
-                    style: const TextStyle(
-                      color: _fgPrimary,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 14,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        p.authorName,
+                        style: const TextStyle(
+                          color: _fgPrimary,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 14,
+                        ),
+                      ),
+                      if (p.people.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 1),
+                          child: Text(
+                            p.peopleLabel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: _fgMuted, fontSize: 12),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
                 Tooltip(

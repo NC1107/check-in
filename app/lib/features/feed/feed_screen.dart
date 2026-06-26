@@ -118,6 +118,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   // Filter state.
   List<Post> _allPosts = [];
   final Set<int> _people = {}; // selected author ids
+  bool _includeTagged = true; // also match posts the selected people are tagged in
   String? _datePreset;
   String? _location; // server-side place filter (mirrors feedLocationProvider)
 
@@ -217,17 +218,24 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
 
   List<Post> _applyFilter(List<Post> posts) {
     return posts
-        .where((p) => _people.isEmpty || _people.contains(p.authorId))
+        .where((p) =>
+            _people.isEmpty ||
+            _people.contains(p.authorId) ||
+            (_includeTagged && p.peopleIds.any(_people.contains)))
         .where((p) => _withinPreset(p.createdAt))
         .toList();
   }
 
-  /// Distinct authors present in the loaded feed, for the filter sheet.
+  /// People present in the loaded feed — authors plus anyone tagged in a post — for the
+  /// filter sheet, so you can filter by someone who only appears in photos.
   List<({int id, String name})> _authors() {
     final seen = <int>{};
     final out = <({int id, String name})>[];
     for (final p in _allPosts) {
       if (seen.add(p.authorId)) out.add((id: p.authorId, name: p.authorName));
+      for (final person in p.people) {
+        if (seen.add(person.id)) out.add((id: person.id, name: person.name));
+      }
     }
     out.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return out;
@@ -239,7 +247,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       locs = await ref.read(locationsProvider.future);
     } catch (_) {}
     if (!mounted) return;
-    final result = await showModalBottomSheet<({Set<int> people, String? date, String? location})>(
+    final result = await showModalBottomSheet<
+        ({Set<int> people, bool includeTagged, String? date, String? location})>(
       context: context,
       isScrollControlled: true,
       backgroundColor: _bgSurface,
@@ -249,6 +258,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       builder: (_) => _FilterSheet(
         authors: _authors(),
         selectedPeople: _people,
+        includeTagged: _includeTagged,
         datePreset: _datePreset,
         locations: locs,
         selectedLocation: _location,
@@ -259,6 +269,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         _people
           ..clear()
           ..addAll(result.people);
+        _includeTagged = result.includeTagged;
         _datePreset = result.date;
         _location = result.location;
       });
@@ -502,6 +513,7 @@ class _FilterSheet extends StatefulWidget {
   const _FilterSheet({
     required this.authors,
     required this.selectedPeople,
+    required this.includeTagged,
     required this.datePreset,
     required this.locations,
     required this.selectedLocation,
@@ -509,6 +521,7 @@ class _FilterSheet extends StatefulWidget {
 
   final List<({int id, String name})> authors;
   final Set<int> selectedPeople;
+  final bool includeTagged;
   final String? datePreset;
   final List<({String location, int count})> locations;
   final String? selectedLocation;
@@ -519,6 +532,7 @@ class _FilterSheet extends StatefulWidget {
 
 class _FilterSheetState extends State<_FilterSheet> {
   late final Set<int> _people = {...widget.selectedPeople};
+  late bool _includeTagged = widget.includeTagged;
   late String? _date = widget.datePreset;
   late String? _location = widget.selectedLocation;
   String _personQuery = '';
@@ -534,7 +548,8 @@ class _FilterSheetState extends State<_FilterSheet> {
     Color(0xFF0EA5E9),
   ];
 
-  void _apply() => Navigator.of(context).pop((people: _people, date: _date, location: _location));
+  void _apply() => Navigator.of(context)
+      .pop((people: _people, includeTagged: _includeTagged, date: _date, location: _location));
 
   @override
   Widget build(BuildContext context) {
@@ -609,6 +624,27 @@ class _FilterSheetState extends State<_FilterSheet> {
                   _personChip(a),
               ],
             ),
+            if (_people.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => setState(() => _includeTagged = !_includeTagged),
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Text("Also show posts they're tagged in",
+                            style: TextStyle(color: _fgSecondary, fontSize: 13.5)),
+                      ),
+                      Switch.adaptive(
+                        value: _includeTagged,
+                        onChanged: (v) => setState(() => _includeTagged = v),
+                        activeThumbColor: context.accent,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             const SizedBox(height: 22),
           ],
           const Text('DATE',
