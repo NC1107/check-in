@@ -73,30 +73,42 @@ func (d *DB) GetUserByPhone(ctx context.Context, phone string) (User, string, er
 // SetResetCode stores a hashed, expiring recovery code for a user (overwriting any prior).
 func (d *DB) SetResetCode(ctx context.Context, userID int64, codeHash string, expires time.Time) error {
 	_, err := d.Pool.Exec(ctx,
-		`UPDATE users SET reset_code_hash = $2, reset_code_expires = $3 WHERE id = $1`,
+		`UPDATE users SET reset_code_hash = $2, reset_code_expires = $3, reset_code_attempts = 0 WHERE id = $1`,
 		userID, codeHash, expires)
 	return err
 }
 
-// ResetCode returns the active user's stored reset-code hash and expiry for a phone, so a
-// redeem attempt can be verified. Returns ErrNotFound when there's no active user or no
-// pending code.
-func (d *DB) ResetCode(ctx context.Context, phone string) (userID int64, codeHash string, expires time.Time, err error) {
+// ResetCode returns the active user's stored reset-code hash, expiry, and failed-attempt
+// count for a phone, so a redeem attempt can be verified and throttled. Returns
+// ErrNotFound when there's no active user or no pending code.
+func (d *DB) ResetCode(ctx context.Context, phone string) (userID int64, codeHash string, expires time.Time, attempts int, err error) {
 	var ch *string
 	var exp *time.Time
 	err = d.Pool.QueryRow(ctx,
-		`SELECT id, reset_code_hash, reset_code_expires FROM users WHERE phone = $1 AND status = 'active'`,
-		phone).Scan(&userID, &ch, &exp)
+		`SELECT id, reset_code_hash, reset_code_expires, reset_code_attempts FROM users WHERE phone = $1 AND status = 'active'`,
+		phone).Scan(&userID, &ch, &exp, &attempts)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, "", time.Time{}, ErrNotFound
+		return 0, "", time.Time{}, 0, ErrNotFound
 	}
 	if err != nil {
-		return 0, "", time.Time{}, err
+		return 0, "", time.Time{}, 0, err
 	}
 	if ch == nil || exp == nil {
-		return 0, "", time.Time{}, ErrNotFound
+		return 0, "", time.Time{}, 0, ErrNotFound
 	}
-	return userID, *ch, *exp, nil
+	return userID, *ch, *exp, attempts, nil
+}
+
+// BumpResetAttempt records a failed reset-code attempt and, once the limit is reached,
+// invalidates the code so it can no longer be guessed (the host must re-issue one).
+func (d *DB) BumpResetAttempt(ctx context.Context, userID int64, maxAttempts int) error {
+	_, err := d.Pool.Exec(ctx, `
+		UPDATE users SET
+			reset_code_attempts = reset_code_attempts + 1,
+			reset_code_hash    = CASE WHEN reset_code_attempts + 1 >= $2 THEN NULL ELSE reset_code_hash END,
+			reset_code_expires = CASE WHEN reset_code_attempts + 1 >= $2 THEN NULL ELSE reset_code_expires END
+		WHERE id = $1`, userID, maxAttempts)
+	return err
 }
 
 // SetPasswordAndClearReset sets a new password hash and consumes the reset code (single-use).
