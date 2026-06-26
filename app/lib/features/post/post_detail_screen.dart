@@ -34,7 +34,12 @@ class PostDetailScreen extends ConsumerStatefulWidget {
 
 class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   final _comment = TextEditingController();
-  late Future<(Post, List<Comment>)> _future;
+  // Loaded post + thread held in state so sending a comment appends to the list in place
+  // instead of re-fetching the whole screen (which blanked to a spinner and flashed).
+  Post? _post;
+  List<Comment> _comments = [];
+  bool _loading = true;
+  Object? _error;
   bool _sending = false;
   bool? _likeOverride; // null = use the post's server value
 
@@ -68,7 +73,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   @override
   void initState() {
     super.initState();
-    _future = _load();
+    _load();
   }
 
   @override
@@ -77,11 +82,28 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     super.dispose();
   }
 
-  Future<(Post, List<Comment>)> _load() async {
-    final api = ref.read(apiProvider);
-    final post = await api.getPost(widget.postId);
-    final comments = await api.comments(widget.postId);
-    return (post, comments);
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final api = ref.read(apiProvider);
+      final post = await api.getPost(widget.postId);
+      final comments = await api.comments(widget.postId);
+      if (!mounted) return;
+      setState(() {
+        _post = post;
+        _comments = comments;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = e;
+        _loading = false;
+      });
+    }
   }
 
   Future<void> _send() async {
@@ -90,9 +112,10 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     setState(() => _sending = true);
     FocusScope.of(context).unfocus();
     try {
-      await ref.read(apiProvider).addComment(widget.postId, text);
+      final added = await ref.read(apiProvider).addComment(widget.postId, text);
       _comment.clear();
-      setState(() => _future = _load());
+      // Append in place — no re-fetch, so the post and existing comments don't flash.
+      if (mounted) setState(() => _comments = [..._comments, added]);
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -117,13 +140,12 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       body: Column(
         children: [
           Expanded(
-            child: FutureBuilder<(Post, List<Comment>)>(
-              future: _future,
-              builder: (context, snap) {
-                if (snap.connectionState == ConnectionState.waiting) {
+            child: Builder(
+              builder: (context) {
+                if (_loading) {
                   return Center(child: CircularProgressIndicator(color: context.accent));
                 }
-                if (snap.hasError) {
+                if (_error != null || _post == null) {
                   return Center(
                     child: Padding(
                       padding: const EdgeInsets.all(24),
@@ -134,7 +156,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                               textAlign: TextAlign.center, style: TextStyle(color: kFgSecondary)),
                           const SizedBox(height: 12),
                           TextButton(
-                            onPressed: () => setState(() => _future = _load()),
+                            onPressed: _load,
                             child: const Text('Try again'),
                           ),
                         ],
@@ -142,7 +164,8 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                     ),
                   );
                 }
-                final (post, comments) = snap.data!;
+                final post = _post!;
+                final comments = _comments;
                 return ListView(
                   padding: const EdgeInsets.only(bottom: 12),
                   children: [
