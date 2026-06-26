@@ -12,7 +12,14 @@ import UIKit
     if FirebaseApp.app() == nil {
       FirebaseApp.configure()
     }
-    NSLog("[CHECKIN-NATIVE] didFinishLaunching configured=\(FirebaseApp.app() != nil)")
+    // THE missing piece: firebase_messaging's implicit APNs registration (a
+    // UIApplicationDidFinishLaunchingNotification observer + AppDelegate swizzling inside
+    // FLTFirebaseMessagingPlugin) never completes on Flutter's new UIScene/implicit-engine
+    // template, so registerForRemoteNotifications() is never called, no APNs token arrives,
+    // and getToken() hangs forever. Register explicitly here — exactly what Echo Messenger
+    // does on this same template. The didRegister... override below hands the token to FCM.
+    application.registerForRemoteNotifications()
+    NSLog("[CHECKIN-NATIVE] didFinishLaunching configured=\(FirebaseApp.app() != nil); requested APNs registration")
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
