@@ -1,5 +1,5 @@
 # Multi-stage build producing a tiny static binary on a distroless base.
-FROM golang:1.24-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 
 # Cache modules first.
