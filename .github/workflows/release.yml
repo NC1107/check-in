@@ -226,7 +226,7 @@ jobs:
           channel: stable
           cache: true
       - name: Cache pub-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.pub-cache
@@ -234,7 +234,7 @@ jobs:
           key: ${{ runner.os }}-pubcache-${{ hashFiles('app/pubspec.lock') }}
           restore-keys: ${{ runner.os }}-pubcache-
       - name: Cache CocoaPods
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             app/ios/Pods
