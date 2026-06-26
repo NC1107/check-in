@@ -67,10 +67,16 @@ jobs:
       has_play: ${{ steps.secrets.outputs.has_play }}
       has_appstore: ${{ steps.secrets.outputs.has_appstore }}
       has_keystore: ${{ steps.secrets.outputs.has_keystore }}
+      build_number: ${{ steps.build.outputs.build_number }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Compute build number
+        id: build
+        # Expression syntax has no arithmetic, so derive a single monotonic build number
+        # (run_number * 100 + run_attempt) in the shell and share it via an output.
+        run: echo "build_number=$(( ${{ github.run_number }} * 100 + ${{ github.run_attempt }} ))" >> "$GITHUB_OUTPUT"
       - name: Bump version and tag
         id: tag
         uses: mathieudutour/github-tag-action@v6.2
@@ -138,10 +144,10 @@ jobs:
           flutter pub get
           flutter build apk --release \
             --build-name=${{ needs.version.outputs.new_version }} \
-            --build-number=${{ github.run_number * 100 + github.run_attempt }}
+            --build-number=${{ needs.version.outputs.build_number }}
           flutter build appbundle --release \
             --build-name=${{ needs.version.outputs.new_version }} \
-            --build-number=${{ github.run_number * 100 + github.run_attempt }}
+            --build-number=${{ needs.version.outputs.build_number }}
       - uses: actions/upload-artifact@v4
         with:
           name: android
@@ -202,7 +208,7 @@ jobs:
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           VERSION: ${{ needs.version.outputs.new_version }}
-          VERSION_CODE: ${{ github.run_number * 100 + github.run_attempt }}
+          VERSION_CODE: ${{ needs.version.outputs.build_number }}
         run: bundle exec fastlane android internal
 
   app-store:
@@ -282,7 +288,7 @@ jobs:
           flutter pub get
           flutter build ipa --release \
             --build-name=${{ needs.version.outputs.new_version }} \
-            --build-number=${{ github.run_number * 100 + github.run_attempt }} \
+            --build-number=${{ needs.version.outputs.build_number }} \
             --export-options-plist=ios/ExportOptions.plist
       - name: Upload to TestFlight
         env:
