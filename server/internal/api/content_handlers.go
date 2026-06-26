@@ -124,7 +124,8 @@ func (s *Server) handleUserPosts(w http.ResponseWriter, r *http.Request) {
 type createPostReq struct {
 	Kind     string  `json:"kind"`     // "text" or "image"
 	Body     string  `json:"body"`     // text body or image caption
-	MediaID  *int64  `json:"mediaId"`  // required when kind == "image"
+	MediaID  *int64  `json:"mediaId"`  // legacy single image (older app builds)
+	MediaIDs []int64 `json:"mediaIds"` // one or more images, ordered
 	Location *string `json:"location"` // optional coarse "City, Country" from the photo
 }
 
@@ -135,16 +136,25 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Body = strings.TrimSpace(req.Body)
+	// Normalize to one ordered media list (new mediaIds, falling back to legacy mediaId).
+	mediaIDs := req.MediaIDs
+	if len(mediaIDs) == 0 && req.MediaID != nil {
+		mediaIDs = []int64{*req.MediaID}
+	}
 	switch req.Kind {
 	case "text":
 		if req.Body == "" {
 			writeErr(w, http.StatusBadRequest, "text posts need a body")
 			return
 		}
-		req.MediaID = nil
+		mediaIDs = nil
 	case "image":
-		if req.MediaID == nil {
-			writeErr(w, http.StatusBadRequest, "image posts need a mediaId")
+		if len(mediaIDs) == 0 {
+			writeErr(w, http.StatusBadRequest, "image posts need at least one image")
+			return
+		}
+		if len(mediaIDs) > 10 {
+			writeErr(w, http.StatusBadRequest, "too many images (max 10)")
 			return
 		}
 	default:
@@ -168,7 +178,7 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	me := userFrom(r)
-	post, err := s.db.CreatePost(r.Context(), me.ID, req.Kind, req.Body, req.MediaID, location)
+	post, err := s.db.CreatePost(r.Context(), me.ID, req.Kind, req.Body, mediaIDs, location)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not create post")
 		return

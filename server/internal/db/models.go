@@ -35,7 +35,8 @@ type Post struct {
 	AuthorID  int64     `json:"authorId"`
 	Kind      string    `json:"kind"`
 	Body      string    `json:"body"`
-	MediaID   *int64    `json:"mediaId,omitempty"`
+	MediaID   *int64    `json:"mediaId,omitempty"`  // cover (first image), for older clients
+	MediaIDs  []int64   `json:"mediaIds,omitempty"` // full ordered set for multi-photo posts
 	Location  *string   `json:"location,omitempty"` // coarse "City, Country", optional
 	CreatedAt time.Time `json:"createdAt"`
 
