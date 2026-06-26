@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'features/feed/home_shell.dart';
@@ -17,6 +18,8 @@ void main() {
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
+      // Lock the app to portrait — no landscape or upside-down.
+      await SystemChrome.setPreferredOrientations(const [DeviceOrientation.portraitUp]);
       FlutterError.onError = (details) {
         FlutterError.presentError(details);
         debugPrint('[CHECKIN] FlutterError: ${details.exceptionAsString()}');
