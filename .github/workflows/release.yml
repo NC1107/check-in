@@ -18,8 +18,47 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Gate the whole release on the same checks CI runs on PRs. ci.yml ignores main, so
+  # without this a broken merge to main would publish + deploy untested. version (and
+  # therefore every build/deploy job that needs it) only runs once these pass.
+  test-server:
+    name: Test server (Go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: server/go.sum
+      - name: Check formatting (gofmt)
+        run: test -z "$(gofmt -l .)" || { echo 'These files need gofmt:'; gofmt -l .; exit 1; }
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test ./... -race
+
+  test-app:
+    name: Test app (Flutter)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: flutter pub get
+      - name: Check formatting (dart format)
+        run: dart format --output=none --set-exit-if-changed lib test
+      - run: flutter analyze
+      - run: flutter test
+
   version:
     name: Compute version
+    needs: [test-server, test-app]
     runs-on: ubuntu-latest
     outputs:
       new_tag: ${{ steps.tag.outputs.new_tag }}

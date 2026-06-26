@@ -10,6 +10,11 @@ import (
 	"github.com/nc1107/check-in/server/internal/db"
 )
 
+// dummyPasswordHash is a valid argon2id hash (same params as real passwords) that
+// handleLogin verifies against when a phone is unknown, so a missing account and a wrong
+// password take the same time and a number's membership can't be probed by timing.
+var dummyPasswordHash, _ = auth.HashPassword("timing-equalizer-not-a-real-password")
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -191,7 +196,16 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	phone := auth.NormalizePhone(req.Phone, s.cfg.DefaultCountryCode)
 	user, hash, err := s.db.GetUserByPhone(r.Context(), phone)
-	if err != nil || !auth.VerifyPassword(req.Password, hash) {
+	if err != nil {
+		// Unknown phone: still run a password verification against a fixed dummy hash so
+		// the response time matches the "wrong password" path. Otherwise the timing
+		// difference would reveal whether a number is a member (an enumeration oracle in
+		// an invite-only app).
+		auth.VerifyPassword(req.Password, dummyPasswordHash)
+		writeErr(w, http.StatusUnauthorized, "incorrect phone or password")
+		return
+	}
+	if !auth.VerifyPassword(req.Password, hash) {
 		writeErr(w, http.StatusUnauthorized, "incorrect phone or password")
 		return
 	}
@@ -221,9 +235,16 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	phone := auth.NormalizePhone(req.Phone, s.cfg.DefaultCountryCode)
-	userID, codeHash, expires, err := s.db.ResetCode(r.Context(), phone)
-	if err != nil || time.Now().After(expires) ||
-		!auth.VerifyPassword(auth.NormalizeResetCode(req.Code), codeHash) {
+	userID, codeHash, expires, attempts, err := s.db.ResetCode(r.Context(), phone)
+	// A short host-issued code needs a guess limit: lock it after maxResetAttempts wrong
+	// tries so it can't be brute-forced within its window (the host re-issues a new one).
+	const maxResetAttempts = 5
+	if err != nil || time.Now().After(expires) || attempts >= maxResetAttempts {
+		writeErr(w, http.StatusBadRequest, "invalid or expired reset code")
+		return
+	}
+	if !auth.VerifyPassword(auth.NormalizeResetCode(req.Code), codeHash) {
+		_ = s.db.BumpResetAttempt(r.Context(), userID, maxResetAttempts)
 		writeErr(w, http.StatusBadRequest, "invalid or expired reset code")
 		return
 	}
