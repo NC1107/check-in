@@ -179,6 +179,10 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 
 	me := userFrom(r)
 	post, err := s.db.CreatePost(r.Context(), me.ID, req.Kind, req.Body, mediaIDs, location)
+	if errors.Is(err, db.ErrNotOwned) {
+		writeErr(w, http.StatusBadRequest, "one or more images are not yours")
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not create post")
 		return
