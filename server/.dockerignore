@@ -1,0 +1,32 @@
+# Keep the Docker build context minimal and ensure no secret or local artifact can be
+# copied into an image layer (or the GHA build cache) by the Dockerfile's `COPY . .`.
+# NOTE: do NOT exclude *.sql — migrations/*.sql are //go:embed-ed into the binary.
+
+# Version control / docs
+.git
+.gitignore
+*.md
+
+# Local build artifacts & test binaries
+check-in-server*
+server
+*.out
+data/
+
+# Secrets & credentials — must never enter an image layer
+.env
+*.env
+*.env.*
+*service-account*.json
+fcm-*.json
+*.p8
+*.p12
+*.jks
+*.keystore
+*.pem
+
+# Local database dumps / backups
+*.dump
+*.sql.gz
+*.tar
+*.tar.gz
