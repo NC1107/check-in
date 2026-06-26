@@ -73,6 +73,12 @@ func (s *Store) SaveImage(r io.Reader, maxBytes int64) (SavedImage, error) {
 	if err != nil {
 		return SavedImage{}, fmt.Errorf("decode image: %w", err)
 	}
+	// Downscale before applying orientation. Both steps allocate a fresh buffer, but the
+	// rotate/flip is the expensive one — done on the full-resolution image, a portrait
+	// 48MP photo allocates a ~190MB RGBA copy just to turn it upright, which OOM-kills a
+	// memory-capped container. Rotating the already-shrunk image keeps the peak bounded to
+	// ~maxDimension². Orientation commutes with a uniform downscale, so the result matches.
+	img = downscale(img)
 	// Phone cameras record orientation in EXIF rather than rotating pixels; the stdlib
 	// decoder ignores it, so apply it here or portrait photos come out sideways/upside down.
 	if format == "jpeg" {
@@ -80,7 +86,6 @@ func (s *Store) SaveImage(r io.Reader, maxBytes int64) (SavedImage, error) {
 			img = applyOrientation(img, o)
 		}
 	}
-	img = downscale(img)
 
 	var buf bytes.Buffer
 	var mime, ext string

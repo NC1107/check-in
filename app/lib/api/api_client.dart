@@ -283,6 +283,18 @@ class ApiClient {
     return (r.data as Map<String, dynamic>)['id'] as int;
   }
 
+  /// uploadImageBytes sends already-encoded JPEG bytes (from a client-side downscale /
+  /// transcode) and returns the new media id. Used so the server never has to decode a
+  /// full-resolution photo or an iPhone HEIC it can't read.
+  Future<int> uploadImageBytes(List<int> bytes, {String filename = 'upload.jpg'}) async {
+    final form = FormData.fromMap({
+      'file': MultipartFile.fromBytes(bytes,
+          filename: filename, contentType: MediaType('image', 'jpeg')),
+    });
+    final r = await _dio.post('/api/media', data: form);
+    return (r.data as Map<String, dynamic>)['id'] as int;
+  }
+
   // ---- admin ----
 
   Future<Map<String, dynamic>> uploadContacts(List<String> phones) async {

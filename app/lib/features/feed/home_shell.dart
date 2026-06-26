@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:image_picker/image_picker.dart';
@@ -343,7 +344,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
       if (_images.isNotEmpty) {
         final ids = <int>[];
         for (final x in _images) {
-          ids.add(await api.uploadImage(x.path));
+          ids.add(await _uploadCompressed(api, x));
         }
         await api.createPost(
             kind: 'image',
@@ -366,6 +367,26 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Downscales and transcodes a picked photo to JPEG before upload. This handles iPhone
+  /// HEIC (which the server can't decode) and keeps uploads small so the server never has
+  /// to decode a full-resolution image. Location is already resolved from the original by
+  /// this point. Falls back to uploading the original if compression isn't available.
+  Future<int> _uploadCompressed(ApiClient api, XFile x) async {
+    try {
+      final bytes = await FlutterImageCompress.compressWithFile(
+        x.path,
+        minWidth: 1600,
+        minHeight: 1600,
+        quality: 88,
+        format: CompressFormat.jpeg,
+      );
+      if (bytes != null) return api.uploadImageBytes(bytes);
+    } catch (_) {
+      // Unsupported source/platform — fall through and let the server try the original.
+    }
+    return api.uploadImage(x.path);
   }
 
   @override

@@ -71,7 +71,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          # Image uploads briefly decode a full-resolution photo in memory; 256M was too
+          # tight and the kernel OOM-killed the process mid-upload. 512M leaves headroom.
+          memory: 512M
 
   caddy:
     image: caddy:2-alpine
