@@ -26,13 +26,28 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 			before = &t
 		}
 	}
+	var location *string
+	if l := strings.TrimSpace(r.URL.Query().Get("location")); l != "" {
+		location = &l
+	}
 
-	posts, err := s.db.Feed(r.Context(), viewer.ID, authorID, before, limit)
+	posts, err := s.db.Feed(r.Context(), viewer.ID, authorID, location, before, limit)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"posts": posts})
+}
+
+// handleLocations lists the distinct place labels across all check-ins (most-used first),
+// powering the feed's location filter.
+func (s *Server) handleLocations(w http.ResponseWriter, r *http.Request) {
+	locs, err := s.db.Locations(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"locations": locs})
 }
 
 // handleSearch is full-content search: it returns check-ins whose caption or comments
@@ -98,7 +113,7 @@ func (s *Server) handleUserPosts(w http.ResponseWriter, r *http.Request) {
 			before = &t
 		}
 	}
-	posts, err := s.db.Feed(r.Context(), userFrom(r).ID, &id, before, parseLimit(r, 30, 100))
+	posts, err := s.db.Feed(r.Context(), userFrom(r).ID, &id, nil, before, parseLimit(r, 30, 100))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return

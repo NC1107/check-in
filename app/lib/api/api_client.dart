@@ -163,12 +163,25 @@ class ApiClient {
 
   // ---- feed / content ----
 
-  Future<List<Post>> feed({int? authorId, DateTime? before}) async {
+  Future<List<Post>> feed({int? authorId, String? location, DateTime? before}) async {
     final r = await _dio.get('/api/feed', queryParameters: {
       if (authorId != null) 'author': authorId,
+      if (location != null && location.isNotEmpty) 'location': location,
       if (before != null) 'before': before.toUtc().toIso8601String(),
     });
     return _posts(r.data);
+  }
+
+  /// locations returns the distinct place labels across all check-ins (most-used first),
+  /// to populate the feed's location filter.
+  Future<List<({String location, int count})>> locations() async {
+    final r = await _dio.get('/api/locations');
+    return ((r.data as Map<String, dynamic>)['locations'] as List? ?? [])
+        .map((e) => (
+              location: (e as Map<String, dynamic>)['location'] as String,
+              count: e['count'] as int,
+            ))
+        .toList();
   }
 
   Future<List<User>> searchUsers(String query) async {

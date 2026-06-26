@@ -119,8 +119,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   List<Post> _allPosts = [];
   final Set<int> _people = {}; // selected author ids
   String? _datePreset;
+  String? _location; // server-side place filter (mirrors feedLocationProvider)
 
-  bool get _hasFilter => _people.isNotEmpty || _datePreset != null;
+  bool get _hasFilter => _people.isNotEmpty || _datePreset != null || _location != null;
 
   @override
   void initState() {
@@ -194,7 +195,12 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 
   Future<void> _openFilter() async {
-    final result = await showModalBottomSheet<({Set<int> people, String? date})>(
+    var locs = <({String location, int count})>[];
+    try {
+      locs = await ref.read(locationsProvider.future);
+    } catch (_) {}
+    if (!mounted) return;
+    final result = await showModalBottomSheet<({Set<int> people, String? date, String? location})>(
       context: context,
       isScrollControlled: true,
       backgroundColor: _bgSurface,
@@ -205,6 +211,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         authors: _authors(),
         selectedPeople: _people,
         datePreset: _datePreset,
+        locations: locs,
+        selectedLocation: _location,
       ),
     );
     if (result != null && mounted) {
@@ -213,7 +221,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
           ..clear()
           ..addAll(result.people);
         _datePreset = result.date;
+        _location = result.location;
       });
+      // Location filters server-side, so update the provider to refetch the feed.
+      ref.read(feedLocationProvider.notifier).state = _location;
     }
   }
 
@@ -331,6 +342,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       for (final id in _people)
         _filterChip(names[id] ?? 'Someone', () => setState(() => _people.remove(id))),
       if (_datePreset != null) _filterChip(_datePreset!, () => setState(() => _datePreset = null)),
+      if (_location != null)
+        _filterChip(_location!, () {
+          setState(() => _location = null);
+          ref.read(feedLocationProvider.notifier).state = null;
+        }),
     ];
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
@@ -431,11 +447,15 @@ class _FilterSheet extends StatefulWidget {
     required this.authors,
     required this.selectedPeople,
     required this.datePreset,
+    required this.locations,
+    required this.selectedLocation,
   });
 
   final List<({int id, String name})> authors;
   final Set<int> selectedPeople;
   final String? datePreset;
+  final List<({String location, int count})> locations;
+  final String? selectedLocation;
 
   @override
   State<_FilterSheet> createState() => _FilterSheetState();
@@ -444,6 +464,7 @@ class _FilterSheet extends StatefulWidget {
 class _FilterSheetState extends State<_FilterSheet> {
   late final Set<int> _people = {...widget.selectedPeople};
   late String? _date = widget.datePreset;
+  late String? _location = widget.selectedLocation;
   String _personQuery = '';
 
   static const _palette = [
@@ -457,7 +478,7 @@ class _FilterSheetState extends State<_FilterSheet> {
     Color(0xFF0EA5E9),
   ];
 
-  void _apply() => Navigator.of(context).pop((people: _people, date: _date));
+  void _apply() => Navigator.of(context).pop((people: _people, date: _date, location: _location));
 
   @override
   Widget build(BuildContext context) {
@@ -543,6 +564,26 @@ class _FilterSheetState extends State<_FilterSheet> {
             runSpacing: 8,
             children: [for (final d in _datePresets) _datePill(d)],
           ),
+          if (widget.locations.isNotEmpty) ...[
+            const SizedBox(height: 22),
+            const Text('PLACES',
+                style: TextStyle(
+                    color: _fgMuted,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    letterSpacing: 0.4)),
+            const SizedBox(height: 11),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 180),
+              child: SingleChildScrollView(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [for (final l in widget.locations) _placePill(l)],
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 26),
           Row(
             children: [
@@ -551,6 +592,7 @@ class _FilterSheetState extends State<_FilterSheet> {
                   onPressed: () => setState(() {
                     _people.clear();
                     _date = null;
+                    _location = null;
                   }),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: _fgSecondary,
@@ -634,6 +676,33 @@ class _FilterSheetState extends State<_FilterSheet> {
                 color: on ? context.onAccent : _fgSecondary,
                 fontWeight: FontWeight.w600,
                 fontSize: 13)),
+      ),
+    );
+  }
+
+  Widget _placePill(({String location, int count}) l) {
+    final on = _location == l.location;
+    return GestureDetector(
+      onTap: () => setState(() => _location = on ? null : l.location),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(11, 8, 13, 8),
+        decoration: BoxDecoration(
+          color: on ? context.accent : Colors.transparent,
+          border: Border.all(color: on ? context.accent : _border),
+          borderRadius: BorderRadius.circular(9999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.place_outlined, size: 14, color: on ? context.onAccent : _fgMuted),
+            const SizedBox(width: 5),
+            Text(l.location,
+                style: TextStyle(
+                    color: on ? context.onAccent : _fgSecondary,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13)),
+          ],
+        ),
       ),
     );
   }

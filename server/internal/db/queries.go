@@ -495,7 +495,7 @@ func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, 
 
 // Feed returns posts in reverse-chronological order with engagement counts, optionally
 // filtered to a single author and/or to posts created strictly before a cursor time.
-func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, before *time.Time, limit int) ([]Post, error) {
+func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location *string, before *time.Time, limit int) ([]Post, error) {
 	rows, err := d.Pool.Query(ctx, `
 		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at,
 		       u.name, u.profile_media_id,
@@ -505,10 +505,11 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, before *
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
 		WHERE ($2::bigint IS NULL OR p.author_id = $2)
-		  AND ($3::timestamptz IS NULL OR p.created_at < $3)
+		  AND ($3::text IS NULL OR p.location = $3)
+		  AND ($4::timestamptz IS NULL OR p.created_at < $4)
 		  AND u.status = 'active'
 		ORDER BY p.created_at DESC
-		LIMIT $4`, viewerID, authorID, before, limit)
+		LIMIT $5`, viewerID, authorID, location, before, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -527,6 +528,37 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, before *
 		posts = append(posts, p)
 	}
 	return posts, rows.Err()
+}
+
+// LocationCount is a distinct place label plus how many check-ins carry it.
+type LocationCount struct {
+	Location string `json:"location"`
+	Count    int    `json:"count"`
+}
+
+// Locations returns the distinct place labels across all check-ins from active members,
+// most-used first — used to populate the feed's location filter.
+func (d *DB) Locations(ctx context.Context) ([]LocationCount, error) {
+	rows, err := d.Pool.Query(ctx, `
+		SELECT p.location, count(*) AS n
+		FROM posts p
+		JOIN users u ON u.id = p.author_id
+		WHERE p.location IS NOT NULL AND p.location <> '' AND u.status = 'active'
+		GROUP BY p.location
+		ORDER BY n DESC, p.location ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LocationCount
+	for rows.Next() {
+		var lc LocationCount
+		if err := rows.Scan(&lc.Location, &lc.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, lc)
+	}
+	return out, rows.Err()
 }
 
 // SearchPosts returns posts whose caption OR any of their comments match the query

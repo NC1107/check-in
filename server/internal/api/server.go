@@ -84,6 +84,7 @@ func (s *Server) Router() http.Handler {
 		r.Patch("/api/me/notifications", s.handleUpdateNotificationPrefs)
 
 		r.Get("/api/feed", s.handleFeed)
+		r.Get("/api/locations", s.handleLocations)
 		r.Get("/api/search", s.handleSearch)
 		r.Get("/api/users", s.handleSearchUsers)
 		r.Get("/api/users/{id}", s.handleGetUser)
