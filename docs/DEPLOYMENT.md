@@ -38,17 +38,22 @@ and upload one build manually so the internal track exists. After that, CI pushe
 
 ### iOS / App Store (TestFlight)
 
+The iOS job imports the certificate/profile into a temporary keychain and uploads with
+`altool` (no fastlane `match`). The presence of `IOS_CERTIFICATE_BASE64` is what enables
+the App Store job.
+
 | Secret | What it is | Where to get it |
 |--------|------------|-----------------|
-| `APP_STORE_CONNECT_API_KEY` | Contents of the `.p8` App Store Connect API key | App Store Connect → Users and Access → Integrations → App Store Connect API → generate a key (App Manager role), download the `.p8` |
-| `APP_STORE_CONNECT_KEY_ID` | The key's ID | Shown next to the key in App Store Connect |
-| `APP_STORE_CONNECT_ISSUER_ID` | The issuer ID | Top of the API keys page |
-| `MATCH_GIT_URL` | URL of a **private** git repo for fastlane `match` to store signing certs/profiles | Create an empty private repo, e.g. `github.com/nc1107/check-in-certs` |
-| `MATCH_PASSWORD` | Passphrase that encrypts the match repo | Any strong secret you choose; run `fastlane match appstore` once locally to initialize the repo |
+| `IOS_CERTIFICATE_BASE64` | Apple **Distribution** certificate + private key as a base64 `.p12` | Export your "Apple Distribution" identity from Keychain Access as a `.p12`, then `base64 -w0 cert.p12` |
+| `IOS_CERTIFICATE_PASSWORD` | Password you set when exporting the `.p12` | Chosen at export time |
+| `IOS_PROVISIONING_PROFILE_BASE64` | App Store provisioning profile (`.mobileprovision`), base64-encoded | Apple Developer portal → Profiles → create an App Store profile for the bundle id, download it, then `base64 -w0 profile.mobileprovision` |
+| `ASC_API_KEY_BASE64` | Contents of the `.p8` App Store Connect API key, base64-encoded | App Store Connect → Users and Access → Integrations → App Store Connect API → generate a key (App Manager role), download the `.p8`, then `base64 -w0 AuthKey_*.p8` |
+| `ASC_KEY_ID` | The key's ID | Shown next to the key in App Store Connect |
+| `ASC_ISSUER_ID` | The issuer ID | Top of the API keys page |
 
 One-time: register the app's **Bundle ID** in the Apple Developer portal and create the
-app record in App Store Connect, then run `fastlane match appstore` locally once to seed
-the certs repo.
+app record in App Store Connect, then generate the distribution certificate + App Store
+provisioning profile above.
 
 ### What you need to give me to finish wiring it up
 

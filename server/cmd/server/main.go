@@ -19,6 +19,12 @@ import (
 )
 
 func main() {
+	// `server -healthcheck` hits the local health endpoint and exits 0/1. Used as the
+	// container healthcheck since the distroless image has no shell or curl.
+	if len(os.Args) > 1 && os.Args[1] == "-healthcheck" {
+		os.Exit(healthcheck())
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config: %v", err)
@@ -91,4 +97,23 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(shutdownCtx)
+}
+
+// healthcheck performs a single GET against the local health endpoint, returning 0 when
+// it responds 200 and 1 otherwise. Run via `server -healthcheck` as the container probe.
+func healthcheck() int {
+	addr := os.Getenv("CHECKIN_HTTP_ADDR")
+	if addr == "" {
+		addr = ":8080"
+	}
+	client := http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://127.0.0.1" + addr + "/api/health")
+	if err != nil {
+		return 1
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 1
+	}
+	return 0
 }

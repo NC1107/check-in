@@ -138,10 +138,10 @@ jobs:
           flutter pub get
           flutter build apk --release \
             --build-name=${{ needs.version.outputs.new_version }} \
-            --build-number=${{ github.run_number }}
+            --build-number=${{ github.run_number * 100 + github.run_attempt }}
           flutter build appbundle --release \
             --build-name=${{ needs.version.outputs.new_version }} \
-            --build-number=${{ github.run_number }}
+            --build-number=${{ github.run_number * 100 + github.run_attempt }}
       - uses: actions/upload-artifact@v4
         with:
           name: android
@@ -202,7 +202,7 @@ jobs:
         env:
           PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
           VERSION: ${{ needs.version.outputs.new_version }}
-          VERSION_CODE: ${{ github.run_number }}
+          VERSION_CODE: ${{ github.run_number * 100 + github.run_attempt }}
         run: bundle exec fastlane android internal
 
   app-store:
@@ -282,7 +282,7 @@ jobs:
           flutter pub get
           flutter build ipa --release \
             --build-name=${{ needs.version.outputs.new_version }} \
-            --build-number=${{ github.run_number }}${{ github.run_attempt }} \
+            --build-number=${{ github.run_number * 100 + github.run_attempt }} \
             --export-options-plist=ios/ExportOptions.plist
       - name: Upload to TestFlight
         env:
