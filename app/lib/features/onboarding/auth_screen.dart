@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../api/api_client.dart';
 import '../../api/models.dart';
@@ -26,6 +28,13 @@ const _fgSecondary = kFgSecondary;
 const _fgMuted = kFgMuted;
 const _online = kSuccess;
 const _danger = kLike;
+
+/// Where the "set up a server" guide lives. Check-In is self-hosted, so a brand-new user
+/// with no server needs pointing at the setup docs.
+const _setupGuideUrl = 'https://github.com/NC1107/check-in';
+
+/// One-shot flag so the self-hosting explainer only interrupts the very first launch.
+const _kSeenSelfHostIntro = 'seen_selfhost_intro';
 
 enum _Step { entry, profile, invite, done }
 
@@ -69,6 +78,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     // Pre-fill the last server we used so logging back in doesn't mean retyping it.
     final saved = ref.read(sessionProvider).baseUrl;
     if (saved != null && saved.isNotEmpty) _server.text = saved;
+    // First-launch explainer: tell new users this is self-hosted before they hit the
+    // server-address field wondering what to type. Runs after the first frame so a dialog
+    // has a route to attach to.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowSelfHostIntro());
   }
 
   @override
@@ -81,6 +94,109 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     _password.dispose();
     super.dispose();
   }
+
+  // --- self-hosting intro ---
+
+  /// Shows the self-hosting explainer once, on the first launch only. Someone who already
+  /// has a server bound is established and is quietly opted out.
+  Future<void> _maybeShowSelfHostIntro() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool(_kSeenSelfHostIntro) ?? false) return;
+    final saved = ref.read(sessionProvider).baseUrl;
+    if (saved == null || saved.isEmpty) {
+      if (!mounted) return;
+      await _showSelfHostInfo();
+    }
+    await prefs.setBool(_kSeenSelfHostIntro, true);
+  }
+
+  /// The explainer dialog: what "self-hosted" means + a button to the setup guide.
+  Future<void> _showSelfHostInfo() {
+    return showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.62),
+      builder: (ctx) => Dialog(
+        backgroundColor: _bgSurface,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 26, 24, 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: context.accentLight,
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                child: Icon(Icons.dns_outlined, size: 26, color: context.accent),
+              ),
+              const SizedBox(height: 18),
+              const Text('Check-In is self-hosted',
+                  style: TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 20)),
+              const SizedBox(height: 10),
+              const Text(
+                "There's no central Check-In service. Your circle runs its own small, private "
+                "server, and everyone connects to it using its address.",
+                style: TextStyle(color: _fgSecondary, fontSize: 14, height: 1.5),
+              ),
+              const SizedBox(height: 16),
+              _introPoint(Icons.group_outlined,
+                  'Already have one? Ask whoever set it up for the server address, and have them add your number.'),
+              const SizedBox(height: 12),
+              _introPoint(Icons.rocket_launch_outlined,
+                  'Nobody has one yet? You can host your own in a few minutes — the guide on GitHub walks you through it.'),
+              const SizedBox(height: 22),
+              PrimaryButton(label: 'How to set up a server', enabled: true, onTap: _openSetupGuide),
+              const SizedBox(height: 6),
+              Center(
+                child: TextButton(
+                  onPressed: () => Navigator.of(ctx).pop(),
+                  child: const Text('Got it',
+                      style: TextStyle(color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 14)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Opens the setup guide in the browser; falls back to copying the link if no browser
+  /// can handle it.
+  Future<void> _openSetupGuide() async {
+    final uri = Uri.parse(_setupGuideUrl);
+    var opened = false;
+    try {
+      opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      opened = false;
+    }
+    if (!opened && mounted) {
+      await Clipboard.setData(const ClipboardData(text: _setupGuideUrl));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Setup guide link copied to clipboard')),
+        );
+      }
+    }
+  }
+
+  Widget _introPoint(IconData icon, String text) => Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 18, color: _fgMuted),
+          const SizedBox(width: 10),
+          Expanded(
+            child:
+                Text(text, style: const TextStyle(color: _fgSecondary, fontSize: 13, height: 1.45)),
+          ),
+        ],
+      );
 
   // --- actions ---
 
@@ -441,7 +557,20 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             _serverError = null;
           }),
         ),
-        const SizedBox(height: 16),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton(
+            onPressed: _showSelfHostInfo,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.only(top: 6),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: Text("Don't have a server? Set one up",
+                style: TextStyle(color: context.accent, fontSize: 13, fontWeight: FontWeight.w600)),
+          ),
+        ),
+        const SizedBox(height: 10),
         const FieldLabel('Phone number'),
         AppTextField(
           controller: _phone,
