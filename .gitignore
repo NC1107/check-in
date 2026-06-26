@@ -5,7 +5,16 @@
 # Server
 server/data/
 server/server
+server/check-in-server*
 *.out
+
+# Credentials — defense-in-depth; these must never be committed. (The committed
+# google-services.json / GoogleService-Info.plist are client config, not secrets,
+# and don't match these patterns.)
+*service-account*.json
+fcm-*.json
+*.p8
+AuthKey_*.p8
 
 # Flutter / Dart
 app/.dart_tool/
