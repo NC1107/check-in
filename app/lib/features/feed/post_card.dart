@@ -49,6 +49,9 @@ class _PostCardState extends ConsumerState<PostCard> {
   late int _comments = widget.post.commentCount;
   final _commentCtrl = TextEditingController();
   bool _postingComment = false;
+  // Comments added inline on this card since it was built, shown immediately so the
+  // typed text doesn't appear to vanish (the post's own preview is immutable).
+  final List<CommentPreview> _added = [];
 
   // If this State gets re-bound to a different post (e.g. the list shifts when a new
   // post is prepended), resync the like/comment state so counts don't bleed between
@@ -60,6 +63,7 @@ class _PostCardState extends ConsumerState<PostCard> {
       _liked = widget.post.likedByViewer;
       _likes = widget.post.likeCount;
       _comments = widget.post.commentCount;
+      _added.clear();
     }
   }
 
@@ -141,9 +145,14 @@ class _PostCardState extends ConsumerState<PostCard> {
     setState(() => _postingComment = true);
     FocusScope.of(context).unfocus(); // close the keyboard
     try {
-      await ref.read(apiProvider).addComment(widget.post.id, text);
+      final comment = await ref.read(apiProvider).addComment(widget.post.id, text);
       _commentCtrl.clear();
-      if (mounted) setState(() => _comments++);
+      if (mounted) {
+        setState(() {
+          _comments++;
+          _added.add(CommentPreview(authorName: comment.authorName, body: comment.body));
+        });
+      }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -224,9 +233,13 @@ class _PostCardState extends ConsumerState<PostCard> {
                 ),
                 Tooltip(
                   message: fullLocalTime(p.createdAt),
-                  child: Text(
-                    _relativeTime(p.createdAt),
-                    style: const TextStyle(color: _fgMuted, fontSize: 12),
+                  child: Semantics(
+                    label: fullLocalTime(p.createdAt),
+                    excludeSemantics: true,
+                    child: Text(
+                      _relativeTime(p.createdAt),
+                      style: const TextStyle(color: _fgMuted, fontSize: 12),
+                    ),
                   ),
                 ),
                 // ⋯ menu: Save photo on any image post; Delete only for the author.
@@ -332,13 +345,13 @@ class _PostCardState extends ConsumerState<PostCard> {
             ),
           ),
           // Recent comments preview (inline, so you don't have to open the post)
-          if (p.commentsPreview.isNotEmpty)
+          if (p.commentsPreview.isNotEmpty || _added.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (_comments > p.commentsPreview.length)
+                  if (_comments > p.commentsPreview.length + _added.length)
                     GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () => Navigator.of(context).push(MaterialPageRoute(
@@ -350,7 +363,7 @@ class _PostCardState extends ConsumerState<PostCard> {
                             style: const TextStyle(color: _fgMuted, fontSize: 13)),
                       ),
                     ),
-                  ...p.commentsPreview.map((c) => Padding(
+                  ...[...p.commentsPreview, ..._added].map((c) => Padding(
                         padding: const EdgeInsets.only(bottom: 3),
                         child: RichText(
                           text: TextSpan(children: [

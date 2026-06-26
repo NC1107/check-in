@@ -173,6 +173,8 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   final _bodyCtrl = TextEditingController();
   final List<XFile> _images = [];
   String? _location; // coarse "City, Country" read from the photos, if any
+  String? _locationSource; // path of the photo that supplied _location
+  bool _locationCleared = false; // user removed the location manually; don't auto-refill
   bool _resolvingLocation = false;
   bool _busy = false;
   String? _error;
@@ -205,18 +207,24 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     await _resolveLocation();
   }
 
-  /// Read a place label from the first image that carries GPS (only if we don't have one).
+  /// Read a place label from the first image that carries GPS, remembering which photo it
+  /// came from. Skips if we already have one or the user cleared it manually.
   Future<void> _resolveLocation() async {
-    if (_location != null || _images.isEmpty) return;
+    if (_locationCleared || _location != null || _images.isEmpty) return;
     setState(() => _resolvingLocation = true);
     String? place;
+    String? source;
     for (final x in _images) {
       place = await _photoPlace(x.path);
-      if (place != null) break;
+      if (place != null) {
+        source = x.path;
+        break;
+      }
     }
     if (mounted) {
       setState(() {
         _location = place;
+        _locationSource = source;
         _resolvingLocation = false;
       });
     }
@@ -256,7 +264,20 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
           top: 4,
           right: 4,
           child: GestureDetector(
-            onTap: () => setState(() => _images.removeAt(i)),
+            onTap: () async {
+              final removed = _images[i].path;
+              setState(() => _images.removeAt(i));
+              // If the removed photo is the one that supplied the location, drop it and
+              // re-derive from the remaining photos so a deleted photo's place can't stay
+              // attached to the post.
+              if (removed == _locationSource) {
+                setState(() {
+                  _location = null;
+                  _locationSource = null;
+                });
+                await _resolveLocation();
+              }
+            },
             behavior: HitTestBehavior.opaque,
             child: Container(
               padding: const EdgeInsets.all(2),
@@ -411,7 +432,11 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                   ),
                   if (_location != null && !_resolvingLocation)
                     GestureDetector(
-                      onTap: () => setState(() => _location = null),
+                      onTap: () => setState(() {
+                        _location = null;
+                        _locationSource = null;
+                        _locationCleared = true;
+                      }),
                       behavior: HitTestBehavior.opaque,
                       child: const Padding(
                         padding: EdgeInsets.all(2),

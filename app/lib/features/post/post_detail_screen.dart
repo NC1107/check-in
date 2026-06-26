@@ -127,8 +127,18 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   return Center(
                     child: Padding(
                       padding: const EdgeInsets.all(24),
-                      child: Text('Could not load post.\n${snap.error}',
-                          textAlign: TextAlign.center, style: const TextStyle(color: kFgSecondary)),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Text('Could not load post.',
+                              textAlign: TextAlign.center, style: TextStyle(color: kFgSecondary)),
+                          const SizedBox(height: 12),
+                          TextButton(
+                            onPressed: () => setState(() => _future = _load()),
+                            child: const Text('Try again'),
+                          ),
+                        ],
+                      ),
                     ),
                   );
                 }
@@ -274,8 +284,12 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                 const SizedBox(height: 2),
                 Tooltip(
                   message: _fullLocalTime(post.createdAt),
-                  child: Text(_relativeTime(post.createdAt),
-                      style: const TextStyle(color: kFgMuted, fontSize: 12)),
+                  child: Semantics(
+                    label: _fullLocalTime(post.createdAt),
+                    excludeSemantics: true,
+                    child: Text(_relativeTime(post.createdAt),
+                        style: const TextStyle(color: kFgMuted, fontSize: 12)),
+                  ),
                 ),
               ],
             ),
@@ -315,8 +329,12 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                     const SizedBox(width: 8),
                     Tooltip(
                       message: _fullLocalTime(c.createdAt),
-                      child: Text(_relativeTime(c.createdAt),
-                          style: const TextStyle(color: kFgMuted, fontSize: 11)),
+                      child: Semantics(
+                        label: _fullLocalTime(c.createdAt),
+                        excludeSemantics: true,
+                        child: Text(_relativeTime(c.createdAt),
+                            style: const TextStyle(color: kFgMuted, fontSize: 11)),
+                      ),
                     ),
                   ],
                 ),
