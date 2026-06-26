@@ -23,7 +23,7 @@ dependencies:
   gal: ^2.3.0              # save a post's photo to the device gallery
   cached_network_image: ^3.4.1
   flutter_cache_manager: ^3.4.1
-  flutter_contacts: ^2.1.0
+  flutter_contacts: ^2.2.2
   flutter_local_notifications: ^17.2.3
   timezone: ^0.9.4
   intl: ^0.20.3
