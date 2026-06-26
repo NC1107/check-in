@@ -22,6 +22,13 @@ const commentPreviewExpr = `, COALESCE((
 const postMediaExpr = `, COALESCE(ARRAY(
 		SELECT pm.media_id FROM post_media pm WHERE pm.post_id = p.id ORDER BY pm.position), '{}')`
 
+// postPeopleExpr appends the members tagged in post p as a JSON array of {id, name},
+// name-sorted. Empty array when no one is tagged.
+const postPeopleExpr = `, COALESCE((
+		SELECT json_agg(json_build_object('id', pp.user_id, 'name', tu.name) ORDER BY tu.name)
+		FROM post_people pp JOIN users tu ON tu.id = pp.user_id
+		WHERE pp.post_id = p.id), '[]'::json)`
+
 // ErrNotFound is returned when a row does not exist.
 var ErrNotFound = errors.New("not found")
 
@@ -541,7 +548,7 @@ func (d *DB) SetUserProfileMedia(ctx context.Context, userID, mediaID int64) err
 // ---- posts ----
 
 // CreatePost inserts a post.
-func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, mediaIDs []int64, location *string) (Post, error) {
+func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, mediaIDs []int64, location *string, peopleIDs []int64) (Post, error) {
 	var p Post
 	tx, err := d.Pool.Begin(ctx)
 	if err != nil {
@@ -590,11 +597,62 @@ func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, 
 			return p, err
 		}
 	}
+
+	// Manual people-tags: members the author marked as appearing in the post. Dedupe, drop
+	// the author (implicit), and insert only ids that resolve to an active user so a bad id
+	// silently no-ops rather than poisoning the post. Then read names back for the response.
+	if ids := dedupeExcluding(peopleIDs, authorID); len(ids) > 0 {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO post_people (post_id, user_id)
+			SELECT $1, u.id FROM users u WHERE u.id = ANY($2) AND u.status = 'active'`,
+			p.ID, ids); err != nil {
+			return p, err
+		}
+		rows, err := tx.Query(ctx, `
+			SELECT pp.user_id, tu.name FROM post_people pp JOIN users tu ON tu.id = pp.user_id
+			WHERE pp.post_id = $1 ORDER BY tu.name`, p.ID)
+		if err != nil {
+			return p, err
+		}
+		for rows.Next() {
+			var tp TaggedPerson
+			if err := rows.Scan(&tp.ID, &tp.Name); err != nil {
+				rows.Close()
+				return p, err
+			}
+			p.People = append(p.People, tp)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return p, err
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return p, err
 	}
 	p.MediaIDs = mediaIDs
 	return p, nil
+}
+
+// dedupeExcluding returns the unique ids in order, dropping any equal to exclude.
+func dedupeExcluding(ids []int64, exclude int64) []int64 {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id == exclude {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 // Feed returns posts in reverse-chronological order with engagement counts, optionally
@@ -605,7 +663,7 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
-		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+`
+		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+`
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
 		WHERE ($2::bigint IS NULL OR p.author_id = $2)
@@ -623,13 +681,16 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 	var posts []Post
 	for rows.Next() {
 		var p Post
-		var preview []byte
+		var preview, people []byte
 		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &p.MediaIDs); err != nil {
+			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &p.MediaIDs, &people); err != nil {
 			return nil, err
 		}
 		if len(preview) > 0 {
 			_ = json.Unmarshal(preview, &p.CommentsPreview)
+		}
+		if len(people) > 0 {
+			_ = json.Unmarshal(people, &p.People)
 		}
 		posts = append(posts, p)
 	}
@@ -675,7 +736,7 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
-		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+`
+		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+`
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
 		WHERE u.status = 'active' AND (
@@ -691,13 +752,16 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 	var posts []Post
 	for rows.Next() {
 		var p Post
-		var preview []byte
+		var preview, people []byte
 		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &p.MediaIDs); err != nil {
+			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &p.MediaIDs, &people); err != nil {
 			return nil, err
 		}
 		if len(preview) > 0 {
 			_ = json.Unmarshal(preview, &p.CommentsPreview)
+		}
+		if len(people) > 0 {
+			_ = json.Unmarshal(people, &p.People)
 		}
 		posts = append(posts, p)
 	}
@@ -707,22 +771,25 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 // GetPost returns a single post with engagement counts from the viewer's perspective.
 func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) {
 	var p Post
-	var preview []byte
+	var preview, people []byte
 	err := d.Pool.QueryRow(ctx, `
 		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at,
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
-		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+`
+		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+`
 		FROM posts p JOIN users u ON u.id = p.author_id
 		WHERE p.id = $2 AND u.status = 'active'`, viewerID, postID,
 	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt,
-		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &p.MediaIDs)
+		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &p.MediaIDs, &people)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, ErrNotFound
 	}
 	if err == nil && len(preview) > 0 {
 		_ = json.Unmarshal(preview, &p.CommentsPreview)
+	}
+	if err == nil && len(people) > 0 {
+		_ = json.Unmarshal(people, &p.People)
 	}
 	return p, err
 }

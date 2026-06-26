@@ -47,6 +47,14 @@ type Post struct {
 	CommentCount    int              `json:"commentCount"`
 	LikedByViewer   bool             `json:"likedByViewer"`
 	CommentsPreview []CommentPreview `json:"commentsPreview,omitempty"`
+	People          []TaggedPerson   `json:"people,omitempty"` // members tagged as appearing in the post
+}
+
+// TaggedPerson is a member manually tagged as appearing in a post (id for filtering,
+// name for display).
+type TaggedPerson struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
 }
 
 // CommentPreview is a lightweight comment (author + body) for inline feed previews.

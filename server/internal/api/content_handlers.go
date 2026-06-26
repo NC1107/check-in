@@ -130,11 +130,12 @@ func (s *Server) handleUserPosts(w http.ResponseWriter, r *http.Request) {
 }
 
 type createPostReq struct {
-	Kind     string  `json:"kind"`     // "text" or "image"
-	Body     string  `json:"body"`     // text body or image caption
-	MediaID  *int64  `json:"mediaId"`  // legacy single image (older app builds)
-	MediaIDs []int64 `json:"mediaIds"` // one or more images, ordered
-	Location *string `json:"location"` // optional coarse "City, Country" from the photo
+	Kind      string  `json:"kind"`      // "text" or "image"
+	Body      string  `json:"body"`      // text body or image caption
+	MediaID   *int64  `json:"mediaId"`   // legacy single image (older app builds)
+	MediaIDs  []int64 `json:"mediaIds"`  // one or more images, ordered
+	Location  *string `json:"location"`  // optional coarse "City, Country" from the photo
+	PeopleIDs []int64 `json:"peopleIds"` // members tagged as appearing in the post
 }
 
 func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
@@ -173,6 +174,10 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "body too long")
 		return
 	}
+	if len(req.PeopleIDs) > 30 {
+		writeErr(w, http.StatusBadRequest, "too many tagged people (max 30)")
+		return
+	}
 
 	// Coarse, optional, image-only place label. Trim, cap length, and drop if blank.
 	var location *string
@@ -186,7 +191,7 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	me := userFrom(r)
-	post, err := s.db.CreatePost(r.Context(), me.ID, req.Kind, req.Body, mediaIDs, location)
+	post, err := s.db.CreatePost(r.Context(), me.ID, req.Kind, req.Body, mediaIDs, location, req.PeopleIDs)
 	if errors.Is(err, db.ErrNotOwned) {
 		writeErr(w, http.StatusBadRequest, "one or more images are not yours")
 		return
