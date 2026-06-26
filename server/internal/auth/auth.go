@@ -80,6 +80,36 @@ func HashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// resetCodeAlphabet has 32 unambiguous characters (no 0/O, 1/I/L) so a recovery code is
+// easy to read aloud and type. 32 divides 256 evenly, so the byte→char map is unbiased.
+const resetCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+// NewResetCode returns a short, human-relayable recovery code (uppercase). Hash it with
+// HashPassword before storing.
+func NewResetCode() (string, error) {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	out := make([]byte, len(buf))
+	for i, b := range buf {
+		out[i] = resetCodeAlphabet[int(b)%len(resetCodeAlphabet)]
+	}
+	return string(out), nil
+}
+
+// NormalizeResetCode upper-cases and strips spaces/dashes so the code matches however the
+// user typed it.
+func NormalizeResetCode(code string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(code) {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // NormalizePhone reduces a phone number to a canonical, digits-only comparable form for
 // allowlist matching. All formatting (spaces, dashes, parentheses, '+') is stripped, and
 // a default country code is applied to bare national numbers so the same person matches

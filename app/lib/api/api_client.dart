@@ -88,6 +88,18 @@ class ApiClient {
     return AuthResult.fromJson(r.data as Map<String, dynamic>);
   }
 
+  /// resetPassword redeems a host-issued recovery code to set a new password, returning a
+  /// fresh session (the device is logged in on success).
+  Future<AuthResult> resetPassword({
+    required String phone,
+    required String code,
+    required String newPassword,
+  }) async {
+    final r = await _dio.post('/api/auth/reset-password',
+        data: {'phone': phone, 'code': code, 'newPassword': newPassword});
+    return AuthResult.fromJson(r.data as Map<String, dynamic>);
+  }
+
   Future<void> logout() => _dio.post('/api/auth/logout');
 
   /// me returns the currently authenticated user (used to validate a restored token).
@@ -293,6 +305,18 @@ class ApiClient {
   }
 
   Future<void> revokeUser(int id) => _dio.delete('/api/admin/users/$id');
+
+  /// issueResetCode (admin) generates a single-use recovery code for a member to relay to
+  /// them out-of-band; they redeem it with [resetPassword].
+  Future<({String code, String name, DateTime expiresAt})> issueResetCode(int userId) async {
+    final r = await _dio.post('/api/admin/users/$userId/reset-code');
+    final j = r.data as Map<String, dynamic>;
+    return (
+      code: j['code'] as String,
+      name: j['name'] as String,
+      expiresAt: DateTime.parse(j['expiresAt'] as String),
+    );
+  }
 
   List<Post> _posts(dynamic data) => ((data as Map<String, dynamic>)['posts'] as List? ?? [])
       .map((e) => Post.fromJson(e as Map<String, dynamic>))

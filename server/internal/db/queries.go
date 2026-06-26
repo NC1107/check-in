@@ -67,6 +67,43 @@ func (d *DB) GetUserByPhone(ctx context.Context, phone string) (User, string, er
 	return u, hash, err
 }
 
+// SetResetCode stores a hashed, expiring recovery code for a user (overwriting any prior).
+func (d *DB) SetResetCode(ctx context.Context, userID int64, codeHash string, expires time.Time) error {
+	_, err := d.Pool.Exec(ctx,
+		`UPDATE users SET reset_code_hash = $2, reset_code_expires = $3 WHERE id = $1`,
+		userID, codeHash, expires)
+	return err
+}
+
+// ResetCode returns the active user's stored reset-code hash and expiry for a phone, so a
+// redeem attempt can be verified. Returns ErrNotFound when there's no active user or no
+// pending code.
+func (d *DB) ResetCode(ctx context.Context, phone string) (userID int64, codeHash string, expires time.Time, err error) {
+	var ch *string
+	var exp *time.Time
+	err = d.Pool.QueryRow(ctx,
+		`SELECT id, reset_code_hash, reset_code_expires FROM users WHERE phone = $1 AND status = 'active'`,
+		phone).Scan(&userID, &ch, &exp)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, "", time.Time{}, ErrNotFound
+	}
+	if err != nil {
+		return 0, "", time.Time{}, err
+	}
+	if ch == nil || exp == nil {
+		return 0, "", time.Time{}, ErrNotFound
+	}
+	return userID, *ch, *exp, nil
+}
+
+// SetPasswordAndClearReset sets a new password hash and consumes the reset code (single-use).
+func (d *DB) SetPasswordAndClearReset(ctx context.Context, userID int64, passwordHash string) error {
+	_, err := d.Pool.Exec(ctx,
+		`UPDATE users SET password_hash = $2, reset_code_hash = NULL, reset_code_expires = NULL WHERE id = $1`,
+		userID, passwordHash)
+	return err
+}
+
 // GetUser returns an active user by id. Returns ErrNotFound for revoked users.
 func (d *DB) GetUser(ctx context.Context, id int64) (User, error) {
 	var u User

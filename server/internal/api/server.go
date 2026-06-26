@@ -67,6 +67,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/auth/check-phone", s.handleCheckPhone)
 		r.Post("/api/auth/signup", s.handleSignup)
 		r.Post("/api/auth/login", s.handleLogin)
+		r.Post("/api/auth/reset-password", s.handleResetPassword)
 	})
 
 	// Authenticated routes.
@@ -111,6 +112,7 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/api/admin/allowed", s.handleAdminRemoveAllowed)
 			r.Get("/api/admin/users", s.handleAdminListUsers)
 			r.Delete("/api/admin/users/{id}", s.handleAdminRevokeUser)
+			r.Post("/api/admin/users/{id}/reset-code", s.handleAdminIssueResetCode)
 		})
 	})
 
