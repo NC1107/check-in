@@ -78,5 +78,10 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<!-- The app is portrait-only. A universal (iPhone+iPad) app that locks orientation
+	     must opt out of iPad multitasking, otherwise Apple rejects the build with
+	     ITMS-90474 (it would require all four orientations on iPad). -->
+	<key>UIRequiresFullScreen</key>
+	<true/>
 </dict>
 </plist>
