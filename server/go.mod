@@ -1,13 +1,13 @@
 module github.com/nc1107/check-in/server
 
-go 1.24
+go 1.25.0
 
 require (
 	github.com/go-chi/chi/v5 v5.1.0
 	github.com/jackc/pgx/v5 v5.7.1
 	golang.org/x/crypto v0.31.0
 	golang.org/x/image v0.23.0
-	golang.org/x/oauth2 v0.24.0
+	golang.org/x/oauth2 v0.36.0
 )
 
 require (
