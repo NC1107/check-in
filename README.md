@@ -3,13 +3,9 @@
 </p>
 
 My solution for a way to check in with friends without selling my soul to monopolies
-or getting stuck doomscrolling. A simple feed with filters to see friends' updates when
-*you* want — no reels, no ads, no algorithm.
-
-As the admin you whitelist your people by giving the app access to selected contacts.
+or getting stuck doomscrolling. As the admin you whitelist your people by giving the app access to selected contacts.
 It stores their numbers on **your** server, and those people can sign up once you've
-given them the server address. The phone number *is* the invite — no SMS codes, no
-accounts to approve.
+given them the server address. 
 
 ## How it works
 
@@ -70,10 +66,3 @@ flutter pub get
 flutter run            # against a running server; enter its URL on first launch
 ```
 
-Enable the formatting pre-push hook once per clone so style is caught before CI:
-
-```bash
-git config core.hooksPath .githooks
-```
-
-Code style is enforced (`gofmt` + `dart format`, 100-col) in CI and by that hook.
