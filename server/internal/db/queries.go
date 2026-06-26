@@ -892,11 +892,18 @@ func (d *DB) UnlikePost(ctx context.Context, postID, userID int64) error {
 // AddComment inserts a comment and returns it.
 func (d *DB) AddComment(ctx context.Context, postID, userID int64, body string) (Comment, error) {
 	var c Comment
+	// Return the author's name + photo alongside the new row (via CTE) so the response
+	// matches ListComments — otherwise the client renders the just-posted comment with an
+	// empty name and a placeholder avatar.
 	err := d.Pool.QueryRow(ctx, `
-		INSERT INTO comments (post_id, user_id, body) VALUES ($1, $2, $3)
-		RETURNING id, post_id, user_id, body, created_at`,
+		WITH ins AS (
+			INSERT INTO comments (post_id, user_id, body) VALUES ($1, $2, $3)
+			RETURNING id, post_id, user_id, body, created_at
+		)
+		SELECT ins.id, ins.post_id, ins.user_id, ins.body, ins.created_at, u.name, u.profile_media_id
+		FROM ins JOIN users u ON u.id = ins.user_id`,
 		postID, userID, body,
-	).Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt)
+	).Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.AuthorName, &c.AuthorPhotoID)
 	return c, err
 }
 
