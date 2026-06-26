@@ -134,8 +134,10 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       appBar: AppBar(
         backgroundColor: kBgMain,
         elevation: 0,
+        toolbarHeight: 44, // iOS-native nav height — trims the bulky default 56
+        titleSpacing: 0,
         title: const Text('Post',
-            style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
+            style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 17)),
       ),
       body: Column(
         children: [
