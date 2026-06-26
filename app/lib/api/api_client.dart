@@ -175,11 +175,13 @@ class ApiClient {
 
   // ---- feed / content ----
 
-  Future<List<Post>> feed({int? authorId, String? location, DateTime? before}) async {
+  Future<List<Post>> feed(
+      {int? authorId, String? location, DateTime? before, int? beforeId}) async {
     final r = await _dio.get('/api/feed', queryParameters: {
       if (authorId != null) 'author': authorId,
       if (location != null && location.isNotEmpty) 'location': location,
       if (before != null) 'before': before.toUtc().toIso8601String(),
+      if (before != null && beforeId != null) 'before_id': beforeId,
     });
     return _posts(r.data);
   }

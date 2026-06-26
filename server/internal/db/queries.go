@@ -599,7 +599,7 @@ func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, 
 
 // Feed returns posts in reverse-chronological order with engagement counts, optionally
 // filtered to a single author and/or to posts created strictly before a cursor time.
-func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location *string, before *time.Time, limit int) ([]Post, error) {
+func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location *string, before *time.Time, beforeID *int64, limit int) ([]Post, error) {
 	rows, err := d.Pool.Query(ctx, `
 		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at,
 		       u.name, u.profile_media_id,
@@ -610,10 +610,12 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 		JOIN users u ON u.id = p.author_id
 		WHERE ($2::bigint IS NULL OR p.author_id = $2)
 		  AND ($3::text IS NULL OR p.location = $3)
-		  AND ($4::timestamptz IS NULL OR p.created_at < $4)
+		  AND ($4::timestamptz IS NULL
+		       OR ($6::bigint IS NULL AND p.created_at < $4)
+		       OR ($6::bigint IS NOT NULL AND (p.created_at, p.id) < ($4, $6)))
 		  AND u.status = 'active'
-		ORDER BY p.created_at DESC
-		LIMIT $5`, viewerID, authorID, location, before, limit)
+		ORDER BY p.created_at DESC, p.id DESC
+		LIMIT $5`, viewerID, authorID, location, before, limit, beforeID)
 	if err != nil {
 		return nil, err
 	}

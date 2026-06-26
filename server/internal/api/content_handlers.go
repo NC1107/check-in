@@ -26,12 +26,20 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 			before = &t
 		}
 	}
+	// Optional id tiebreaker so posts sharing the boundary timestamp aren't skipped or
+	// repeated across pages (composite (created_at, id) cursor).
+	var beforeID *int64
+	if b := r.URL.Query().Get("before_id"); b != "" {
+		if n, err := strconv.ParseInt(b, 10, 64); err == nil {
+			beforeID = &n
+		}
+	}
 	var location *string
 	if l := strings.TrimSpace(r.URL.Query().Get("location")); l != "" {
 		location = &l
 	}
 
-	posts, err := s.db.Feed(r.Context(), viewer.ID, authorID, location, before, limit)
+	posts, err := s.db.Feed(r.Context(), viewer.ID, authorID, location, before, beforeID, limit)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
@@ -113,7 +121,7 @@ func (s *Server) handleUserPosts(w http.ResponseWriter, r *http.Request) {
 			before = &t
 		}
 	}
-	posts, err := s.db.Feed(r.Context(), userFrom(r).ID, &id, nil, before, parseLimit(r, 30, 100))
+	posts, err := s.db.Feed(r.Context(), userFrom(r).ID, &id, nil, before, nil, parseLimit(r, 30, 100))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return

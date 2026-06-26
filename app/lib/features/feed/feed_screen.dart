@@ -121,6 +121,12 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   String? _datePreset;
   String? _location; // server-side place filter (mirrors feedLocationProvider)
 
+  // Pagination: posts loaded past the provider's first page, plus loading flags. Reset
+  // whenever a fresh first page arrives (pull-to-refresh, compose, location change).
+  final List<Post> _morePosts = [];
+  bool _loadingMore = false;
+  bool _reachedEnd = false;
+
   bool get _hasFilter => _people.isNotEmpty || _datePreset != null || _location != null;
 
   @override
@@ -148,11 +154,44 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     } else if (delta < -6 && _searchHidden) {
       setState(() => _searchHidden = false);
     }
+    // Near the bottom → load the next page. Skipped while a date preset is active, since
+    // that filter is client-side and self-bounded (avoids loading the whole history).
+    final pos = _scrollCtrl.position;
+    if (_datePreset == null && pos.pixels >= pos.maxScrollExtent - 600) {
+      _loadMore();
+    }
   }
 
   Future<void> _refresh() async {
     ref.invalidate(feedProvider);
     await ref.read(feedProvider.future);
+  }
+
+  /// Fetch the next page using the oldest loaded post as a composite (time,id) cursor.
+  Future<void> _loadMore() async {
+    if (_loadingMore || _reachedEnd || _allPosts.isEmpty) return;
+    setState(() => _loadingMore = true);
+    final last = _allPosts.last;
+    try {
+      final more = await ref.read(apiProvider).feed(
+            location: _location,
+            before: last.createdAt,
+            beforeId: last.id,
+          );
+      if (!mounted) return;
+      setState(() {
+        if (more.isEmpty) {
+          _reachedEnd = true;
+        } else {
+          final known = _allPosts.map((p) => p.id).toSet();
+          _morePosts.addAll(more.where((p) => known.add(p.id)));
+        }
+      });
+    } catch (_) {
+      // Leave _reachedEnd false so a later scroll retries.
+    } finally {
+      if (mounted) setState(() => _loadingMore = false);
+    }
   }
 
   void _openSearch() {
@@ -254,6 +293,14 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // A fresh first page (refresh / compose / location change) invalidates any pages we
+    // scrolled in, so drop them and allow loading again from the new base.
+    ref.listen(feedProvider, (prev, next) {
+      if (next is AsyncData<List<Post>>) {
+        _morePosts.clear();
+        _reachedEnd = false;
+      }
+    });
     return Scaffold(
       backgroundColor: _bgMain,
       body: SafeArea(
@@ -274,7 +321,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                       ),
                     ]),
                     data: (data) {
-                      _allPosts = data;
+                      _allPosts = [...data, ..._morePosts];
                       final posts = _applyFilter(_allPosts);
                       if (_allPosts.isEmpty) {
                         return ListView(children: const [
@@ -286,11 +333,13 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                         ]);
                       }
                       final items = _buildItems(posts);
+                      // Trailing spinner row while the next page loads.
+                      final showSpinner = _loadingMore && posts.isNotEmpty;
                       return ListView.builder(
                         controller: _scrollCtrl,
                         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
                         padding: EdgeInsets.only(top: _hasFilter ? 116 : 72, bottom: 24),
-                        itemCount: posts.isEmpty ? 1 : items.length,
+                        itemCount: posts.isEmpty ? 1 : items.length + (showSpinner ? 1 : 0),
                         itemBuilder: (_, i) {
                           if (posts.isEmpty) {
                             return const Padding(
@@ -299,6 +348,13 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                                 child: Text('No check-ins match your filters.',
                                     style: TextStyle(color: _fgMuted)),
                               ),
+                            );
+                          }
+                          if (i >= items.length) {
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 20),
+                              child:
+                                  Center(child: CircularProgressIndicator(color: context.accent)),
                             );
                           }
                           return _buildItem(items[i]);

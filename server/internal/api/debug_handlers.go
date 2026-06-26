@@ -198,7 +198,7 @@ func (s *Server) renderDebug(w http.ResponseWriter, r *http.Request, notice stri
 	}
 	users, _ := s.db.ListAllUsers(ctx)
 	allowed, _ := s.db.ListAllowedPhones(ctx)
-	recentPosts, _ := s.db.Feed(ctx, 0, nil, nil, nil, 12)
+	recentPosts, _ := s.db.Feed(ctx, 0, nil, nil, nil, nil, 12)
 	recentComments, _ := s.db.RecentComments(ctx, 12)
 
 	token := r.URL.Query().Get("token")
