@@ -65,9 +65,15 @@ class SessionController extends StateNotifier<Session> {
         final client = ApiClient(baseUrl: baseUrl, token: token);
         user = await client.me();
         state = state.copyWith(user: user);
-      } on DioException catch (_) {
-        // Network error or 401 — token is invalid or server unreachable; sign out.
-        await signOut();
+      } on DioException catch (e) {
+        // Only a real auth rejection means the stored token is bad. A network/timeout/
+        // server-unreachable error must NOT drop a valid session — that's common for a
+        // self-hosted box that's briefly offline. Keep the restored baseUrl/token; the
+        // user can retry, and any later genuine 401 still triggers onUnauthorized.
+        final code = e.response?.statusCode;
+        if (code == 401 || code == 403) {
+          await signOut();
+        }
       }
     }
   }

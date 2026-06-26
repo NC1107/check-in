@@ -238,14 +238,16 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     final phones = await Navigator.of(context).push<List<String>>(
       MaterialPageRoute(builder: (_) => const ContactsPickerScreen()),
     );
-    if (phones == null || phones.isEmpty) return;
+    if (phones == null || phones.isEmpty || !mounted) return;
     setState(() => _busy = true);
     try {
       final baseUrl = ref.read(sessionProvider).baseUrl ?? '';
       final api = ApiClient(baseUrl: baseUrl, token: _pendingAuth!.token);
       final result = await api.uploadContacts(phones);
+      if (!mounted) return;
       setState(() => _invited = (result['added'] as int?) ?? phones.length);
     } catch (_) {
+      if (!mounted) return;
       setState(
           () => _error = "Couldn't add those right now — you can invite from the Admin tab later.");
     } finally {
