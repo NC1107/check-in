@@ -24,6 +24,9 @@ const postMediaExpr = `, COALESCE(ARRAY(
 // ErrNotFound is returned when a row does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrNotOwned is returned when a request references media the caller does not own.
+var ErrNotOwned = errors.New("media not owned by caller")
+
 // ---- server config ----
 
 // ServerInitialized reports whether the first admin has been created.
@@ -373,11 +376,11 @@ func (d *DB) CreateSession(ctx context.Context, userID int64, tokenHash string, 
 func (d *DB) UserForToken(ctx context.Context, tokenHash string) (User, error) {
 	var u User
 	err := d.Pool.QueryRow(ctx, `
-		SELECT u.id, u.phone, u.name, u.birthday, u.profile_media_id, u.is_admin, u.status, u.created_at
+		SELECT u.id, u.phone, u.name, u.first_name, u.last_name, u.birthday, u.profile_media_id, u.is_admin, u.status, u.created_at
 		FROM sessions s
 		JOIN users u ON u.id = s.user_id
 		WHERE s.token_hash = $1 AND s.expires_at > now() AND u.status = 'active'`, tokenHash,
-	).Scan(&u.ID, &u.Phone, &u.Name, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt)
+	).Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return u, ErrNotFound
 	}
@@ -532,6 +535,25 @@ func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, 
 		return p, err
 	}
 	defer tx.Rollback(ctx)
+
+	// The author must own every referenced media item. Without this an author could
+	// attach another member's media id, which GetVisibleMedia would then expose to the
+	// whole group (an IDOR / privacy leak). Treat unowned or non-existent ids the same.
+	if len(mediaIDs) > 0 {
+		uniq := make(map[int64]struct{}, len(mediaIDs))
+		for _, m := range mediaIDs {
+			uniq[m] = struct{}{}
+		}
+		var owned int
+		if err := tx.QueryRow(ctx,
+			`SELECT count(DISTINCT id) FROM media WHERE id = ANY($1) AND owner_id = $2`,
+			mediaIDs, authorID).Scan(&owned); err != nil {
+			return p, err
+		}
+		if owned != len(uniq) {
+			return p, ErrNotOwned
+		}
+	}
 
 	// posts.media_id holds the cover (first image) for older clients; the full set lives
 	// in post_media.
