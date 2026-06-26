@@ -8,12 +8,14 @@ import 'package:intl/intl.dart';
 import '../../api/models.dart';
 import '../../notifications/push_messaging.dart';
 import '../../state/app_state.dart';
+import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
 import '../../widgets/auth_image.dart';
 import '../../widgets/user_avatar.dart';
 import '../admin/admin_screen.dart';
 import '../feed/post_card.dart';
+import '../settings/appearance_screen.dart';
 import '../settings/notification_settings_screen.dart';
 
 /// ProfileScreen shows a person's profile and their timeline. For the signed-in user it
@@ -74,6 +76,14 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         actions: [
           if (widget.isSelf)
             IconButton(
+              tooltip: 'Appearance',
+              icon: const Icon(Icons.palette_outlined, color: kFgSecondary),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const AppearanceScreen()),
+              ),
+            ),
+          if (widget.isSelf)
+            IconButton(
               tooltip: 'Notifications',
               icon: const Icon(Icons.notifications_none_rounded, color: kFgSecondary),
               onPressed: () => Navigator.of(context).push(
@@ -100,7 +110,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         future: _future,
         builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: kAccent));
+            return Center(child: CircularProgressIndicator(color: context.accent));
           }
           if (snap.hasError) {
             return Center(
@@ -128,8 +138,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                           padding: const EdgeInsets.fromLTRB(18, 6, 16, 6),
                           child: Text(
                             DateFormat.yMMMMd().format(p.createdAt.toLocal()),
-                            style: const TextStyle(
-                                color: kAccent, fontWeight: FontWeight.w600, fontSize: 12),
+                            style: TextStyle(
+                                color: context.accent, fontWeight: FontWeight.w600, fontSize: 12),
                           ),
                         ),
                         PostCard(key: ValueKey(p.id), post: p, onDeleted: _reload),
@@ -164,12 +174,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
                   decoration: BoxDecoration(
-                    color: kAccentLight,
+                    color: context.accentLight,
                     borderRadius: BorderRadius.circular(9999),
                   ),
-                  child: const Text('HOST',
+                  child: Text('HOST',
                       style: TextStyle(
-                          color: kAccent,
+                          color: context.accent,
                           fontWeight: FontWeight.w700,
                           fontSize: 11,
                           letterSpacing: 0.5)),
@@ -206,8 +216,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                       icon: const Icon(Icons.group_outlined, size: 18),
                       label: const Text('Members'),
                       style: FilledButton.styleFrom(
-                        backgroundColor: kAccent,
-                        foregroundColor: kOnAccent,
+                        backgroundColor: context.accent,
+                        foregroundColor: context.onAccent,
                         padding: const EdgeInsets.symmetric(vertical: 12),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       ),
@@ -345,11 +355,11 @@ class _EditProfileSheetState extends ConsumerState<_EditProfileSheet> {
                         width: 30,
                         height: 30,
                         decoration: BoxDecoration(
-                          color: kAccent,
+                          color: context.accent,
                           shape: BoxShape.circle,
                           border: Border.all(color: kBgSurface, width: 3),
                         ),
-                        child: const Icon(Icons.photo_camera, size: 15, color: kOnAccent),
+                        child: Icon(Icons.photo_camera, size: 15, color: context.onAccent),
                       ),
                     ),
                   ],

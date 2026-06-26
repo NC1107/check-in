@@ -11,6 +11,7 @@ import 'package:intl/intl.dart';
 import '../../api/api_client.dart';
 import '../../api/models.dart';
 import '../../state/app_state.dart';
+import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
 import '../admin/contacts_picker_screen.dart';
@@ -22,8 +23,6 @@ const _border = kBorder;
 const _fgPrimary = kFgPrimary;
 const _fgSecondary = kFgSecondary;
 const _fgMuted = kFgMuted;
-const _accent = kAccent;
-const _accentLight = kAccentLight;
 const _online = kSuccess;
 const _danger = kLike;
 
@@ -280,8 +279,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                     style: TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 16)),
                 TextButton(
                   onPressed: () => Navigator.pop(ctx, temp),
-                  child: const Text('Done',
-                      style: TextStyle(color: _accent, fontWeight: FontWeight.w700)),
+                  child: Text('Done',
+                      style: TextStyle(color: context.accent, fontWeight: FontWeight.w700)),
                 ),
               ],
             ),
@@ -389,7 +388,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   TextSpan(text: _loginMode ? 'New here?  ' : 'Already have an account?  '),
                   TextSpan(
                     text: _loginMode ? 'Join' : 'Log in',
-                    style: const TextStyle(color: _accent, fontWeight: FontWeight.w700),
+                    style: TextStyle(color: context.accent, fontWeight: FontWeight.w700),
                   ),
                 ],
               ),
@@ -529,11 +528,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                       width: 32,
                       height: 32,
                       decoration: BoxDecoration(
-                        color: _accent,
+                        color: context.accent,
                         shape: BoxShape.circle,
                         border: Border.all(color: _bgMain, width: 3),
                       ),
-                      child: const Icon(Icons.photo_camera, size: 16, color: kOnAccent),
+                      child: Icon(Icons.photo_camera, size: 16, color: context.onAccent),
                     ),
                   ),
                 ],
@@ -652,8 +651,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         Container(
           width: 56,
           height: 56,
-          decoration: BoxDecoration(color: _accentLight, borderRadius: BorderRadius.circular(16)),
-          child: const Icon(Icons.group_add, size: 28, color: _accent),
+          decoration:
+              BoxDecoration(color: context.accentLight, borderRadius: BorderRadius.circular(16)),
+          child: Icon(Icons.group_add, size: 28, color: context.accent),
         ),
         const SizedBox(height: 20),
         const Text('Invite your circle',
@@ -698,12 +698,12 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           Container(
             width: 84,
             height: 84,
-            decoration: const BoxDecoration(
-              color: _accent,
+            decoration: BoxDecoration(
+              color: context.accent,
               shape: BoxShape.circle,
-              boxShadow: [BoxShadow(color: _accentLight, blurRadius: 0, spreadRadius: 8)],
+              boxShadow: [BoxShadow(color: context.accentLight, blurRadius: 0, spreadRadius: 8)],
             ),
-            child: const Icon(Icons.check, size: 44, color: kOnAccent),
+            child: Icon(Icons.check, size: 44, color: context.onAccent),
           ),
           const SizedBox(height: 26),
           const Text("You're all set",
@@ -766,7 +766,7 @@ class _ProgressDot extends StatelessWidget {
       height: 6,
       width: active ? 22 : 6,
       decoration: BoxDecoration(
-        color: active ? _accent : _border,
+        color: active ? context.accent : _border,
         borderRadius: BorderRadius.circular(9999),
       ),
     );

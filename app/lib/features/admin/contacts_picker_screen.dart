@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 
+import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 
 // Theme tokens (centralized in theme/tokens.dart).
@@ -10,9 +11,6 @@ const _border = kBorder;
 const _fgPrimary = kFgPrimary;
 const _fgSecondary = kFgSecondary;
 const _fgMuted = kFgMuted;
-const _accent = kAccent;
-const _accentLight = kAccentLight;
-const _onAccent = kOnAccent;
 
 const _avatarPalette = [
   Color(0xFF5557E0),
@@ -182,7 +180,7 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
         top: false,
         child: switch (_phase) {
           _Phase.intro => _introView(),
-          _Phase.loading => const Center(child: CircularProgressIndicator(color: _accent)),
+          _Phase.loading => Center(child: CircularProgressIndicator(color: context.accent)),
           _Phase.list => _listView(),
           _Phase.blocked => _blockedView(),
           _Phase.error => _messageView(
@@ -207,8 +205,9 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
           Container(
             width: 64,
             height: 64,
-            decoration: BoxDecoration(color: _accentLight, borderRadius: BorderRadius.circular(18)),
-            child: const Icon(Icons.contacts_outlined, size: 30, color: _accent),
+            decoration:
+                BoxDecoration(color: context.accentLight, borderRadius: BorderRadius.circular(18)),
+            child: Icon(Icons.contacts_outlined, size: 30, color: context.accent),
           ),
           const SizedBox(height: 22),
           const Text('Find people to invite',
@@ -228,8 +227,8 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
             child: FilledButton(
               onPressed: _requestThenLoad,
               style: FilledButton.styleFrom(
-                backgroundColor: _accent,
-                foregroundColor: _onAccent,
+                backgroundColor: context.accent,
+                foregroundColor: context.onAccent,
                 padding: const EdgeInsets.symmetric(vertical: 15),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
@@ -291,8 +290,8 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
               child: FilledButton(
                 onPressed: onPrimary,
                 style: FilledButton.styleFrom(
-                  backgroundColor: _accent,
-                  foregroundColor: _onAccent,
+                  backgroundColor: context.accent,
+                  foregroundColor: context.onAccent,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
@@ -340,8 +339,8 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
                     onTap: _toggleAll,
                     behavior: HitTestBehavior.opaque,
                     child: Text(allSelected ? 'Clear all' : 'Select all',
-                        style: const TextStyle(
-                            color: _accent, fontWeight: FontWeight.w600, fontSize: 13)),
+                        style: TextStyle(
+                            color: context.accent, fontWeight: FontWeight.w600, fontSize: 13)),
                   ),
                 ],
               ),
@@ -404,11 +403,11 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
               width: 24,
               height: 24,
               decoration: BoxDecoration(
-                color: on ? _accent : Colors.transparent,
+                color: on ? context.accent : Colors.transparent,
                 borderRadius: BorderRadius.circular(7),
-                border: Border.all(color: on ? _accent : _border, width: 1.5),
+                border: Border.all(color: on ? context.accent : _border, width: 1.5),
               ),
-              child: on ? const Icon(Icons.check, size: 17, color: _onAccent) : null,
+              child: on ? Icon(Icons.check, size: 17, color: context.onAccent) : null,
             ),
           ],
         ),
@@ -427,9 +426,9 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
         child: FilledButton(
           onPressed: enabled ? _continue : null,
           style: FilledButton.styleFrom(
-            backgroundColor: _accent,
+            backgroundColor: context.accent,
             disabledBackgroundColor: _bgSurfaceHover,
-            foregroundColor: _onAccent,
+            foregroundColor: context.onAccent,
             disabledForegroundColor: _fgMuted,
             padding: const EdgeInsets.symmetric(vertical: 15),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),

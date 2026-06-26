@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/models.dart';
 import '../../state/app_state.dart';
+import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import 'global_search_delegate.dart';
 import 'post_card.dart';
@@ -15,9 +16,6 @@ const _border = kBorder;
 const _fgPrimary = kFgPrimary;
 const _fgSecondary = kFgSecondary;
 const _fgMuted = kFgMuted;
-const _accent = kAccent;
-const _accentLight = kAccentLight;
-const _onAccent = kOnAccent;
 
 const _datePresets = ['Today', 'This week', 'This month'];
 
@@ -30,7 +28,7 @@ class _DateDivider extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Container(width: 2, height: 12, color: _accentLight),
+        Container(width: 2, height: 12, color: context.accentLight),
         Container(
           margin: const EdgeInsets.symmetric(vertical: 5),
           padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 4),
@@ -49,7 +47,7 @@ class _DateDivider extends StatelessWidget {
             ),
           ),
         ),
-        Container(width: 2, height: 12, color: _accentLight),
+        Container(width: 2, height: 12, color: context.accentLight),
       ],
     );
   }
@@ -63,18 +61,18 @@ class _GapConnector extends StatelessWidget {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        Container(width: 2, height: 11, color: _accentLight),
+        Container(width: 2, height: 11, color: context.accentLight),
         Container(
           width: 9,
           height: 9,
           margin: const EdgeInsets.symmetric(vertical: 2),
-          decoration: const BoxDecoration(
-            color: _accent,
+          decoration: BoxDecoration(
+            color: context.accent,
             shape: BoxShape.circle,
-            boxShadow: [BoxShadow(color: _accentLight, blurRadius: 0, spreadRadius: 3)],
+            boxShadow: [BoxShadow(color: context.accentLight, blurRadius: 0, spreadRadius: 3)],
           ),
         ),
-        Container(width: 2, height: 11, color: _accentLight),
+        Container(width: 2, height: 11, color: context.accentLight),
       ],
     );
   }
@@ -252,10 +250,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
           children: [
             RefreshIndicator(
               onRefresh: _refresh,
-              color: _accent,
+              color: context.accent,
               backgroundColor: _bgSurface,
               child: ref.watch(feedProvider).when(
-                    loading: () => const Center(child: CircularProgressIndicator(color: _accent)),
+                    loading: () => Center(child: CircularProgressIndicator(color: context.accent)),
                     error: (e, _) => ListView(children: [
                       const SizedBox(height: 140),
                       Center(
@@ -350,17 +348,17 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       child: Container(
         padding: const EdgeInsets.fromLTRB(11, 5, 9, 5),
         decoration: BoxDecoration(
-          color: _accentLight,
-          border: Border.all(color: _accent),
+          color: context.accentLight,
+          border: Border.all(color: context.accent),
           borderRadius: BorderRadius.circular(9999),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(label,
-                style: const TextStyle(color: _accent, fontWeight: FontWeight.w600, fontSize: 12)),
+                style: TextStyle(color: context.accent, fontWeight: FontWeight.w600, fontSize: 12)),
             const SizedBox(width: 5),
-            const Icon(Icons.close, size: 15, color: _accent),
+            Icon(Icons.close, size: 15, color: context.accent),
           ],
         ),
       ),
@@ -412,11 +410,11 @@ class _SearchBar extends StatelessWidget {
                 width: 30,
                 height: 30,
                 decoration: BoxDecoration(
-                  color: filterActive ? _accent : _bgSurfaceHover,
+                  color: filterActive ? context.accent : _bgSurfaceHover,
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(Icons.filter_list,
-                    size: 19, color: filterActive ? _onAccent : _fgSecondary),
+                    size: 19, color: filterActive ? context.onAccent : _fgSecondary),
               ),
             ),
           ],
@@ -506,7 +504,7 @@ class _FilterSheetState extends State<_FilterSheet> {
               TextField(
                 onChanged: (v) => setState(() => _personQuery = v.trim().toLowerCase()),
                 style: const TextStyle(color: _fgPrimary, fontSize: 14),
-                cursorColor: _accent,
+                cursorColor: context.accent,
                 decoration: InputDecoration(
                   isDense: true,
                   prefixIcon: const Icon(Icons.search, size: 18, color: _fgMuted),
@@ -520,7 +518,7 @@ class _FilterSheetState extends State<_FilterSheet> {
                       borderSide: const BorderSide(color: _border)),
                   focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(color: _accent)),
+                      borderSide: BorderSide(color: context.accent)),
                 ),
               ),
               const SizedBox(height: 11),
@@ -569,8 +567,8 @@ class _FilterSheetState extends State<_FilterSheet> {
                 child: FilledButton(
                   onPressed: _apply,
                   style: FilledButton.styleFrom(
-                    backgroundColor: _accent,
-                    foregroundColor: _onAccent,
+                    backgroundColor: context.accent,
+                    foregroundColor: context.onAccent,
                     padding: const EdgeInsets.symmetric(vertical: 13),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
@@ -592,8 +590,8 @@ class _FilterSheetState extends State<_FilterSheet> {
       child: Container(
         padding: const EdgeInsets.fromLTRB(5, 5, 13, 5),
         decoration: BoxDecoration(
-          color: on ? _accent : Colors.transparent,
-          border: Border.all(color: on ? _accent : _border),
+          color: on ? context.accent : Colors.transparent,
+          border: Border.all(color: on ? context.accent : _border),
           borderRadius: BorderRadius.circular(9999),
         ),
         child: Row(
@@ -611,7 +609,7 @@ class _FilterSheetState extends State<_FilterSheet> {
             const SizedBox(width: 7),
             Text(a.name,
                 style: TextStyle(
-                    color: on ? _onAccent : _fgSecondary,
+                    color: on ? context.onAccent : _fgSecondary,
                     fontWeight: FontWeight.w600,
                     fontSize: 13)),
           ],
@@ -627,13 +625,15 @@ class _FilterSheetState extends State<_FilterSheet> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
         decoration: BoxDecoration(
-          color: on ? _accent : Colors.transparent,
-          border: Border.all(color: on ? _accent : _border),
+          color: on ? context.accent : Colors.transparent,
+          border: Border.all(color: on ? context.accent : _border),
           borderRadius: BorderRadius.circular(9999),
         ),
         child: Text(label,
             style: TextStyle(
-                color: on ? _onAccent : _fgSecondary, fontWeight: FontWeight.w600, fontSize: 13)),
+                color: on ? context.onAccent : _fgSecondary,
+                fontWeight: FontWeight.w600,
+                fontSize: 13)),
       ),
     );
   }

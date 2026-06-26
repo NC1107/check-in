@@ -4,6 +4,7 @@ import 'package:gal/gal.dart';
 
 import '../../api/models.dart';
 import '../../state/app_state.dart';
+import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/auth_image.dart';
 import '../../widgets/user_avatar.dart';
@@ -15,7 +16,6 @@ const _border = kBorder;
 const _fgPrimary = kFgPrimary;
 const _fgSecondary = kFgSecondary;
 const _fgMuted = kFgMuted;
-const _accent = kAccent;
 const _like = kLike;
 
 String _relativeTime(DateTime dt) {
@@ -400,7 +400,7 @@ class _PostCardState extends ConsumerState<PostCard> {
                       child: Text(
                         'Post',
                         style: TextStyle(
-                          color: canPost ? _accent : _fgMuted,
+                          color: canPost ? context.accent : _fgMuted,
                           fontWeight: FontWeight.w700,
                           fontSize: 13,
                         ),

@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/api_client.dart';
 import '../api/models.dart';
+import '../theme/accent.dart';
 
 /// Persisted session: the server base URL, the auth token, and the current user.
 class Session {
@@ -103,6 +104,31 @@ class SessionController extends StateNotifier<Session> {
 
 final sessionProvider = StateNotifierProvider<SessionController, Session>(
   (ref) => SessionController(),
+);
+
+const _kAccentId = 'accent_id';
+
+/// The user's chosen accent palette, persisted per-device. Drives the whole app
+/// theme via [AccentPalette] on [ThemeData].
+class AccentController extends StateNotifier<AccentPalette> {
+  AccentController() : super(kAccentPresets.first) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    state = accentById(prefs.getString(_kAccentId));
+  }
+
+  Future<void> select(AccentPalette palette) async {
+    state = palette;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kAccentId, palette.id);
+  }
+}
+
+final accentProvider = StateNotifierProvider<AccentController, AccentPalette>(
+  (ref) => AccentController(),
 );
 
 /// An ApiClient bound to the current server URL and token. Rebuilds whenever the
