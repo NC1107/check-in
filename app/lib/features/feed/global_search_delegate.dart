@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../api/api_client.dart';
 import '../../api/models.dart';
+import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/auth_image.dart';
 import '../../widgets/user_avatar.dart';
@@ -102,7 +103,7 @@ class GlobalSearchDelegate extends SearchDelegate<void> {
         valueListenable: _results,
         builder: (context, data, _) {
           if (data == null) {
-            return const Center(child: CircularProgressIndicator(color: kAccent));
+            return Center(child: CircularProgressIndicator(color: context.accent));
           }
           if (data.people.isEmpty && data.posts.isEmpty) {
             return const Padding(

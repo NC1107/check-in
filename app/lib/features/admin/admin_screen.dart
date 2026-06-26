@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/models.dart';
 import '../../state/app_state.dart';
+import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
 import '../../widgets/user_avatar.dart';
@@ -248,7 +249,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
       decoration: BoxDecoration(
-        color: used ? kAccentLight : kBgSurfaceHover,
+        color: used ? context.accentLight : kBgSurfaceHover,
         borderRadius: BorderRadius.circular(9999),
       ),
       child: Text(used ? 'Joined' : 'Pending',
@@ -372,8 +373,8 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
         child: Text(text, style: const TextStyle(color: kFgMuted, fontSize: 13, height: 1.5)),
       );
 
-  Widget _loading() => const Padding(
-        padding: EdgeInsets.all(20),
-        child: Center(child: CircularProgressIndicator(color: kAccent)),
+  Widget _loading() => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Center(child: CircularProgressIndicator(color: context.accent)),
       );
 }

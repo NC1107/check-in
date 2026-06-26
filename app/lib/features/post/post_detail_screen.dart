@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 
 import '../../api/models.dart';
 import '../../state/app_state.dart';
+import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/auth_image.dart';
 import '../../widgets/user_avatar.dart';
@@ -117,7 +118,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
               future: _future,
               builder: (context, snap) {
                 if (snap.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator(color: kAccent));
+                  return Center(child: CircularProgressIndicator(color: context.accent));
                 }
                 if (snap.hasError) {
                   return Center(
@@ -338,7 +339,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                 onSubmitted: (_) => _send(),
                 textInputAction: TextInputAction.send,
                 style: const TextStyle(color: kFgPrimary, fontSize: 14),
-                cursorColor: kAccent,
+                cursorColor: context.accent,
                 decoration: InputDecoration(
                   hintText: 'Add a comment…',
                   hintStyle: const TextStyle(color: kFgMuted),
@@ -352,7 +353,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(9999),
-                    borderSide: const BorderSide(color: kAccent),
+                    borderSide: BorderSide(color: context.accent),
                   ),
                 ),
               ),
@@ -365,13 +366,14 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                 return IconButton(
                   onPressed: canSend ? _send : null,
                   icon: _sending
-                      ? const SizedBox(
+                      ? SizedBox(
                           height: 18,
                           width: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: kAccent))
-                      : Icon(Icons.arrow_upward_rounded, color: canSend ? kAccent : kFgMuted),
+                          child: CircularProgressIndicator(strokeWidth: 2, color: context.accent))
+                      : Icon(Icons.arrow_upward_rounded,
+                          color: canSend ? context.accent : kFgMuted),
                   style: IconButton.styleFrom(
-                    backgroundColor: canSend ? kAccentLight : kBgSurface,
+                    backgroundColor: canSend ? context.accentLight : kBgSurface,
                     shape: const CircleBorder(),
                   ),
                 );

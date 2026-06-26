@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/app_state.dart';
+import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 
 /// Per-account push toggles. These map to the server's notify_posts / notify_replies
@@ -89,7 +90,7 @@ class _NotificationSettingsScreenState extends ConsumerState<NotificationSetting
             style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
       ),
       body: _loading
-          ? const Center(child: CircularProgressIndicator(color: kAccent))
+          ? Center(child: CircularProgressIndicator(color: context.accent))
           : _error != null
               ? Center(
                   child: Text(_error!,
@@ -132,7 +133,7 @@ class _NotificationSettingsScreenState extends ConsumerState<NotificationSetting
     return SwitchListTile(
       value: value,
       onChanged: onChanged,
-      activeThumbColor: kAccent,
+      activeThumbColor: context.accent,
       contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
       title: Text(title,
           style: const TextStyle(color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 15)),

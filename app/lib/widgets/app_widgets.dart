@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../theme/accent.dart';
 import '../theme/tokens.dart';
 
 /// A muted label shown above an input.
@@ -57,7 +58,7 @@ class AppTextField extends StatelessWidget {
       minLines: obscure ? 1 : minLines,
       maxLines: obscure ? 1 : maxLines,
       style: const TextStyle(color: kFgPrimary, fontSize: 15),
-      cursorColor: kAccent,
+      cursorColor: context.accent,
       decoration: InputDecoration(
         hintText: hint,
         hintStyle: const TextStyle(color: kFgMuted),
@@ -70,7 +71,7 @@ class AppTextField extends StatelessWidget {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(color: hasError ? kLike : kAccent),
+          borderSide: BorderSide(color: hasError ? kLike : context.accent),
         ),
       ),
     );
@@ -122,18 +123,18 @@ class PrimaryButton extends StatelessWidget {
       child: FilledButton(
         onPressed: enabled ? onTap : null,
         style: FilledButton.styleFrom(
-          backgroundColor: kAccent,
+          backgroundColor: context.accent,
           disabledBackgroundColor: kBgSurfaceHover,
-          foregroundColor: kOnAccent,
+          foregroundColor: context.onAccent,
           disabledForegroundColor: kFgMuted,
           padding: const EdgeInsets.symmetric(vertical: 15),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
         child: busy
-            ? const SizedBox(
+            ? SizedBox(
                 height: 20,
                 width: 20,
-                child: CircularProgressIndicator(strokeWidth: 2, color: kOnAccent))
+                child: CircularProgressIndicator(strokeWidth: 2, color: context.onAccent))
             : Text(label, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
       ),
     );

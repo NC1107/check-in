@@ -10,6 +10,7 @@ import 'package:native_exif/native_exif.dart';
 import '../../notifications/birthday_notifier.dart';
 import '../../notifications/push_messaging.dart';
 import '../../state/app_state.dart';
+import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/user_avatar.dart';
 import '../profile/profile_screen.dart';
@@ -22,7 +23,6 @@ const _border = kBorder;
 const _fgPrimary = kFgPrimary;
 const _fgSecondary = kFgSecondary;
 const _fgMuted = kFgMuted;
-const _accent = kAccent;
 
 /// HomeShell hosts the main tabs once a user is logged in.
 class HomeShell extends ConsumerStatefulWidget {
@@ -82,8 +82,8 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         width: 58,
         child: FloatingActionButton(
           onPressed: _showCompose,
-          backgroundColor: _accent,
-          foregroundColor: kOnAccent,
+          backgroundColor: context.accent,
+          foregroundColor: context.onAccent,
           elevation: 4,
           shape: const CircleBorder(),
           child: const Icon(Icons.add, size: 28),
@@ -142,7 +142,7 @@ class _NavItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = selected ? _accent : _fgMuted;
+    final color = selected ? context.accent : _fgMuted;
     return Expanded(
       child: InkResponse(
         onTap: onTap,
@@ -227,7 +227,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   Widget _mediaButton(IconData icon, String label, VoidCallback onTap) {
     return OutlinedButton.icon(
       onPressed: onTap,
-      icon: Icon(icon, color: _accent, size: 19),
+      icon: Icon(icon, color: context.accent, size: 19),
       label: Text(label,
           style: const TextStyle(color: _fgSecondary, fontWeight: FontWeight.w600, fontSize: 13)),
       style: OutlinedButton.styleFrom(
@@ -314,18 +314,19 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                   builder: (_, __, ___) => TextButton(
                     onPressed: hasContent && !_busy ? _submit : null,
                     style: TextButton.styleFrom(
-                      backgroundColor: hasContent ? _accent : _bgSurfaceHover,
-                      foregroundColor: hasContent ? kOnAccent : _fgMuted,
+                      backgroundColor: hasContent ? context.accent : _bgSurfaceHover,
+                      foregroundColor: hasContent ? context.onAccent : _fgMuted,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9999)),
                       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
                       minimumSize: Size.zero,
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
                     child: _busy
-                        ? const SizedBox(
+                        ? SizedBox(
                             width: 16,
                             height: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2, color: kOnAccent))
+                            child:
+                                CircularProgressIndicator(strokeWidth: 2, color: context.onAccent))
                         : const Text('Share',
                             style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
                   ),
@@ -354,7 +355,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
               child: Row(
                 children: [
-                  const Icon(Icons.place_outlined, size: 16, color: _accent),
+                  Icon(Icons.place_outlined, size: 16, color: context.accent),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(

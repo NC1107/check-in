@@ -58,6 +58,7 @@ class CheckInApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final session = ref.watch(sessionProvider);
+    final accent = ref.watch(accentProvider);
 
     // AuthScreen now owns server-connect + login/signup as one flow, so anyone not yet
     // logged in lands there (it pre-fills the last server used).
@@ -68,10 +69,10 @@ class CheckInApp extends ConsumerWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
-        colorScheme: const ColorScheme.dark(
-          primary: kAccent,
-          onPrimary: kOnAccent,
-          secondary: kAccentHover,
+        colorScheme: ColorScheme.dark(
+          primary: accent.base,
+          onPrimary: accent.onAccent,
+          secondary: accent.hover,
           surface: kBgSurface,
           onSurface: kFgPrimary,
           outline: kBorder,
@@ -81,6 +82,7 @@ class CheckInApp extends ConsumerWidget {
         cardColor: kBgSurface,
         dividerColor: kBorder,
         useMaterial3: true,
+        extensions: [accent],
       ),
       home: home,
     );
