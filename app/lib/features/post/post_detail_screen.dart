@@ -7,7 +7,7 @@ import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
-import '../../widgets/auth_image.dart';
+import '../../widgets/post_image_carousel.dart';
 import '../../widgets/user_avatar.dart';
 
 String _relativeTime(DateTime dt) {
@@ -154,14 +154,14 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                         child: Text(post.body,
                             style: const TextStyle(color: kFgPrimary, fontSize: 15, height: 1.5)),
                       ),
-                    if (post.kind == 'image' && post.mediaId != null)
+                    if (post.kind == 'image' && post.images.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: ClipRRect(
                           borderRadius: BorderRadius.circular(14),
                           child: AspectRatio(
                             aspectRatio: 4 / 3,
-                            child: AuthImage(mediaId: post.mediaId!),
+                            child: PostImageCarousel(mediaIds: post.images),
                           ),
                         ),
                       ),

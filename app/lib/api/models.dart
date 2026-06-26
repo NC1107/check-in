@@ -54,6 +54,7 @@ class Post {
     required this.commentCount,
     required this.likedByViewer,
     this.mediaId,
+    this.mediaIds = const [],
     this.authorPhotoId,
     this.location,
     this.commentsPreview = const [],
@@ -69,9 +70,15 @@ class Post {
   final int commentCount;
   final bool likedByViewer;
   final int? mediaId;
+  final List<int> mediaIds;
   final int? authorPhotoId;
   final String? location; // coarse "City, Country", null for most posts
   final List<CommentPreview> commentsPreview;
+
+  /// The post's images in order. Prefers the multi-photo set, falling back to the legacy
+  /// single cover so older posts still render.
+  List<int> get images =>
+      mediaIds.isNotEmpty ? mediaIds : (mediaId != null ? [mediaId!] : const []);
 
   factory Post.fromJson(Map<String, dynamic> j) => Post(
         id: j['id'] as int,
@@ -84,6 +91,7 @@ class Post {
         commentCount: j['commentCount'] as int? ?? 0,
         likedByViewer: j['likedByViewer'] as bool? ?? false,
         mediaId: j['mediaId'] as int?,
+        mediaIds: ((j['mediaIds'] as List?) ?? const []).map((e) => e as int).toList(),
         authorPhotoId: j['authorPhotoId'] as int?,
         location: j['location'] as String?,
         commentsPreview: ((j['commentsPreview'] as List?) ?? [])

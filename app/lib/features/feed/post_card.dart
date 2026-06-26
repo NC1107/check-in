@@ -6,7 +6,7 @@ import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
-import '../../widgets/auth_image.dart';
+import '../../widgets/post_image_carousel.dart';
 import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
 
@@ -296,11 +296,11 @@ class _PostCardState extends ConsumerState<PostCard> {
             )
           else
             const SizedBox(height: 10),
-          // Image
-          if (p.kind == 'image' && p.mediaId != null)
+          // Image(s)
+          if (p.kind == 'image' && p.images.isNotEmpty)
             AspectRatio(
               aspectRatio: 4 / 3,
-              child: AuthImage(mediaId: p.mediaId!),
+              child: PostImageCarousel(mediaIds: p.images),
             ),
           // Actions row
           Padding(

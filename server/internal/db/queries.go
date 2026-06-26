@@ -16,6 +16,11 @@ const commentPreviewExpr = `, COALESCE((
 		FROM (SELECT u2.name, c.body, c.created_at FROM comments c JOIN users u2 ON u2.id = c.user_id
 		      WHERE c.post_id = p.id ORDER BY c.created_at DESC LIMIT 2) t), '[]'::json)`
 
+// postMediaExpr appends the post's full ordered set of image ids as a bigint[]. Empty for
+// text posts and (until backfill clients re-save) old single-image posts keep their cover.
+const postMediaExpr = `, COALESCE(ARRAY(
+		SELECT pm.media_id FROM post_media pm WHERE pm.post_id = p.id ORDER BY pm.position), '{}')`
+
 // ErrNotFound is returned when a row does not exist.
 var ErrNotFound = errors.New("not found")
 
@@ -464,6 +469,7 @@ func (d *DB) GetVisibleMedia(ctx context.Context, id, viewerID int64) (Media, er
 		WHERE m.id = $1 AND (
 			m.owner_id = $2
 			OR EXISTS (SELECT 1 FROM posts p WHERE p.media_id = m.id)
+			OR EXISTS (SELECT 1 FROM post_media pm WHERE pm.media_id = m.id)
 			OR EXISTS (SELECT 1 FROM users u WHERE u.profile_media_id = m.id)
 		)`, id, viewerID,
 	).Scan(&m.ID, &m.OwnerID, &m.Path, &m.Mime, &m.Width, &m.Height, &m.CreatedAt)
@@ -482,15 +488,41 @@ func (d *DB) SetUserProfileMedia(ctx context.Context, userID, mediaID int64) err
 // ---- posts ----
 
 // CreatePost inserts a post.
-func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, mediaID *int64, location *string) (Post, error) {
+func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, mediaIDs []int64, location *string) (Post, error) {
 	var p Post
-	err := d.Pool.QueryRow(ctx, `
+	tx, err := d.Pool.Begin(ctx)
+	if err != nil {
+		return p, err
+	}
+	defer tx.Rollback(ctx)
+
+	// posts.media_id holds the cover (first image) for older clients; the full set lives
+	// in post_media.
+	var cover *int64
+	if len(mediaIDs) > 0 {
+		cover = &mediaIDs[0]
+	}
+	err = tx.QueryRow(ctx, `
 		INSERT INTO posts (author_id, kind, body, media_id, location)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id, author_id, kind, body, media_id, location, created_at`,
-		authorID, kind, body, mediaID, location,
+		authorID, kind, body, cover, location,
 	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt)
-	return p, err
+	if err != nil {
+		return p, err
+	}
+	for i, mid := range mediaIDs {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO post_media (post_id, media_id, position) VALUES ($1, $2, $3)`,
+			p.ID, mid, i); err != nil {
+			return p, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return p, err
+	}
+	p.MediaIDs = mediaIDs
+	return p, nil
 }
 
 // Feed returns posts in reverse-chronological order with engagement counts, optionally
@@ -501,7 +533,7 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
-		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+`
+		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+`
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
 		WHERE ($2::bigint IS NULL OR p.author_id = $2)
@@ -519,7 +551,7 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 		var p Post
 		var preview []byte
 		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview); err != nil {
+			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &p.MediaIDs); err != nil {
 			return nil, err
 		}
 		if len(preview) > 0 {
@@ -569,7 +601,7 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
-		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+`
+		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+`
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
 		WHERE u.status = 'active' AND (
@@ -587,7 +619,7 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 		var p Post
 		var preview []byte
 		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview); err != nil {
+			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &p.MediaIDs); err != nil {
 			return nil, err
 		}
 		if len(preview) > 0 {
@@ -607,11 +639,11 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
-		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+`
+		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+`
 		FROM posts p JOIN users u ON u.id = p.author_id
 		WHERE p.id = $2 AND u.status = 'active'`, viewerID, postID,
 	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt,
-		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview)
+		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &p.MediaIDs)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, ErrNotFound
 	}

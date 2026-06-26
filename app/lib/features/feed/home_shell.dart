@@ -169,9 +169,10 @@ class _ComposeSheet extends ConsumerStatefulWidget {
 }
 
 class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
+  static const _maxImages = 10;
   final _bodyCtrl = TextEditingController();
-  XFile? _image;
-  String? _location; // coarse "City, Country" read from the photo, if any
+  final List<XFile> _images = [];
+  String? _location; // coarse "City, Country" read from the photos, if any
   bool _resolvingLocation = false;
   bool _busy = false;
   String? _error;
@@ -182,17 +183,37 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     super.dispose();
   }
 
-  Future<void> _pickImage(ImageSource source) async {
-    // No imageQuality here: that re-encodes and strips EXIF, which we need to read the
-    // photo's GPS. The server downscales + strips metadata on its end.
-    final x = await ImagePicker().pickImage(source: source);
+  // No imageQuality on picks: that re-encodes and strips EXIF, which we need to read the
+  // photo's GPS. The server downscales + strips metadata on its end.
+  Future<void> _pickFromGallery() async {
+    final picked = await ImagePicker().pickMultiImage();
+    if (picked.isEmpty || !mounted) return;
+    setState(() {
+      for (final x in picked) {
+        if (_images.length < _maxImages) _images.add(x);
+      }
+    });
+    await _resolveLocation();
+  }
+
+  Future<void> _takePhoto() async {
+    final x = await ImagePicker().pickImage(source: ImageSource.camera);
     if (x == null || !mounted) return;
     setState(() {
-      _image = x;
-      _location = null;
-      _resolvingLocation = true;
+      if (_images.length < _maxImages) _images.add(x);
     });
-    final place = await _photoPlace(x.path);
+    await _resolveLocation();
+  }
+
+  /// Read a place label from the first image that carries GPS (only if we don't have one).
+  Future<void> _resolveLocation() async {
+    if (_location != null || _images.isEmpty) return;
+    setState(() => _resolvingLocation = true);
+    String? place;
+    for (final x in _images) {
+      place = await _photoPlace(x.path);
+      if (place != null) break;
+    }
     if (mounted) {
       setState(() {
         _location = place;
@@ -224,6 +245,30 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     }
   }
 
+  Widget _thumb(int i) {
+    return Stack(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: Image.file(File(_images[i].path), width: 100, height: 100, fit: BoxFit.cover),
+        ),
+        Positioned(
+          top: 4,
+          right: 4,
+          child: GestureDetector(
+            onTap: () => setState(() => _images.removeAt(i)),
+            behavior: HitTestBehavior.opaque,
+            child: Container(
+              padding: const EdgeInsets.all(2),
+              decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+              child: const Icon(Icons.close, size: 15, color: Colors.white),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _mediaButton(IconData icon, String label, VoidCallback onTap) {
     return OutlinedButton.icon(
       onPressed: onTap,
@@ -239,17 +284,20 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   }
 
   Future<void> _submit() async {
-    if (_image == null && _bodyCtrl.text.trim().isEmpty) return;
+    if (_images.isEmpty && _bodyCtrl.text.trim().isEmpty) return;
     setState(() {
       _busy = true;
       _error = null;
     });
     try {
       final api = ref.read(apiProvider);
-      if (_image != null) {
-        final mediaId = await api.uploadImage(_image!.path);
+      if (_images.isNotEmpty) {
+        final ids = <int>[];
+        for (final x in _images) {
+          ids.add(await api.uploadImage(x.path));
+        }
         await api.createPost(
-            kind: 'image', body: _bodyCtrl.text.trim(), mediaId: mediaId, location: _location);
+            kind: 'image', body: _bodyCtrl.text.trim(), mediaIds: ids, location: _location);
       } else {
         await api.createPost(kind: 'text', body: _bodyCtrl.text.trim());
       }
@@ -270,7 +318,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   @override
   Widget build(BuildContext context) {
     final me = ref.watch(sessionProvider).user;
-    final hasContent = _bodyCtrl.text.trim().isNotEmpty || _image != null;
+    final hasContent = _bodyCtrl.text.trim().isNotEmpty || _images.isNotEmpty;
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
 
     return Padding(
@@ -335,22 +383,20 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
             ),
           ),
           const SizedBox(height: 14),
-          // Image preview
-          if (_image != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(12),
-                child: Image.file(
-                  File(_image!.path),
-                  height: 160,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
-                ),
+          // Image previews — a removable thumbnail strip.
+          if (_images.isNotEmpty)
+            SizedBox(
+              height: 100,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                itemCount: _images.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (_, i) => _thumb(i),
               ),
             ),
-          // Detected location (read from the photo, removable before posting)
-          if (_image != null && (_resolvingLocation || _location != null))
+          // Detected location (read from the photos, removable before posting)
+          if (_images.isNotEmpty && (_resolvingLocation || _location != null))
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
               child: Row(
@@ -415,13 +461,12 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
             child: Row(
               children: [
                 Expanded(
-                  child: _mediaButton(Icons.image_outlined, _image == null ? 'Photo' : 'Change',
-                      () => _pickImage(ImageSource.gallery)),
+                  child: _mediaButton(Icons.image_outlined, _images.isEmpty ? 'Photos' : 'Add more',
+                      _pickFromGallery),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: _mediaButton(
-                      Icons.photo_camera_outlined, 'Camera', () => _pickImage(ImageSource.camera)),
+                  child: _mediaButton(Icons.photo_camera_outlined, 'Camera', _takePhoto),
                 ),
               ],
             ),
