@@ -19,6 +19,9 @@ String _relativeTime(DateTime dt) {
   return DateFormat.MMMd().format(dt.toLocal());
 }
 
+/// The exact local date + time, for the long-press tooltip on a relative timestamp.
+String _fullLocalTime(DateTime dt) => DateFormat('MMM d, y · h:mm a').format(dt.toLocal());
+
 /// PostDetailScreen shows a single post with its full comment thread and a composer.
 class PostDetailScreen extends ConsumerStatefulWidget {
   const PostDetailScreen({super.key, required this.postId});
@@ -269,8 +272,11 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                     style: const TextStyle(
                         color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 15)),
                 const SizedBox(height: 2),
-                Text(_relativeTime(post.createdAt),
-                    style: const TextStyle(color: kFgMuted, fontSize: 12)),
+                Tooltip(
+                  message: _fullLocalTime(post.createdAt),
+                  child: Text(_relativeTime(post.createdAt),
+                      style: const TextStyle(color: kFgMuted, fontSize: 12)),
+                ),
               ],
             ),
           ),
@@ -307,8 +313,11 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                               color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 13)),
                     ),
                     const SizedBox(width: 8),
-                    Text(_relativeTime(c.createdAt),
-                        style: const TextStyle(color: kFgMuted, fontSize: 11)),
+                    Tooltip(
+                      message: _fullLocalTime(c.createdAt),
+                      child: Text(_relativeTime(c.createdAt),
+                          style: const TextStyle(color: kFgMuted, fontSize: 11)),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 2),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
+import 'package:intl/intl.dart';
 
 import '../../api/models.dart';
 import '../../state/app_state.dart';
@@ -25,6 +26,9 @@ String _relativeTime(DateTime dt) {
   if (diff.inHours < 24) return '${diff.inHours}h';
   return '${diff.inDays}d';
 }
+
+/// The exact local date + time, for the long-press tooltip on a relative timestamp.
+String fullLocalTime(DateTime dt) => DateFormat('MMM d, y · h:mm a').format(dt.toLocal());
 
 /// PostCard renders one post in the feed with the design-system dark card style.
 class PostCard extends ConsumerStatefulWidget {
@@ -218,9 +222,12 @@ class _PostCardState extends ConsumerState<PostCard> {
                     ),
                   ),
                 ),
-                Text(
-                  _relativeTime(p.createdAt),
-                  style: const TextStyle(color: _fgMuted, fontSize: 12),
+                Tooltip(
+                  message: fullLocalTime(p.createdAt),
+                  child: Text(
+                    _relativeTime(p.createdAt),
+                    style: const TextStyle(color: _fgMuted, fontSize: 12),
+                  ),
                 ),
                 // ⋯ menu: Save photo on any image post; Delete only for the author.
                 if ((me != null && me.id == p.authorId) || (p.kind == 'image' && p.mediaId != null))
