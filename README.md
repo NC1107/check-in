@@ -2,6 +2,14 @@
   <img src="docs/assets/banner.png" alt="Check-In" width="660">
 </p>
 
+<!-- social-badges:start -->
+<p align="center">
+  <a href="https://discord.gg/jUMuSxGf6q"><img src="https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="https://github.com/NC1107"><img src="https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white" alt="GitHub"></a>
+  <a href="https://patreon.com/NPC1107"><img src="https://img.shields.io/badge/Patreon-F96854?logo=patreon&logoColor=white" alt="Patreon"></a>
+</p>
+<!-- social-badges:end -->
+
 My solution for a way to check in with friends without selling my soul to monopolies
 or getting stuck doomscrolling. As the admin you whitelist your people by giving the app access to selected contacts.
 It stores their numbers on **your** server, and those people can sign up once you've
