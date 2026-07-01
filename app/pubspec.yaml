@@ -16,7 +16,7 @@ dependencies:
   flutter_secure_storage: ^9.2.2
   shared_preferences: ^2.3.2
   url_launcher: ^6.3.1      # open the self-hosting setup guide on GitHub
-  image_picker: ^1.1.2
+  image_picker: ^1.2.3
   flutter_image_compress: ^2.3.0  # transcode HEIC→JPEG + downscale photos before upload
   native_exif: ^0.6.0      # read a picked photo's GPS (on-device)
   geocoding: ^4.0.0        # reverse-geocode lat/lng → "City, Country" (on-device)
