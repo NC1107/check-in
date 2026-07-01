@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../state/app_state.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
+import 'phone_field.dart';
 
 /// Redeem a host-issued recovery code to set a new password. On success pops with the
 /// AuthResult so the caller can sign in. Assumes the server is already connected.
@@ -18,11 +19,22 @@ class ResetPasswordScreen extends ConsumerStatefulWidget {
 }
 
 class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
-  late final _phone = TextEditingController(text: widget.initialPhone);
+  late Country _country;
+  late final TextEditingController _phone;
   final _code = TextEditingController();
   final _password = TextEditingController();
   bool _busy = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    // The caller passes a stored "+[cc][national]" number; split it back so the
+    // country selector and the national field prefill correctly.
+    final parsed = splitE164(widget.initialPhone);
+    _country = parsed.country;
+    _phone = TextEditingController(text: parsed.national);
+  }
 
   @override
   void dispose() {
@@ -32,8 +44,13 @@ class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
     super.dispose();
   }
 
-  bool get _canSubmit =>
-      _phone.text.trim().length >= 7 && _code.text.trim().isNotEmpty && _password.text.length >= 8;
+  String get _fullPhone => '+${_country.dialCode}${_phone.text.replaceAll(RegExp(r'\D'), '')}';
+
+  bool get _canSubmit {
+    final nat = _phone.text.replaceAll(RegExp(r'\D'), '');
+    final phoneValid = nat.length >= _country.minLen && nat.length <= _country.maxLen;
+    return phoneValid && _code.text.trim().isNotEmpty && _password.text.length >= 8;
+  }
 
   Future<void> _submit() async {
     setState(() {
@@ -42,7 +59,7 @@ class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
     });
     try {
       final res = await ref.read(apiProvider).resetPassword(
-            phone: _phone.text.trim(),
+            phone: _fullPhone,
             code: _code.text.trim(),
             newPassword: _password.text,
           );
@@ -79,10 +96,14 @@ class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
           ),
           const SizedBox(height: 22),
           const FieldLabel('Phone number'),
-          AppTextField(
+          PhoneField(
             controller: _phone,
-            hint: 'Your number',
-            keyboardType: TextInputType.phone,
+            country: _country,
+            onCountryChanged: (c) => setState(() {
+              _country = c;
+              final nat = _phone.text.replaceAll(RegExp(r'\D'), '');
+              _phone.text = nat.length > c.maxLen ? nat.substring(0, c.maxLen) : nat;
+            }),
             onChanged: (_) => setState(() {}),
           ),
           const SizedBox(height: 16),

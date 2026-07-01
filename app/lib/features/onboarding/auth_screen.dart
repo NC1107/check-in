@@ -16,6 +16,7 @@ import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
+import 'phone_field.dart';
 import 'reset_password_screen.dart';
 import '../admin/contacts_picker_screen.dart';
 
@@ -53,7 +54,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   bool _loginMode = false; // entered when the number already has an account
 
   final _server = TextEditingController();
-  final _phone = TextEditingController();
+  final _phone = TextEditingController(); // national number only; country code is separate
+  Country _country = kDefaultCountry;
   final _firstName = TextEditingController();
   final _lastName = TextEditingController();
   final _displayName = TextEditingController();
@@ -200,6 +202,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   // --- actions ---
 
+  /// The full E.164-style number sent to the server: "+[dialCode][national digits]".
+  /// The server strips formatting, so the leading "+" and the separate country code
+  /// keep a US number like "+12025550186" unambiguous regardless of how it was typed.
+  String get _fullPhone => '+${_country.dialCode}${_phone.text.replaceAll(RegExp(r'\D'), '')}';
+
   /// Normalizes a typed server address into a base URL (https:// by default, no trailing
   /// slash). Returns null when blank.
   String? _normalizeServer(String raw) {
@@ -243,7 +250,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     });
     try {
       if (!await _ensureServer()) return;
-      final res = await ref.read(apiProvider).checkPhone(_phone.text.trim());
+      final res = await ref.read(apiProvider).checkPhone(_fullPhone);
       if (res.registered) {
         setState(() => _loginMode = true); // existing account → reveal the password field
       } else if (res.allowed) {
@@ -271,8 +278,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     });
     try {
       if (!await _ensureServer()) return;
-      final res =
-          await ref.read(apiProvider).login(phone: _phone.text.trim(), password: _password.text);
+      final res = await ref.read(apiProvider).login(phone: _fullPhone, password: _password.text);
       await ref.read(sessionProvider.notifier).signIn(res.token, res.user);
     } on DioException catch (e) {
       setState(() => _error = _msg(e, 'Incorrect phone or password.'));
@@ -288,7 +294,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     if (!connected || !mounted) return;
     final res = await Navigator.of(context).push<AuthResult>(
       MaterialPageRoute(
-        builder: (_) => ResetPasswordScreen(initialPhone: _phone.text.trim()),
+        builder: (_) => ResetPasswordScreen(initialPhone: _fullPhone),
       ),
     );
     if (res != null && mounted) {
@@ -310,7 +316,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       // Sign up first — this is unauthenticated and returns the token. We can't upload the
       // photo beforehand because media upload requires auth (chicken-and-egg).
       var res = await api.signup(
-        phone: _phone.text.trim(),
+        phone: _fullPhone,
         firstName: _firstName.text.trim(),
         lastName: _lastName.text.trim(),
         displayName: _displayName.text.trim(),
@@ -490,11 +496,12 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   // ---- Step: entry (server + phone → login / signup) ----
 
   Widget _entryStep() {
-    final digits = _phone.text.replaceAll(RegExp(r'\D'), '');
+    final natDigits = _phone.text.replaceAll(RegExp(r'\D'), '');
+    final phoneValid = natDigits.length >= _country.minLen && natDigits.length <= _country.maxLen;
     final hasServer = _server.text.trim().isNotEmpty;
     final canSubmit = _loginMode
-        ? (hasServer && digits.length >= 7 && _password.text.isNotEmpty)
-        : (hasServer && digits.length >= 7);
+        ? (hasServer && phoneValid && _password.text.isNotEmpty)
+        : (hasServer && phoneValid);
 
     return _StepScaffold(
       footer: Column(
@@ -572,11 +579,17 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         ),
         const SizedBox(height: 10),
         const FieldLabel('Phone number'),
-        AppTextField(
+        PhoneField(
           controller: _phone,
-          hint: '(415) 555-0148',
-          keyboardType: TextInputType.phone,
-          inputFormatters: [_PhoneFormatter()],
+          country: _country,
+          onCountryChanged: (c) => setState(() {
+            _country = c;
+            // Strip prior formatting and cap to the new country's max length so a
+            // half-typed US number can't linger as an invalid other-country number.
+            final nat = _phone.text.replaceAll(RegExp(r'\D'), '');
+            _phone.text = nat.length > c.maxLen ? nat.substring(0, c.maxLen) : nat;
+            _phoneError = null;
+          }),
           errorText: _phoneError,
           onChanged: (_) => setState(() => _phoneError = null),
         ),
@@ -939,31 +952,4 @@ String _msg(DioException e, String fallback) {
   final data = e.response?.data;
   if (data is Map && data['error'] is String) return data['error'] as String;
   return fallback;
-}
-
-/// Formats a US-style number as "(123) 456-7890" while typing. Numbers longer than 10
-/// digits (i.e. an explicit country code) are shown as "+digits" so international users
-/// aren't blocked. The server strips formatting on its end.
-class _PhoneFormatter extends TextInputFormatter {
-  @override
-  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
-    final digits = newValue.text.replaceAll(RegExp(r'\D'), '');
-    String text;
-    if (digits.length <= 10) {
-      final b = StringBuffer();
-      for (var i = 0; i < digits.length; i++) {
-        if (i == 0) b.write('(');
-        if (i == 3) b.write(') ');
-        if (i == 6) b.write('-');
-        b.write(digits[i]);
-      }
-      text = b.toString();
-    } else {
-      text = '+$digits';
-    }
-    return TextEditingValue(
-      text: text,
-      selection: TextSelection.collapsed(offset: text.length),
-    );
-  }
 }
