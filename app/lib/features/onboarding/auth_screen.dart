@@ -504,38 +504,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         : (hasServer && phoneValid);
 
     return _StepScaffold(
-      footer: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          PrimaryButton(
-            label: _loginMode ? 'Log in' : 'Continue',
-            enabled: canSubmit && !_busy,
-            busy: _busy,
-            onTap: _loginMode ? _login : _continue,
-          ),
-          const SizedBox(height: 14),
-          // Explicit path between login and join so returning members aren't stuck.
-          GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => setState(() {
-              _loginMode = !_loginMode;
-              _error = null;
-              _phoneError = null;
-            }),
-            child: Text.rich(
-              TextSpan(
-                style: const TextStyle(color: _fgMuted, fontSize: 13),
-                children: [
-                  TextSpan(text: _loginMode ? 'New here?  ' : 'Already have an account?  '),
-                  TextSpan(
-                    text: _loginMode ? 'Join' : 'Log in',
-                    style: TextStyle(color: context.accent, fontWeight: FontWeight.w700),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
+      footer: PrimaryButton(
+        label: _loginMode ? 'Log in' : 'Continue',
+        enabled: canSubmit && !_busy,
+        busy: _busy,
+        onTap: _loginMode ? _login : _continue,
       ),
       children: [
         Image.asset('assets/logo/echo-rings.png', width: 52, height: 52),
@@ -544,14 +517,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           _loginMode ? 'Welcome back' : 'Connect to Check-In',
           style: const TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 22),
         ),
-        const SizedBox(height: 8),
-        Text(
-          _loginMode
-              ? 'Enter your server, number, and password to sign back in.'
-              : 'Enter your server address and phone number to log in or join.',
-          style: const TextStyle(color: _fgSecondary, fontSize: 14, height: 1.5),
-        ),
-        const SizedBox(height: 22),
+        const SizedBox(height: 24),
         const FieldLabel('Server address'),
         AppTextField(
           controller: _server,
@@ -564,19 +530,21 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             _serverError = null;
           }),
         ),
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton(
-            onPressed: _showSelfHostInfo,
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.only(top: 6),
-              minimumSize: Size.zero,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        if (!_loginMode)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: _showSelfHostInfo,
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.only(top: 6),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Text("Don't have a server? Set one up",
+                  style:
+                      TextStyle(color: context.accent, fontSize: 13, fontWeight: FontWeight.w600)),
             ),
-            child: Text("Don't have a server? Set one up",
-                style: TextStyle(color: context.accent, fontSize: 13, fontWeight: FontWeight.w600)),
           ),
-        ),
         const SizedBox(height: 10),
         const FieldLabel('Phone number'),
         PhoneField(
@@ -615,23 +583,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   style:
                       TextStyle(color: context.accent, fontSize: 13, fontWeight: FontWeight.w600)),
             ),
-          ),
-        ],
-        if (!_loginMode && _phoneError == null) ...[
-          const SizedBox(height: 16),
-          const Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(Icons.info_outline, size: 17, color: _fgMuted),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  "New invitees set up a profile; returning members tap “Log in”. Not on the "
-                  "list? Ask whoever set up the server to add your number.",
-                  style: TextStyle(color: _fgMuted, fontSize: 12, height: 1.5),
-                ),
-              ),
-            ],
           ),
         ],
         if (_error != null) _errorRow(_error!),
