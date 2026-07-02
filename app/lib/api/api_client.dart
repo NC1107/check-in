@@ -325,6 +325,35 @@ class ApiClient {
 
   Future<void> revokeUser(int id) => _dio.delete('/api/admin/users/$id');
 
+  // ---- reports ----
+
+  Future<void> reportPost(int postId, String reason) =>
+      _dio.post('/api/posts/$postId/report', data: {'reason': reason});
+
+  Future<List<ContentReport>> adminListReports() async {
+    final r = await _dio.get('/api/admin/reports');
+    return ((r.data as Map<String, dynamic>)['reports'] as List? ?? [])
+        .map((e) => ContentReport.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<void> adminDismissReport(int reportId) => _dio.delete('/api/admin/reports/$reportId');
+
+  // ---- blocks ----
+
+  Future<bool> isBlocked(int userId) async {
+    final r = await _dio.get('/api/me/blocks/$userId');
+    return (r.data as Map<String, dynamic>)['blocked'] as bool? ?? false;
+  }
+
+  Future<void> blockUser(int userId) => _dio.post('/api/me/blocks/$userId');
+
+  Future<void> unblockUser(int userId) => _dio.delete('/api/me/blocks/$userId');
+
+  // ---- account deletion ----
+
+  Future<void> deleteAccount() => _dio.delete('/api/me');
+
   /// issueResetCode (admin) generates a single-use recovery code for a member to relay to
   /// them out-of-band; they redeem it with [resetPassword].
   Future<({String code, String name, DateTime expiresAt})> issueResetCode(int userId) async {

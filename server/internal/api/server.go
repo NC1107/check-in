@@ -78,6 +78,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/me", s.handleMe)
 		r.Patch("/api/me", s.handleUpdateMe)
 		r.Put("/api/me/photo", s.handleSetProfilePhoto)
+		r.Delete("/api/me", s.handleDeleteAccount)
 
 		r.Post("/api/me/devices", s.handleRegisterDevice)
 		r.Delete("/api/me/devices", s.handleUnregisterDevice)
@@ -99,6 +100,13 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/posts/{id}/comments", s.handleListComments)
 		r.Post("/api/posts/{id}/comments", s.handleAddComment)
 
+		r.Post("/api/posts/{id}/report", s.handleReportPost)
+
+		r.Get("/api/me/blocks", s.handleListBlocks)
+		r.Get("/api/me/blocks/{id}", s.handleGetBlockStatus)
+		r.Post("/api/me/blocks/{id}", s.handleBlockUser)
+		r.Delete("/api/me/blocks/{id}", s.handleUnblockUser)
+
 		r.Get("/api/birthdays/upcoming", s.handleUpcomingBirthdays)
 
 		r.Post("/api/media", s.handleUploadMedia)
@@ -113,6 +121,8 @@ func (s *Server) Router() http.Handler {
 			r.Get("/api/admin/users", s.handleAdminListUsers)
 			r.Delete("/api/admin/users/{id}", s.handleAdminRevokeUser)
 			r.Post("/api/admin/users/{id}/reset-code", s.handleAdminIssueResetCode)
+			r.Get("/api/admin/reports", s.handleAdminListReports)
+			r.Delete("/api/admin/reports/{id}", s.handleAdminDismissReport)
 		})
 	})
 

@@ -672,6 +672,8 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 		       OR ($6::bigint IS NULL AND p.created_at < $4)
 		       OR ($6::bigint IS NOT NULL AND (p.created_at, p.id) < ($4, $6)))
 		  AND u.status = 'active'
+		  AND p.author_id NOT IN (
+		      SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)
 		ORDER BY p.created_at DESC, p.id DESC
 		LIMIT $5`, viewerID, authorID, location, before, limit, beforeID)
 	if err != nil {
@@ -994,6 +996,225 @@ func (d *DB) ListComments(ctx context.Context, postID int64) ([]Comment, error) 
 		comments = append(comments, c)
 	}
 	return comments, rows.Err()
+}
+
+// ---- blocks ----
+
+// BlockUser records that blocker wants to hide blocked's content from their feed.
+// Silently ignored if the block already exists.
+func (d *DB) BlockUser(ctx context.Context, blockerID, blockedID int64) error {
+	_, err := d.Pool.Exec(ctx,
+		`INSERT INTO user_blocks (blocker_id, blocked_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+		blockerID, blockedID)
+	return err
+}
+
+// UnblockUser removes a block. No-ops if it didn't exist.
+func (d *DB) UnblockUser(ctx context.Context, blockerID, blockedID int64) error {
+	_, err := d.Pool.Exec(ctx,
+		`DELETE FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2`, blockerID, blockedID)
+	return err
+}
+
+// IsBlocked reports whether blockerID has blocked blockedID.
+func (d *DB) IsBlocked(ctx context.Context, blockerID, blockedID int64) (bool, error) {
+	var ok bool
+	err := d.Pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2)`,
+		blockerID, blockedID).Scan(&ok)
+	return ok, err
+}
+
+// ListBlockedIDs returns the ids of all users blocked by blockerID.
+func (d *DB) ListBlockedIDs(ctx context.Context, blockerID int64) ([]int64, error) {
+	rows, err := d.Pool.Query(ctx,
+		`SELECT blocked_id FROM user_blocks WHERE blocker_id = $1 ORDER BY created_at DESC`, blockerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// ---- content reports ----
+
+// ReportPost stores a member's flag on a post.
+func (d *DB) ReportPost(ctx context.Context, reporterID, postID int64, reason string) error {
+	_, err := d.Pool.Exec(ctx,
+		`INSERT INTO content_reports (reporter_id, post_id, reason) VALUES ($1, $2, $3)`,
+		reporterID, postID, reason)
+	return err
+}
+
+// ReportComment stores a member's flag on a comment.
+func (d *DB) ReportComment(ctx context.Context, reporterID, commentID int64, reason string) error {
+	_, err := d.Pool.Exec(ctx,
+		`INSERT INTO content_reports (reporter_id, comment_id, reason) VALUES ($1, $2, $3)`,
+		reporterID, commentID, reason)
+	return err
+}
+
+// ListReports returns all open (non-dismissed) reports with joined context for the admin.
+func (d *DB) ListReports(ctx context.Context) ([]ContentReport, error) {
+	rows, err := d.Pool.Query(ctx, `
+		SELECT
+			cr.id, cr.reporter_id, ru.name,
+			cr.post_id, cr.comment_id,
+			cr.reason, cr.dismissed, cr.created_at,
+			COALESCE(p.body, c.body, '') AS content_body,
+			COALESCE(pu.name, cu.name, '') AS author_name
+		FROM content_reports cr
+		JOIN users ru ON ru.id = cr.reporter_id
+		LEFT JOIN posts p ON p.id = cr.post_id
+		LEFT JOIN users pu ON pu.id = p.author_id
+		LEFT JOIN comments c ON c.id = cr.comment_id
+		LEFT JOIN users cu ON cu.id = c.user_id
+		WHERE cr.dismissed = FALSE
+		ORDER BY cr.created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ContentReport
+	for rows.Next() {
+		var r ContentReport
+		if err := rows.Scan(&r.ID, &r.ReporterID, &r.ReporterName,
+			&r.PostID, &r.CommentID,
+			&r.Reason, &r.Dismissed, &r.CreatedAt,
+			&r.ContentBody, &r.AuthorName); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// DismissReport marks a report as handled (dismissed by the admin).
+func (d *DB) DismissReport(ctx context.Context, reportID int64) error {
+	ct, err := d.Pool.Exec(ctx, `UPDATE content_reports SET dismissed = TRUE WHERE id = $1`, reportID)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ---- account deletion ----
+
+// DeleteAccount permanently removes a user and all their content. Returns the file paths
+// of any media that became orphaned so the caller can remove them from disk.
+func (d *DB) DeleteAccount(ctx context.Context, userID int64) ([]string, error) {
+	tx, err := d.Pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Collect media owned by this user so we can check for orphans after deletion.
+	mediaRows, err := tx.Query(ctx, `SELECT id FROM media WHERE owner_id = $1`, userID)
+	if err != nil {
+		return nil, err
+	}
+	var mediaIDs []int64
+	for mediaRows.Next() {
+		var id int64
+		if err := mediaRows.Scan(&id); err != nil {
+			mediaRows.Close()
+			return nil, err
+		}
+		mediaIDs = append(mediaIDs, id)
+	}
+	mediaRows.Close()
+	if err := mediaRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Remove auth + notification data.
+	for _, sql := range []string{
+		`DELETE FROM sessions WHERE user_id = $1`,
+		`DELETE FROM device_tokens WHERE user_id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, sql, userID); err != nil {
+			return nil, err
+		}
+	}
+
+	// Remove engagement from other people's content.
+	for _, sql := range []string{
+		`DELETE FROM likes WHERE user_id = $1`,
+		`DELETE FROM comments WHERE user_id = $1`,
+		`DELETE FROM post_people WHERE user_id = $1`,
+		`DELETE FROM user_blocks WHERE blocker_id = $1 OR blocked_id = $1`,
+		`DELETE FROM content_reports WHERE reporter_id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, sql, userID); err != nil {
+			return nil, err
+		}
+	}
+
+	// Collect posts before deleting them (for media cleanup).
+	postRows, err := tx.Query(ctx, `SELECT id FROM posts WHERE author_id = $1`, userID)
+	if err != nil {
+		return nil, err
+	}
+	var postIDs []int64
+	for postRows.Next() {
+		var id int64
+		if err := postRows.Scan(&id); err != nil {
+			postRows.Close()
+			return nil, err
+		}
+		postIDs = append(postIDs, id)
+	}
+	postRows.Close()
+	if err := postRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Collect post media ids for orphan check.
+	for _, pid := range postIDs {
+		more, err := collectPostMedia(ctx, tx, pid)
+		if err != nil {
+			return nil, err
+		}
+		mediaIDs = append(mediaIDs, more...)
+	}
+
+	// Delete posts (cascades to post_media, post_people, likes, comments on those posts).
+	if _, err := tx.Exec(ctx, `DELETE FROM posts WHERE author_id = $1`, userID); err != nil {
+		return nil, err
+	}
+
+	// Remove from the allowlist so the phone can't be re-used without re-invite.
+	if _, err := tx.Exec(ctx, `DELETE FROM allowed_phones WHERE phone = (SELECT phone FROM users WHERE id = $1)`, userID); err != nil {
+		return nil, err
+	}
+
+	// Delete the user record itself.
+	if _, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID); err != nil {
+		return nil, err
+	}
+
+	// Clean up orphaned media files.
+	paths, err := deleteOrphanMedia(ctx, tx, mediaIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return paths, nil
 }
 
 // ---- birthdays ----

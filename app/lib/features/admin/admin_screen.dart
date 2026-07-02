@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 
 import '../../api/models.dart';
 import '../../state/app_state.dart';
@@ -22,6 +23,7 @@ class AdminScreen extends ConsumerStatefulWidget {
 class _AdminScreenState extends ConsumerState<AdminScreen> {
   late Future<List<Invite>> _invites;
   late Future<List<User>> _users;
+  late Future<List<ContentReport>> _reports;
   final _phonesCtrl = TextEditingController();
   bool _uploading = false;
 
@@ -30,6 +32,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
     super.initState();
     _invites = ref.read(apiProvider).adminListAllowed();
     _users = ref.read(apiProvider).adminListUsers();
+    _reports = ref.read(apiProvider).adminListReports();
   }
 
   @override
@@ -40,6 +43,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
 
   void _refreshInvites() => setState(() => _invites = ref.read(apiProvider).adminListAllowed());
   void _refreshUsers() => setState(() => _users = ref.read(apiProvider).adminListUsers());
+  void _refreshReports() => setState(() => _reports = ref.read(apiProvider).adminListReports());
 
   /// Parse the free-text field into phone numbers separated by newlines, commas, or
   /// semicolons.
@@ -118,6 +122,8 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
         children: [
           _addCard(),
+          const SizedBox(height: 22),
+          _reportsSection(),
           const SizedBox(height: 22),
           _invitesSection(),
           const SizedBox(height: 22),
@@ -415,6 +421,113 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
       await ref.read(apiProvider).revokeUser(u.id);
       _refreshUsers();
     }
+  }
+
+  // ---- content reports ----
+
+  Widget _reportsSection() {
+    return FutureBuilder<List<ContentReport>>(
+      future: _reports,
+      builder: (context, snap) {
+        final reports = snap.data ?? [];
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _sectionHeader(
+              'Content reports',
+              snap.connectionState == ConnectionState.waiting
+                  ? null
+                  : reports.isEmpty
+                      ? 'none'
+                      : '${reports.length} open',
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Members flag content here. Review each report and dismiss it once actioned '
+              '(delete the post or remove the member from the Members section below).',
+              style: TextStyle(color: kFgMuted, fontSize: 12, height: 1.5),
+            ),
+            const SizedBox(height: 10),
+            if (snap.connectionState == ConnectionState.waiting)
+              _loading()
+            else if (snap.hasError)
+              _hint('Could not load reports.')
+            else if (reports.isEmpty)
+              _hint('No open reports. If a member flags content it will appear here.')
+            else
+              _panel(
+                padded: false,
+                child: Column(
+                  children: [
+                    for (var i = 0; i < reports.length; i++) ...[
+                      if (i > 0) const Divider(height: 1, color: kBorder),
+                      _reportRow(reports[i]),
+                    ],
+                  ],
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _reportRow(ContentReport r) {
+    final kind = r.postId != null ? 'Post' : 'Comment';
+    final date = DateFormat.yMMMd().format(r.createdAt.toLocal());
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.flag_outlined, size: 20, color: kLike),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('$kind by ${r.authorName}',
+                    style: const TextStyle(
+                        color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 13)),
+                if (r.contentBody.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      r.contentBody,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: kFgSecondary, fontSize: 12, height: 1.4),
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Reported by ${r.reporterName} · ${r.reason} · $date',
+                    style: const TextStyle(color: kFgMuted, fontSize: 11),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: () async {
+              try {
+                await ref.read(apiProvider).adminDismissReport(r.id);
+                _refreshReports();
+              } catch (_) {
+                _snack('Could not dismiss report.');
+              }
+            },
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text('Dismiss', style: TextStyle(fontSize: 12)),
+          ),
+        ],
+      ),
+    );
   }
 
   // ---- shared bits ----

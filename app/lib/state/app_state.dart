@@ -166,3 +166,28 @@ final feedProvider = FutureProvider.autoDispose<List<Post>>((ref) {
 final locationsProvider = FutureProvider.autoDispose<List<({String location, int count})>>((ref) {
   return ref.watch(apiProvider).locations();
 });
+
+const _kTermsAccepted = 'terms_accepted';
+
+/// Tracks whether the user has accepted the in-app terms of service. Checked before
+/// the auth screen so the EULA is presented on first launch (Apple Guideline 1.2).
+class TermsController extends StateNotifier<bool> {
+  TermsController() : super(false) {
+    _load();
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    state = prefs.getBool(_kTermsAccepted) ?? false;
+  }
+
+  Future<void> accept() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kTermsAccepted, true);
+    state = true;
+  }
+}
+
+final termsProvider = StateNotifierProvider<TermsController, bool>(
+  (ref) => TermsController(),
+);

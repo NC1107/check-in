@@ -82,3 +82,17 @@ type Birthday struct {
 	Month  int    `json:"month"`
 	Day    int    `json:"day"`
 }
+
+// ContentReport is a member's flag on objectionable content, visible to the admin.
+type ContentReport struct {
+	ID           int64     `json:"id"`
+	ReporterID   int64     `json:"reporterId"`
+	ReporterName string    `json:"reporterName,omitempty"`
+	PostID       *int64    `json:"postId,omitempty"`
+	CommentID    *int64    `json:"commentId,omitempty"`
+	Reason       string    `json:"reason"`
+	Dismissed    bool      `json:"dismissed"`
+	ContentBody  string    `json:"contentBody,omitempty"` // preview of the reported content
+	AuthorName   string    `json:"authorName,omitempty"`  // author of the reported content
+	CreatedAt    time.Time `json:"createdAt"`
+}

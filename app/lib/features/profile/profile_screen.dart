@@ -32,11 +32,13 @@ class ProfileScreen extends ConsumerStatefulWidget {
 
 class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   late Future<(User, List<Post>)> _future;
+  bool? _isBlocked; // null = not yet loaded
 
   @override
   void initState() {
     super.initState();
     _future = _load();
+    if (!widget.isSelf) _loadBlockStatus();
   }
 
   Future<(User, List<Post>)> _load() async {
@@ -46,7 +48,75 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     return (user, posts);
   }
 
+  Future<void> _loadBlockStatus() async {
+    try {
+      final blocked = await ref.read(apiProvider).isBlocked(widget.userId);
+      if (mounted) setState(() => _isBlocked = blocked);
+    } catch (_) {}
+  }
+
   void _reload() => setState(() => _future = _load());
+
+  Future<void> _toggleBlock() async {
+    final currently = _isBlocked ?? false;
+    final api = ref.read(apiProvider);
+    try {
+      if (currently) {
+        await api.unblockUser(widget.userId);
+      } else {
+        await api.blockUser(widget.userId);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('User blocked. Their posts will no longer appear in your feed.')));
+        }
+      }
+      if (mounted) setState(() => _isBlocked = !currently);
+      // Refresh the feed so blocked posts disappear immediately.
+      ref.invalidate(feedProvider);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not update block status. Try again.')));
+      }
+    }
+  }
+
+  Future<void> _deleteAccount() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kBgSurface,
+        title: const Text('Delete your account?',
+            style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700)),
+        content: const Text(
+          'This permanently deletes your account, all your check-ins, comments, and profile. '
+          'This cannot be undone.',
+          style: TextStyle(color: kFgSecondary, fontSize: 14, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: kFgSecondary)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: kLike, foregroundColor: Colors.white),
+            child: const Text('Delete forever'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      await ref.read(apiProvider).deleteAccount();
+      await ref.read(sessionProvider.notifier).signOut();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Could not delete account. Try again.')));
+      }
+    }
+  }
 
   Future<void> _editProfile(User user) async {
     final updated = await showModalBottomSheet<User>(
@@ -233,6 +303,41 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 ],
               ],
             ),
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: _deleteAccount,
+              icon: const Icon(Icons.delete_forever_outlined, size: 18, color: kLike),
+              label: const Text('Delete account', style: TextStyle(color: kLike)),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: kLike),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                minimumSize: const Size.fromHeight(0),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ] else ...[
+            // Block / Unblock for other members' profiles.
+            if (_isBlocked != null) ...[
+              const SizedBox(height: 18),
+              OutlinedButton.icon(
+                onPressed: _toggleBlock,
+                icon: Icon(
+                  _isBlocked! ? Icons.person_add_outlined : Icons.person_off_outlined,
+                  size: 18,
+                  color: _isBlocked! ? kFgSecondary : kLike,
+                ),
+                label: Text(
+                  _isBlocked! ? 'Unblock' : 'Block',
+                  style: TextStyle(color: _isBlocked! ? kFgSecondary : kLike),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: _isBlocked! ? kBorder : kLike),
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  minimumSize: const Size.fromHeight(0),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ],
           ],
         ],
       ),

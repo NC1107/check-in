@@ -11,6 +11,15 @@ import '../../widgets/post_image_carousel.dart';
 import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
 
+// Report reasons shown in the bottom sheet.
+const _reportReasons = [
+  'Inappropriate or offensive content',
+  'Harassment or bullying',
+  'Spam',
+  'False information',
+  'Other',
+];
+
 // Theme tokens (centralized in theme/tokens.dart).
 const _bgSurface = kBgSurface;
 const _border = kBorder;
@@ -29,6 +38,52 @@ String _relativeTime(DateTime dt) {
 
 /// The exact local date + time, for the long-press tooltip on a relative timestamp.
 String fullLocalTime(DateTime dt) => DateFormat('MMM d, y · h:mm a').format(dt.toLocal());
+
+/// Bottom sheet letting the user pick a reason before submitting a report. Pops the
+/// selected reason string, or null when dismissed.
+class _ReportSheet extends StatelessWidget {
+  const _ReportSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const SizedBox(height: 10),
+        Container(
+          width: 40,
+          height: 4,
+          decoration: BoxDecoration(color: _border, borderRadius: BorderRadius.circular(2)),
+        ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(20, 18, 20, 6),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text('Report this post',
+                style: TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 17)),
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text('The admin will review your report within 24 hours.',
+                style: TextStyle(color: _fgMuted, fontSize: 13)),
+          ),
+        ),
+        const Divider(color: _border, height: 1),
+        ..._reportReasons.map(
+          (r) => ListTile(
+            title: Text(r, style: const TextStyle(color: _fgPrimary, fontSize: 15)),
+            trailing: const Icon(Icons.chevron_right, color: _fgMuted, size: 20),
+            onTap: () => Navigator.of(context).pop(r),
+          ),
+        ),
+        SizedBox(height: MediaQuery.of(context).padding.bottom + 12),
+      ],
+    );
+  }
+}
 
 /// PostCard renders one post in the feed with the design-system dark card style.
 class PostCard extends ConsumerStatefulWidget {
@@ -71,6 +126,24 @@ class _PostCardState extends ConsumerState<PostCard> {
   void dispose() {
     _commentCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _reportPost() async {
+    final reason = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: _bgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (_) => const _ReportSheet(),
+    );
+    if (reason == null || !mounted) return;
+    try {
+      await ref.read(apiProvider).reportPost(widget.post.id, reason);
+      if (mounted) _snack('Report sent. The admin will review it.');
+    } catch (_) {
+      if (mounted) _snack('Could not send report. Try again.');
+    }
   }
 
   Future<void> _confirmDelete() async {
@@ -257,49 +330,61 @@ class _PostCardState extends ConsumerState<PostCard> {
                     ),
                   ),
                 ),
-                // ⋯ menu: Save photo on any image post; Delete only for the author.
-                if ((me != null && me.id == p.authorId) || (p.kind == 'image' && p.mediaId != null))
-                  SizedBox(
-                    height: 30,
-                    width: 30,
-                    child: PopupMenuButton<String>(
-                      icon: const Icon(Icons.more_horiz, size: 20, color: _fgMuted),
-                      padding: EdgeInsets.zero,
-                      color: _bgSurface,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        side: const BorderSide(color: _border),
-                      ),
-                      onSelected: (v) {
-                        if (v == 'delete') _confirmDelete();
-                        if (v == 'save') _savePhoto(p.mediaId!);
-                      },
-                      itemBuilder: (_) => [
-                        if (p.kind == 'image' && p.mediaId != null)
-                          const PopupMenuItem(
-                            value: 'save',
-                            child: Row(
-                              children: [
-                                Icon(Icons.download_outlined, size: 19, color: _fgPrimary),
-                                SizedBox(width: 10),
-                                Text('Save photo', style: TextStyle(color: _fgPrimary)),
-                              ],
-                            ),
-                          ),
-                        if (me != null && me.id == p.authorId)
-                          const PopupMenuItem(
-                            value: 'delete',
-                            child: Row(
-                              children: [
-                                Icon(Icons.delete_outline, size: 19, color: _like),
-                                SizedBox(width: 10),
-                                Text('Delete', style: TextStyle(color: _like)),
-                              ],
-                            ),
-                          ),
-                      ],
+                // ⋯ menu: always shown. Save photo on image posts; Report for others;
+                // Delete only for the author.
+                SizedBox(
+                  height: 30,
+                  width: 30,
+                  child: PopupMenuButton<String>(
+                    icon: const Icon(Icons.more_horiz, size: 20, color: _fgMuted),
+                    padding: EdgeInsets.zero,
+                    color: _bgSurface,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      side: const BorderSide(color: _border),
                     ),
+                    onSelected: (v) {
+                      if (v == 'delete') _confirmDelete();
+                      if (v == 'save') _savePhoto(p.mediaId!);
+                      if (v == 'report') _reportPost();
+                    },
+                    itemBuilder: (_) => [
+                      if (p.kind == 'image' && p.mediaId != null)
+                        const PopupMenuItem(
+                          value: 'save',
+                          child: Row(
+                            children: [
+                              Icon(Icons.download_outlined, size: 19, color: _fgPrimary),
+                              SizedBox(width: 10),
+                              Text('Save photo', style: TextStyle(color: _fgPrimary)),
+                            ],
+                          ),
+                        ),
+                      if (me != null && me.id != p.authorId)
+                        const PopupMenuItem(
+                          value: 'report',
+                          child: Row(
+                            children: [
+                              Icon(Icons.flag_outlined, size: 19, color: _fgPrimary),
+                              SizedBox(width: 10),
+                              Text('Report', style: TextStyle(color: _fgPrimary)),
+                            ],
+                          ),
+                        ),
+                      if (me != null && me.id == p.authorId)
+                        const PopupMenuItem(
+                          value: 'delete',
+                          child: Row(
+                            children: [
+                              Icon(Icons.delete_outline, size: 19, color: _like),
+                              SizedBox(width: 10),
+                              Text('Delete', style: TextStyle(color: _like)),
+                            ],
+                          ),
+                        ),
+                    ],
                   ),
+                ),
               ],
             ),
           ),

@@ -191,6 +191,46 @@ class Birthday {
       );
 }
 
+/// A member's content report flagging objectionable content (visible to the admin).
+class ContentReport {
+  ContentReport({
+    required this.id,
+    required this.reporterId,
+    required this.reporterName,
+    required this.reason,
+    required this.dismissed,
+    required this.createdAt,
+    this.postId,
+    this.commentId,
+    this.contentBody = '',
+    this.authorName = '',
+  });
+
+  final int id;
+  final int reporterId;
+  final String reporterName;
+  final int? postId;
+  final int? commentId;
+  final String reason;
+  final bool dismissed;
+  final String contentBody;
+  final String authorName;
+  final DateTime createdAt;
+
+  factory ContentReport.fromJson(Map<String, dynamic> j) => ContentReport(
+        id: j['id'] as int,
+        reporterId: j['reporterId'] as int,
+        reporterName: j['reporterName'] as String? ?? '',
+        postId: j['postId'] as int?,
+        commentId: j['commentId'] as int?,
+        reason: j['reason'] as String? ?? '',
+        dismissed: j['dismissed'] as bool? ?? false,
+        contentBody: j['contentBody'] as String? ?? '',
+        authorName: j['authorName'] as String? ?? '',
+        createdAt: DateTime.parse(j['createdAt'] as String),
+      );
+}
+
 /// Result of a successful login or signup.
 class AuthResult {
   AuthResult({required this.token, required this.user});
