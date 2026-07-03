@@ -25,6 +25,7 @@ class UserAvatar extends StatelessWidget {
     required this.size,
     this.mediaId,
     this.colorSeed,
+    this.groupId,
   });
 
   final String name;
@@ -35,11 +36,15 @@ class UserAvatar extends StatelessWidget {
   /// name's hash so the same person keeps the same color.
   final int? colorSeed;
 
+  /// The connected group the photo's media id belongs to (null = the current group).
+  final String? groupId;
+
   @override
   Widget build(BuildContext context) {
     if (mediaId != null) {
       return ClipOval(
-        child: SizedBox(width: size, height: size, child: AuthImage(mediaId: mediaId!)),
+        child: SizedBox(
+            width: size, height: size, child: AuthImage(mediaId: mediaId!, groupId: groupId)),
       );
     }
     return Container(

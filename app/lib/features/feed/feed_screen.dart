@@ -5,6 +5,7 @@ import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../onboarding/auth_screen.dart';
 import 'global_search_delegate.dart';
 import 'post_card.dart';
 
@@ -83,6 +84,13 @@ sealed class _FeedItem {}
 class _DividerItem extends _FeedItem {
   _DividerItem(this.label);
   final String label;
+}
+
+/// Non-blocking notice at the top of the combined feed when some groups couldn't be
+/// reached (their posts are simply missing until they come back).
+class _UnreachableItem extends _FeedItem {
+  _UnreachableItem(this.names);
+  final List<String> names;
 }
 
 class _GapItem extends _FeedItem {}
@@ -169,16 +177,23 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 
   /// Fetch the next page using the oldest loaded post as a composite (time,id) cursor.
+  /// Single-group view only — the All view is a first-page merge (cross-group cursor
+  /// pagination is a follow-up), so infinite scroll is disabled there.
   Future<void> _loadMore() async {
     if (_loadingMore || _reachedEnd || _allPosts.isEmpty) return;
+    final session = ref.read(multiSessionProvider);
+    if (session.isAllView) return;
+    final account = session.current;
+    if (account == null) return;
     setState(() => _loadingMore = true);
     final last = _allPosts.last;
     try {
-      final more = await ref.read(apiProvider).feed(
+      final page = await ref.read(apiForGroupProvider(account.id)).feed(
             location: _location,
             before: last.createdAt,
             beforeId: last.id,
           );
+      final more = [for (final p in page) p.withGroup(account.id)];
       if (!mounted) return;
       setState(() {
         if (more.isEmpty) {
@@ -196,10 +211,25 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 
   void _openSearch() {
+    final session = ref.read(multiSessionProvider);
+    if (session.isAllView) {
+      _allViewHint('Search works within one group — pick a group to search.');
+      return;
+    }
+    final account = session.current;
+    if (account == null) return;
     showSearch<void>(
       context: context,
-      delegate: GlobalSearchDelegate(ref.read(apiProvider)),
+      delegate: GlobalSearchDelegate(ref.read(apiForGroupProvider(account.id)), account.id),
     );
+  }
+
+  /// Search/filter are per-server; in the combined view they'd silently cover only one
+  /// group, so be honest and ask for a group instead.
+  void _allViewHint(String msg) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(msg)));
   }
 
   // --- filtering ---
@@ -242,6 +272,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 
   Future<void> _openFilter() async {
+    if (ref.read(multiSessionProvider).isAllView) {
+      _allViewHint('Filters work within one group — pick a group to filter.');
+      return;
+    }
     var locs = <({String location, int count})>[];
     try {
       locs = await ref.read(locationsProvider.future);
@@ -278,8 +312,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     }
   }
 
-  List<_FeedItem> _buildItems(List<Post> posts) {
+  List<_FeedItem> _buildItems(List<Post> posts, List<String> unreachable) {
     final items = <_FeedItem>[];
+    if (unreachable.isNotEmpty) items.add(_UnreachableItem(unreachable));
     String? lastLabel;
     for (final post in posts) {
       final label = _dateLabel(post.createdAt.toLocal());
@@ -294,24 +329,53 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     return items;
   }
 
-  Widget _buildItem(_FeedItem item) {
+  Widget _buildItem(_FeedItem item, {required bool allView}) {
     return switch (item) {
       _DividerItem(:final label) => _DateDivider(label: label),
       _GapItem() => const _GapConnector(),
-      _PostItem(:final post) => PostCard(key: ValueKey(post.id), post: post),
+      _UnreachableItem(:final names) => Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: _bgSurface,
+              border: Border.all(color: _border),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.cloud_off_outlined, size: 16, color: _fgMuted),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    "Couldn't reach ${names.join(', ')} — showing the rest.",
+                    style: const TextStyle(color: _fgSecondary, fontSize: 12.5),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      _PostItem(:final post) => PostCard(
+          key: ValueKey('${post.groupId}-${post.id}'),
+          post: post,
+          showGroupChip: allView,
+        ),
     };
   }
 
   @override
   Widget build(BuildContext context) {
-    // A fresh first page (refresh / compose / location change) invalidates any pages we
-    // scrolled in, so drop them and allow loading again from the new base.
+    // A fresh first page (refresh / compose / location / group change) invalidates any
+    // pages we scrolled in, so drop them and allow loading again from the new base.
     ref.listen(feedProvider, (prev, next) {
-      if (next is AsyncData<List<Post>>) {
+      if (next is AsyncData<FeedResult>) {
         _morePosts.clear();
         _reachedEnd = false;
       }
     });
+    final session = ref.watch(multiSessionProvider);
+    final allView = session.isAllView;
     return Scaffold(
       backgroundColor: _bgMain,
       body: SafeArea(
@@ -331,8 +395,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                             style: const TextStyle(color: _fgSecondary)),
                       ),
                     ]),
-                    data: (data) {
-                      _allPosts = [...data, ..._morePosts];
+                    data: (result) {
+                      _allPosts = [...result.posts, ..._morePosts];
                       final posts = _applyFilter(_allPosts);
                       if (_allPosts.isEmpty) {
                         return ListView(children: const [
@@ -343,13 +407,14 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                           ),
                         ]);
                       }
-                      final items = _buildItems(posts);
+                      final items =
+                          _buildItems(posts, [for (final g in result.unreachable) g.serverName]);
                       // Trailing spinner row while the next page loads.
                       final showSpinner = _loadingMore && posts.isNotEmpty;
                       return ListView.builder(
                         controller: _scrollCtrl,
                         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                        padding: EdgeInsets.only(top: _hasFilter ? 116 : 72, bottom: 24),
+                        padding: EdgeInsets.only(top: (_hasFilter ? 116 : 72) + 46, bottom: 24),
                         itemCount: posts.isEmpty ? 1 : items.length + (showSpinner ? 1 : 0),
                         itemBuilder: (_, i) {
                           if (posts.isEmpty) {
@@ -368,7 +433,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                                   Center(child: CircularProgressIndicator(color: context.accent)),
                             );
                           }
-                          return _buildItem(items[i]);
+                          return _buildItem(items[i], allView: allView);
                         },
                       );
                     },
@@ -386,6 +451,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                   ignoring: _searchHidden,
                   child: Column(
                     children: [
+                      const _GroupSwitcher(),
                       _SearchBar(
                         onSearch: _openSearch,
                         onFilter: _openFilter,
@@ -443,6 +509,106 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
             const SizedBox(width: 5),
             Icon(Icons.close, size: 15, color: context.accent),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The group switcher above the feed: All | each connected group | add. Signed-out
+/// groups show a lock and tap through to re-login; "+" starts the add-group flow.
+class _GroupSwitcher extends ConsumerWidget {
+  const _GroupSwitcher();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final session = ref.watch(multiSessionProvider);
+    final notifier = ref.read(multiSessionProvider.notifier);
+    final groups = session.groups;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+      child: SizedBox(
+        height: 38,
+        child: ListView(
+          scrollDirection: Axis.horizontal,
+          children: [
+            if (session.signedIn.length > 1)
+              _chip(
+                context,
+                label: 'All',
+                selected: session.activeGroupId == null,
+                onTap: () => notifier.setActive(null),
+              ),
+            for (final g in groups)
+              _chip(
+                context,
+                label: g.serverName,
+                selected: session.activeGroupId == g.id,
+                locked: !g.isSignedIn,
+                onTap: () {
+                  if (g.isSignedIn) {
+                    notifier.setActive(g.id);
+                  } else {
+                    // Session expired there — run the (additive) login flow again.
+                    Navigator.of(context).push(MaterialPageRoute(
+                      builder: (_) => AuthScreen(initialServer: g.baseUrl),
+                    ));
+                  }
+                },
+              ),
+            _chip(
+              context,
+              label: '+ Add group',
+              selected: false,
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const AuthScreen()),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _chip(
+    BuildContext context, {
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+    bool locked = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: selected ? context.accent : _bgSurface,
+            border: Border.all(color: selected ? context.accent : _border),
+            borderRadius: BorderRadius.circular(9999),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withAlpha(60), blurRadius: 18, offset: const Offset(0, 8)),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (locked) ...[
+                const Icon(Icons.lock_outline, size: 13, color: _fgMuted),
+                const SizedBox(width: 5),
+              ],
+              Text(
+                label,
+                style: TextStyle(
+                  color: selected ? context.onAccent : _fgSecondary,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

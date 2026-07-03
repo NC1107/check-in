@@ -6,18 +6,26 @@ import '../state/app_state.dart';
 
 /// AuthImage loads a media id from the server, sending the bearer token via headers so
 /// the authenticated /api/media endpoint serves it. Caches like any network image.
+///
+/// [groupId] says which connected group the media belongs to (null = the current
+/// group). Media ids are only unique per server, so both the request and the cache key
+/// must be scoped to the group — otherwise group B's photo 5 would render group A's.
 class AuthImage extends ConsumerWidget {
-  const AuthImage({super.key, required this.mediaId, this.fit = BoxFit.cover});
+  const AuthImage({super.key, required this.mediaId, this.fit = BoxFit.cover, this.groupId});
 
   final int mediaId;
   final BoxFit fit;
+  final String? groupId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final api = ref.watch(apiProvider);
+    final account = ref.watch(contentAccountProvider(groupId));
+    final api = ref.watch(contentApiProvider(groupId));
     return CachedNetworkImage(
       imageUrl: api.imageUrl(mediaId),
-      cacheKey: 'media-$mediaId', // stable across rebuilds → no re-fetch flash
+      // Group-scoped and stable across rebuilds → no re-fetch flash, no cross-group
+      // collisions on the per-server media ids.
+      cacheKey: 'media-${account?.id ?? ''}-$mediaId',
       httpHeaders: api.authHeaders,
       fit: fit,
       fadeInDuration: Duration.zero,

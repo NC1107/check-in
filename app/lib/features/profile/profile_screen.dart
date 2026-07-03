@@ -19,12 +19,15 @@ import '../settings/appearance_screen.dart';
 import '../settings/notification_settings_screen.dart';
 
 /// ProfileScreen shows a person's profile and their timeline. For the signed-in user it
-/// also offers profile editing and (for admins) member/invite management.
+/// also offers profile editing and (for admins) member/invite management. Identity is
+/// per-group: [groupId] says which connected group this profile lives on (null = the
+/// current group), and log out / delete only affect that group.
 class ProfileScreen extends ConsumerStatefulWidget {
-  const ProfileScreen({super.key, required this.userId, required this.isSelf});
+  const ProfileScreen({super.key, required this.userId, required this.isSelf, this.groupId});
 
   final int userId;
   final bool isSelf;
+  final String? groupId;
 
   @override
   ConsumerState<ProfileScreen> createState() => _ProfileScreenState();
@@ -42,15 +45,16 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   }
 
   Future<(User, List<Post>)> _load() async {
-    final api = ref.read(apiProvider);
+    final api = ref.read(contentApiProvider(widget.groupId));
+    final gid = ref.read(contentAccountProvider(widget.groupId))?.id;
     final user = await api.getUser(widget.userId);
     final posts = await api.userPosts(widget.userId);
-    return (user, posts);
+    return (user, [for (final p in posts) gid == null ? p : p.withGroup(gid)]);
   }
 
   Future<void> _loadBlockStatus() async {
     try {
-      final blocked = await ref.read(apiProvider).isBlocked(widget.userId);
+      final blocked = await ref.read(contentApiProvider(widget.groupId)).isBlocked(widget.userId);
       if (mounted) setState(() => _isBlocked = blocked);
     } catch (_) {}
   }
@@ -59,7 +63,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
   Future<void> _toggleBlock() async {
     final currently = _isBlocked ?? false;
-    final api = ref.read(apiProvider);
+    final api = ref.read(contentApiProvider(widget.groupId));
     try {
       if (currently) {
         await api.unblockUser(widget.userId);
@@ -108,8 +112,13 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     );
     if (confirmed != true || !mounted) return;
     try {
-      await ref.read(apiProvider).deleteAccount();
-      await ref.read(sessionProvider.notifier).signOut();
+      final account = ref.read(contentAccountProvider(widget.groupId));
+      await ref.read(contentApiProvider(widget.groupId)).deleteAccount();
+      // The account is gone on that server; drop the group from this device. Other
+      // groups (separate servers, separate accounts) are untouched.
+      if (account != null) {
+        await ref.read(multiSessionProvider.notifier).removeGroup(account.id);
+      }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -129,7 +138,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       builder: (_) => _EditProfileSheet(user: user),
     );
     if (updated != null) {
-      ref.read(sessionProvider.notifier).updateUser(updated);
+      final account = ref.read(contentAccountProvider(widget.groupId));
+      if (account != null) {
+        ref.read(multiSessionProvider.notifier).updateUser(account.id, updated);
+      }
       _reload();
     }
   }
@@ -141,8 +153,14 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       appBar: AppBar(
         backgroundColor: kBgMain,
         elevation: 0,
-        title: Text(widget.isSelf ? 'My profile' : 'Profile',
-            style: const TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
+        title: Builder(builder: (context) {
+          final groupCount = ref.watch(multiSessionProvider.select((s) => s.groups.length));
+          final name =
+              ref.watch(contentAccountProvider(widget.groupId).select((a) => a?.serverName));
+          final base = widget.isSelf ? 'My profile' : 'Profile';
+          return Text(groupCount > 1 && name != null ? '$base · $name' : base,
+              style: const TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 18));
+        }),
         actions: [
           if (widget.isSelf)
             IconButton(
@@ -165,13 +183,17 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               tooltip: 'Log out',
               icon: const Icon(Icons.logout, color: kFgSecondary),
               onPressed: () async {
-                final api = ref.read(apiProvider);
-                // Drop this device's push token while the session is still valid.
+                final api = ref.read(contentApiProvider(widget.groupId));
+                final account = ref.read(contentAccountProvider(widget.groupId));
+                // Drop this group's push registration while the session is still valid;
+                // the other groups keep theirs.
                 await clearDeviceToken(api);
                 try {
                   await api.logout();
                 } catch (_) {}
-                await ref.read(sessionProvider.notifier).signOut();
+                if (account != null) {
+                  await ref.read(multiSessionProvider.notifier).signOutGroup(account.id);
+                }
               },
             ),
         ],
@@ -236,7 +258,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
       child: Column(
         children: [
-          UserAvatar(name: user.name, mediaId: user.profileMediaId, size: 88, colorSeed: user.id),
+          UserAvatar(
+              name: user.name,
+              mediaId: user.profileMediaId,
+              size: 88,
+              colorSeed: user.id,
+              groupId: widget.groupId),
           const SizedBox(height: 14),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,

@@ -4,6 +4,11 @@
 <dict>
 	<key>aps-environment</key>
 	<string>production</string>
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:check-in.npc-server.top</string>
+		<string>applinks:*.check-in.npc-server.top</string>
+	</array>
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)top.npcserver.checkin</string>

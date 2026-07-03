@@ -6,9 +6,12 @@ import 'auth_image.dart';
 /// image shows directly; multiple images become a swipeable carousel with page dots and
 /// a counter pill.
 class PostImageCarousel extends StatefulWidget {
-  const PostImageCarousel({super.key, required this.mediaIds});
+  const PostImageCarousel({super.key, required this.mediaIds, this.groupId});
 
   final List<int> mediaIds;
+
+  /// The connected group the media ids belong to (null = the current group).
+  final String? groupId;
 
   @override
   State<PostImageCarousel> createState() => _PostImageCarouselState();
@@ -28,7 +31,7 @@ class _PostImageCarouselState extends State<PostImageCarousel> {
   Widget build(BuildContext context) {
     final ids = widget.mediaIds;
     if (ids.isEmpty) return const SizedBox.shrink();
-    if (ids.length == 1) return AuthImage(mediaId: ids.first);
+    if (ids.length == 1) return AuthImage(mediaId: ids.first, groupId: widget.groupId);
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -36,7 +39,7 @@ class _PostImageCarouselState extends State<PostImageCarousel> {
           controller: _ctrl,
           itemCount: ids.length,
           onPageChanged: (i) => setState(() => _page = i),
-          itemBuilder: (_, i) => AuthImage(mediaId: ids[i]),
+          itemBuilder: (_, i) => AuthImage(mediaId: ids[i], groupId: widget.groupId),
         ),
         Positioned(
           top: 8,

@@ -86,13 +86,20 @@ class _ReportSheet extends StatelessWidget {
 }
 
 /// PostCard renders one post in the feed with the design-system dark card style.
+///
+/// Every server call (like, comment, report, delete, media) is routed to the post's
+/// origin group (post.groupId), so cards from different groups work side by side in
+/// the combined All view.
 class PostCard extends ConsumerStatefulWidget {
-  const PostCard({super.key, required this.post, this.onDeleted});
+  const PostCard({super.key, required this.post, this.onDeleted, this.showGroupChip = false});
 
   final Post post;
 
   /// Called after this post is deleted so the host list (feed/profile) can refresh.
   final VoidCallback? onDeleted;
+
+  /// Show which group the post came from (used in the combined All view).
+  final bool showGroupChip;
 
   @override
   ConsumerState<PostCard> createState() => _PostCardState();
@@ -139,7 +146,7 @@ class _PostCardState extends ConsumerState<PostCard> {
     );
     if (reason == null || !mounted) return;
     try {
-      await ref.read(apiProvider).reportPost(widget.post.id, reason);
+      await ref.read(contentApiProvider(widget.post.groupId)).reportPost(widget.post.id, reason);
       if (mounted) _snack('Report sent. The admin will review it.');
     } catch (_) {
       if (mounted) _snack('Could not send report. Try again.');
@@ -169,7 +176,7 @@ class _PostCardState extends ConsumerState<PostCard> {
     );
     if (ok != true) return;
     try {
-      await ref.read(apiProvider).deletePost(widget.post.id);
+      await ref.read(contentApiProvider(widget.post.groupId)).deletePost(widget.post.id);
       ref.invalidate(feedProvider); // drop it from the feed immediately
       widget.onDeleted?.call();
     } catch (_) {
@@ -183,7 +190,7 @@ class _PostCardState extends ConsumerState<PostCard> {
   /// Downloads the post's photo (with auth) and saves it to the device gallery.
   Future<void> _savePhoto(int mediaId) async {
     try {
-      final bytes = await ref.read(apiProvider).downloadMedia(mediaId);
+      final bytes = await ref.read(contentApiProvider(widget.post.groupId)).downloadMedia(mediaId);
       await Gal.putImageBytes(bytes);
       if (mounted) _snack('Saved to your photos');
     } on GalException catch (_) {
@@ -197,7 +204,7 @@ class _PostCardState extends ConsumerState<PostCard> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 
   Future<void> _toggleLike() async {
-    final api = ref.read(apiProvider);
+    final api = ref.read(contentApiProvider(widget.post.groupId));
     setState(() {
       _liked = !_liked;
       _likes += _liked ? 1 : -1;
@@ -218,7 +225,8 @@ class _PostCardState extends ConsumerState<PostCard> {
     setState(() => _postingComment = true);
     FocusScope.of(context).unfocus(); // close the keyboard
     try {
-      final comment = await ref.read(apiProvider).addComment(widget.post.id, text);
+      final comment =
+          await ref.read(contentApiProvider(widget.post.groupId)).addComment(widget.post.id, text);
       _commentCtrl.clear();
       if (mounted) {
         setState(() {
@@ -273,7 +281,8 @@ class _PostCardState extends ConsumerState<PostCard> {
   @override
   Widget build(BuildContext context) {
     final p = widget.post;
-    final me = ref.watch(sessionProvider).user;
+    final account = ref.watch(contentAccountProvider(p.groupId));
+    final me = account?.user;
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 14),
@@ -292,7 +301,11 @@ class _PostCardState extends ConsumerState<PostCard> {
             child: Row(
               children: [
                 UserAvatar(
-                    name: p.authorName, size: 38, mediaId: p.authorPhotoId, colorSeed: p.authorId),
+                    name: p.authorName,
+                    size: 38,
+                    mediaId: p.authorPhotoId,
+                    colorSeed: p.authorId,
+                    groupId: p.groupId),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
@@ -319,6 +332,24 @@ class _PostCardState extends ConsumerState<PostCard> {
                     ],
                   ),
                 ),
+                if (widget.showGroupChip && account != null) ...[
+                  Container(
+                    margin: const EdgeInsets.only(right: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    constraints: const BoxConstraints(maxWidth: 110),
+                    decoration: BoxDecoration(
+                      color: context.accentLight,
+                      borderRadius: BorderRadius.circular(9999),
+                    ),
+                    child: Text(
+                      account.serverName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: context.accent, fontWeight: FontWeight.w600, fontSize: 11),
+                    ),
+                  ),
+                ],
                 Tooltip(
                   message: fullLocalTime(p.createdAt),
                   child: Semantics(
@@ -420,7 +451,7 @@ class _PostCardState extends ConsumerState<PostCard> {
           if (p.kind == 'image' && p.images.isNotEmpty)
             AspectRatio(
               aspectRatio: 4 / 3,
-              child: PostImageCarousel(mediaIds: p.images),
+              child: PostImageCarousel(mediaIds: p.images, groupId: p.groupId),
             ),
           // Actions row
           Padding(
@@ -438,7 +469,8 @@ class _PostCardState extends ConsumerState<PostCard> {
                   iconColor: _fgSecondary,
                   label: '$_comments',
                   onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => PostDetailScreen(postId: p.id)),
+                    MaterialPageRoute(
+                        builder: (_) => PostDetailScreen(postId: p.id, groupId: p.groupId)),
                   ),
                 ),
               ],
@@ -455,7 +487,7 @@ class _PostCardState extends ConsumerState<PostCard> {
                     GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => PostDetailScreen(postId: p.id),
+                        builder: (_) => PostDetailScreen(postId: p.id, groupId: p.groupId),
                       )),
                       child: Padding(
                         padding: const EdgeInsets.only(bottom: 4),
@@ -490,7 +522,12 @@ class _PostCardState extends ConsumerState<PostCard> {
             child: Row(
               children: [
                 if (me != null)
-                  UserAvatar(name: me.name, size: 26, mediaId: me.profileMediaId, colorSeed: me.id),
+                  UserAvatar(
+                      name: me.name,
+                      size: 26,
+                      mediaId: me.profileMediaId,
+                      colorSeed: me.id,
+                      groupId: p.groupId),
                 const SizedBox(width: 9),
                 Expanded(
                   child: TextField(

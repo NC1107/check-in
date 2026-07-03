@@ -16,6 +16,7 @@ import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/user_avatar.dart';
+import '../post/post_detail_screen.dart';
 import '../profile/profile_screen.dart';
 import 'feed_screen.dart';
 
@@ -42,11 +43,43 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final api = ref.read(apiProvider);
-      scheduleBirthdayNotifications(api);
-      // Logged in by the time the shell mounts, so register for cloud push now.
-      requestDeviceToken(api);
+      _registerServices();
+      // Route notification taps: switch to the push's origin group and open the post.
+      setPushTapHandler(_onPushTap);
     });
+  }
+
+  /// (Re-)registers this device with EVERY signed-in group: push token on each server
+  /// and birthday reminders across all of them. Idempotent — the server upserts device
+  /// tokens — so it's safe to re-run whenever the set of groups changes.
+  void _registerServices() {
+    final session = ref.read(multiSessionProvider);
+    final apis = [for (final g in session.signedIn) ref.read(apiForGroupProvider(g.id))];
+    if (apis.isEmpty) return;
+    scheduleBirthdayNotifications(apis, [for (final g in session.signedIn) g.id]);
+    requestDeviceToken(apis);
+  }
+
+  /// A push payload carries the origin server's public URL (see the Go side's
+  /// pushData); match it to a connected group, make that group active, and open the
+  /// post there — post ids are only unique per server.
+  void _onPushTap(Map<String, dynamic> data) {
+    final postId = int.tryParse('${data['postId']}');
+    if (postId == null) return;
+    final session = ref.read(multiSessionProvider);
+    final server = data['server'] as String?;
+    ServerAccount? target;
+    if (server != null && server.isNotEmpty) {
+      target = session.byId(MultiSessionController.groupIdFor(server));
+    }
+    final t = target ?? session.current;
+    if (t == null || !t.isSignedIn || !mounted) return;
+    if (session.activeGroupId != t.id) {
+      ref.read(multiSessionProvider.notifier).setActive(t.id);
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => PostDetailScreen(postId: postId, groupId: t.id)),
+    );
   }
 
   void _showCompose() {
@@ -68,13 +101,21 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    final me = ref.watch(sessionProvider).user;
+    // Re-register device/push/birthdays when a group is added, removed, or re-signed-in.
+    ref.listen<String>(
+      multiSessionProvider.select((s) => [for (final g in s.signedIn) g.id].join(',')),
+      (prev, next) {
+        if (prev != next) _registerServices();
+      },
+    );
+    final account = ref.watch(currentAccountProvider);
+    final me = account?.user;
 
     // Admin/member management is reached from the profile (host badge + Members button),
     // so it isn't a bottom-nav destination.
     final pages = <Widget>[
       const FeedScreen(),
-      if (me != null) ProfileScreen(userId: me.id, isSelf: true),
+      if (me != null) ProfileScreen(userId: me.id, isSelf: true, groupId: account?.id),
     ];
 
     return Scaffold(
@@ -184,10 +225,42 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   bool _busy = false;
   String? _error;
 
+  // Cross-posting: which groups to share to. Defaults to the viewed group; in the All
+  // view nothing is pre-selected and the user must pick. Groups that already accepted
+  // the post (partial-failure retry) are locked in [_posted].
+  final Set<String> _targets = {};
+  final Set<String> _posted = {};
+  // A picked photo is compressed once and the JPEG bytes reused for every target group
+  // (each group still gets its own upload — media is per-server).
+  final Map<String, List<int>> _compressedCache = {};
+
+  @override
+  void initState() {
+    super.initState();
+    final session = ref.read(multiSessionProvider);
+    final active = session.active;
+    if (active != null && active.isSignedIn) {
+      _targets.add(active.id);
+    } else if (session.signedIn.length == 1) {
+      _targets.add(session.signedIn.first.id);
+    }
+  }
+
   @override
   void dispose() {
     _bodyCtrl.dispose();
     super.dispose();
+  }
+
+  void _toggleTarget(String groupId) {
+    if (_posted.contains(groupId)) return; // already posted there (retry state)
+    setState(() {
+      if (!_targets.remove(groupId)) _targets.add(groupId);
+      // People tags are per-server user ids — they only make sense for a single target
+      // group, so drop them as soon as the selection isn't exactly one group.
+      if (_targets.length != 1) _tagged.clear();
+      _error = null;
+    });
   }
 
   // No imageQuality on picks: that re-encodes and strips EXIF, which we need to read the
@@ -296,9 +369,12 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   }
 
   /// Opens the member picker, seeding it with the current selection. Excludes the author —
-  /// the post is implicitly theirs.
+  /// the post is implicitly theirs. Members (and their ids) belong to the single target
+  /// group, so tagging is only available when exactly one group is selected.
   Future<void> _pickPeople() async {
-    final me = ref.read(sessionProvider).user;
+    if (_targets.length != 1) return;
+    final groupId = _targets.first;
+    final me = ref.read(multiSessionProvider).byId(groupId)?.user;
     final result = await showModalBottomSheet<List<({int id, String name, int? photoId})>>(
       context: context,
       isScrollControlled: true,
@@ -306,7 +382,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
       builder: (_) => _TagPeopleSheet(
-        api: ref.read(apiProvider),
+        api: ref.read(apiForGroupProvider(groupId)),
         excludeId: me?.id,
         initial: _tagged,
       ),
@@ -316,6 +392,40 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
         ..clear()
         ..addAll(result));
     }
+  }
+
+  /// One cross-post target chip. Posted-to groups are locked with a check so a retry
+  /// can't double-post them.
+  Widget _targetChip(ServerAccount g) {
+    final on = _targets.contains(g.id);
+    final done = _posted.contains(g.id);
+    return GestureDetector(
+      onTap: () => _toggleTarget(g.id),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
+        decoration: BoxDecoration(
+          color: on || done ? context.accent : Colors.transparent,
+          border: Border.all(color: on || done ? context.accent : _border),
+          borderRadius: BorderRadius.circular(9999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(done ? Icons.check_circle : (on ? Icons.check : Icons.add),
+                size: 14, color: on || done ? context.onAccent : _fgMuted),
+            const SizedBox(width: 6),
+            Text(
+              g.serverName,
+              style: TextStyle(
+                color: on || done ? context.onAccent : _fgSecondary,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _mediaButton(IconData icon, String label, VoidCallback onTap) {
@@ -332,41 +442,69 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     );
   }
 
+  /// Publishes the check-in to every selected group, one server at a time. Media is
+  /// per-server, so images upload once per target. Partial failure keeps the sheet open
+  /// with an honest report and turns Share into a retry of only the failed groups.
   Future<void> _submit() async {
     if (_images.isEmpty && _bodyCtrl.text.trim().isEmpty) return;
+    final session = ref.read(multiSessionProvider);
+    final targets = [
+      for (final g in session.signedIn)
+        if (_targets.contains(g.id) && !_posted.contains(g.id)) g
+    ];
+    if (targets.isEmpty) {
+      setState(() => _error = 'Pick at least one group to share to.');
+      return;
+    }
     setState(() {
       _busy = true;
       _error = null;
     });
-    try {
-      final api = ref.read(apiProvider);
-      final peopleIds = [for (final t in _tagged) t.id];
-      if (_images.isNotEmpty) {
-        final ids = <int>[];
-        for (final x in _images) {
-          ids.add(await _uploadCompressed(api, x));
+    final failed = <ServerAccount>[];
+    String? failMsg;
+    for (final g in targets) {
+      try {
+        final api = ref.read(apiForGroupProvider(g.id));
+        final peopleIds = [for (final t in _tagged) t.id];
+        if (_images.isNotEmpty) {
+          final ids = <int>[];
+          for (final x in _images) {
+            ids.add(await _uploadCompressed(api, x));
+          }
+          await api.createPost(
+              kind: 'image',
+              body: _bodyCtrl.text.trim(),
+              mediaIds: ids,
+              location: _location,
+              peopleIds: peopleIds);
+        } else {
+          await api.createPost(kind: 'text', body: _bodyCtrl.text.trim(), peopleIds: peopleIds);
         }
-        await api.createPost(
-            kind: 'image',
-            body: _bodyCtrl.text.trim(),
-            mediaIds: ids,
-            location: _location,
-            peopleIds: peopleIds);
-      } else {
-        await api.createPost(kind: 'text', body: _bodyCtrl.text.trim(), peopleIds: peopleIds);
+        _posted.add(g.id);
+      } on DioException catch (e) {
+        failed.add(g);
+        final data = e.response?.data;
+        if (data is Map && data['error'] is String) failMsg = data['error'] as String;
+      } catch (_) {
+        failed.add(g);
       }
-      if (mounted) Navigator.of(context).pop(true);
-    } on DioException catch (e) {
-      final data = e.response?.data;
-      final msg = (data is Map && data['error'] is String)
-          ? data['error'] as String
-          : 'Could not share your check-in. Check your connection and try again.';
-      if (mounted) setState(() => _error = msg);
-    } catch (_) {
-      if (mounted) setState(() => _error = 'Could not share your check-in. Try again.');
-    } finally {
-      if (mounted) setState(() => _busy = false);
     }
+    if (!mounted) return;
+    if (failed.isEmpty) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+    final failedNames = [for (final g in failed) g.serverName].join(', ');
+    final postedNames = [
+      for (final g in session.signedIn)
+        if (_posted.contains(g.id)) g.serverName
+    ].join(', ');
+    setState(() {
+      _busy = false;
+      _error = _posted.isEmpty
+          ? (failMsg ?? "Couldn't share to $failedNames. Check your connection and retry.")
+          : "Posted to $postedNames. Couldn't reach $failedNames — tap Retry to try again.";
+    });
   }
 
   /// Downscales and transcodes a picked photo to JPEG before upload. This handles iPhone
@@ -375,13 +513,17 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   /// this point. Falls back to uploading the original if compression isn't available.
   Future<int> _uploadCompressed(ApiClient api, XFile x) async {
     try {
-      final bytes = await FlutterImageCompress.compressWithFile(
-        x.path,
-        minWidth: 1600,
-        minHeight: 1600,
-        quality: 88,
-        format: CompressFormat.jpeg,
-      );
+      var bytes = _compressedCache[x.path];
+      if (bytes == null) {
+        bytes = await FlutterImageCompress.compressWithFile(
+          x.path,
+          minWidth: 1600,
+          minHeight: 1600,
+          quality: 88,
+          format: CompressFormat.jpeg,
+        );
+        if (bytes != null) _compressedCache[x.path] = bytes;
+      }
       if (bytes != null) return api.uploadImageBytes(bytes);
     } catch (_) {
       // Unsupported source/platform — fall through and let the server try the original.
@@ -391,9 +533,12 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final me = ref.watch(sessionProvider).user;
-    final hasContent = _bodyCtrl.text.trim().isNotEmpty || _images.isNotEmpty;
+    final session = ref.watch(multiSessionProvider);
+    final me = ref.watch(currentAccountProvider)?.user;
+    final hasContent =
+        (_bodyCtrl.text.trim().isNotEmpty || _images.isNotEmpty) && _targets.isNotEmpty;
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final retrying = _posted.isNotEmpty;
 
     return Padding(
       padding: EdgeInsets.only(bottom: bottomInset),
@@ -449,13 +594,27 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                             height: 16,
                             child:
                                 CircularProgressIndicator(strokeWidth: 2, color: context.onAccent))
-                        : const Text('Share',
-                            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                        : Text(retrying ? 'Retry' : 'Share',
+                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
                   ),
                 ),
               ],
             ),
           ),
+          // Cross-post targets: one chip per connected group. Hidden with a single
+          // group (nothing to choose). Groups already posted to show a check and lock.
+          if (session.signedIn.length > 1)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [for (final g in session.signedIn) _targetChip(g)],
+                ),
+              ),
+            ),
           const SizedBox(height: 14),
           // Image previews — a removable thumbnail strip.
           if (_images.isNotEmpty)
@@ -528,40 +687,56 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
             ),
           ),
           // Tag people — who's in this post (drives the feed's "include posts they're in").
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-            child: InkWell(
-              onTap: _pickPeople,
-              borderRadius: BorderRadius.circular(10),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Row(
-                  children: [
-                    Icon(Icons.person_add_alt_1_outlined, size: 18, color: context.accent),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _tagged.isEmpty
-                          ? const Text('Tag people',
-                              style: TextStyle(color: _fgSecondary, fontSize: 14))
-                          : Text(
-                              [for (final t in _tagged) t.name].join(', '),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: _fgPrimary, fontSize: 14),
-                            ),
-                    ),
-                    if (_tagged.isNotEmpty)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 4),
-                        child: Text('${_tagged.length}',
-                            style: const TextStyle(color: _fgMuted, fontSize: 13)),
+          // Member ids are per-server, so tagging needs exactly one target group.
+          if (session.signedIn.length > 1 && _targets.length != 1)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Row(
+                children: [
+                  Icon(Icons.person_add_alt_1_outlined, size: 18, color: _fgMuted),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text('Tagging people works when sharing to one group.',
+                        style: TextStyle(color: _fgMuted, fontSize: 13)),
+                  ),
+                ],
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+              child: InkWell(
+                onTap: _pickPeople,
+                borderRadius: BorderRadius.circular(10),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
+                    children: [
+                      Icon(Icons.person_add_alt_1_outlined, size: 18, color: context.accent),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _tagged.isEmpty
+                            ? const Text('Tag people',
+                                style: TextStyle(color: _fgSecondary, fontSize: 14))
+                            : Text(
+                                [for (final t in _tagged) t.name].join(', '),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: _fgPrimary, fontSize: 14),
+                              ),
                       ),
-                    const Icon(Icons.chevron_right, size: 18, color: _fgMuted),
-                  ],
+                      if (_tagged.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 4),
+                          child: Text('${_tagged.length}',
+                              style: const TextStyle(color: _fgMuted, fontSize: 13)),
+                        ),
+                      const Icon(Icons.chevron_right, size: 18, color: _fgMuted),
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
