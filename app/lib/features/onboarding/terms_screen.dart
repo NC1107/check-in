@@ -21,53 +21,62 @@ class TermsScreen extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Before you continue',
-                style: TextStyle(
-                  color: kFgPrimary,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 26,
+              const Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Before you continue',
+                        style: TextStyle(
+                          color: kFgPrimary,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 26,
+                        ),
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        'check-in is a private, invite-only network. '
+                        'By continuing you agree to use it responsibly.',
+                        style: TextStyle(color: kFgSecondary, fontSize: 15, height: 1.5),
+                      ),
+                      SizedBox(height: 32),
+                      _Section(
+                        icon: Icons.block_outlined,
+                        title: 'No objectionable content',
+                        body: 'Do not post content that is abusive, harassing, hateful, '
+                            'sexually explicit, or otherwise harmful. '
+                            'Violations result in immediate removal from the network.',
+                      ),
+                      SizedBox(height: 20),
+                      _Section(
+                        icon: Icons.flag_outlined,
+                        title: 'Report what should not be here',
+                        body: 'Use the report button on any post to flag content that '
+                            'violates these rules. The server admin reviews all reports '
+                            'and acts within 24 hours.',
+                      ),
+                      SizedBox(height: 20),
+                      _Section(
+                        icon: Icons.person_off_outlined,
+                        title: 'Block abusive members',
+                        body: 'You can block any member from their profile. '
+                            'Blocked members’ posts stop appearing in your feed. '
+                            'The server admin is notified and will review the situation.',
+                      ),
+                      SizedBox(height: 20),
+                      _Section(
+                        icon: Icons.admin_panel_settings_outlined,
+                        title: 'Zero tolerance',
+                        body: 'This network has zero tolerance for abuse. '
+                            'The server admin can remove any post or member at any time. '
+                            'Anyone found to have posted objectionable content will be removed.',
+                      ),
+                    ],
+                  ),
                 ),
               ),
-              const SizedBox(height: 8),
-              const Text(
-                'check-in is a private, invite-only network. '
-                'By continuing you agree to use it responsibly.',
-                style: TextStyle(color: kFgSecondary, fontSize: 15, height: 1.5),
-              ),
-              const SizedBox(height: 32),
-              const _Section(
-                icon: Icons.block_outlined,
-                title: 'No objectionable content',
-                body: 'Do not post content that is abusive, harassing, hateful, '
-                    'sexually explicit, or otherwise harmful. '
-                    'Violations result in immediate removal from the network.',
-              ),
               const SizedBox(height: 20),
-              const _Section(
-                icon: Icons.flag_outlined,
-                title: 'Report what should not be here',
-                body: 'Use the report button on any post to flag content that '
-                    'violates these rules. The server admin reviews all reports '
-                    'and acts within 24 hours.',
-              ),
-              const SizedBox(height: 20),
-              const _Section(
-                icon: Icons.person_off_outlined,
-                title: 'Block abusive members',
-                body: 'You can block any member from their profile. '
-                    'Blocked members’ posts stop appearing in your feed. '
-                    'The server admin is notified and will review the situation.',
-              ),
-              const SizedBox(height: 20),
-              const _Section(
-                icon: Icons.admin_panel_settings_outlined,
-                title: 'Zero tolerance',
-                body: 'This network has zero tolerance for abuse. '
-                    'The server admin can remove any post or member at any time. '
-                    'Anyone found to have posted objectionable content will be removed.',
-              ),
-              const Spacer(),
               PrimaryButton(
                 label: 'I agree - continue',
                 enabled: true,
