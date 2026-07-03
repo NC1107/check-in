@@ -28,6 +28,7 @@ Under Compose, sensible values are already wired up; override only if you need t
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CHECKIN_SERVER_NAME` | `Check-In` | Friendly name shown to clients via `/api/server-info`. |
+| `CHECKIN_PUBLIC_URL` | *(empty)* | This server's public base URL (e.g. `https://alpha.check-in.example.com`). Surfaced via `/api/server-info` and stamped into push payloads so an app connected to several servers can attribute notifications. Set automatically by the multi-group generator; optional for single-group installs. |
 | `CHECKIN_HTTP_ADDR` | `:8080` | Address the API listens on inside the container. |
 | `CHECKIN_DATABASE_URL` | `postgres://checkin:checkin@localhost:5432/checkin?sslmode=disable` | Full PostgreSQL connection string. Set automatically by Compose; only override for a custom/external database. |
 | `CHECKIN_MEDIA_DIR` | `./data/media` (`/data/media` in the image) | Where uploaded images are stored. Backed by the `media_data` volume in Compose. |

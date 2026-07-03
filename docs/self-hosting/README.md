@@ -17,6 +17,7 @@ deeper on each topic.
 | [operations.md](operations.md) | Upgrades, logs, backups & restore, health checks |
 | [security.md](security.md) | The trust model and how to keep your server safe |
 | [troubleshooting.md](troubleshooting.md) | Fixes for the most common problems |
+| [multiple-groups.md](multiple-groups.md) | Hosting several independent groups on one server |
 
 For building and shipping the mobile apps to the App Store / Play Store, see
 [../DEPLOYMENT.md](../DEPLOYMENT.md) instead — that's a separate concern from running the

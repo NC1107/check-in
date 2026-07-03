@@ -38,6 +38,10 @@ The first account created on a fresh server becomes the admin. For production
 self-hosting (DNS, HTTPS, backups, upgrades) see the
 **[self-hosting guide](docs/self-hosting/README.md)**.
 
+One host can also run **several independent groups** (one container + database per
+group, each on its own subdomain) — see
+[multiple groups](docs/self-hosting/multiple-groups.md).
+
 ## Tech stack
 
 | Concern       | Choice                                             |
