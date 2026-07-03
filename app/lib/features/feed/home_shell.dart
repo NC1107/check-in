@@ -54,10 +54,12 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   /// tokens — so it's safe to re-run whenever the set of groups changes.
   void _registerServices() {
     final session = ref.read(multiSessionProvider);
-    final apis = [for (final g in session.signedIn) ref.read(apiForGroupProvider(g.id))];
-    if (apis.isEmpty) return;
-    scheduleBirthdayNotifications(apis, [for (final g in session.signedIn) g.id]);
-    requestDeviceToken(apis);
+    if (session.signedIn.isEmpty) return;
+    scheduleBirthdayNotifications([
+      for (final g in session.signedIn)
+        (api: ref.read(apiForGroupProvider(g.id)), id: g.id, name: g.serverName)
+    ]);
+    requestDeviceToken([for (final g in session.signedIn) ref.read(apiForGroupProvider(g.id))]);
   }
 
   /// A push payload carries the origin server's public URL (see the Go side's
