@@ -39,6 +39,7 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":        s.cfg.ServerName,
 		"initialized": initialized,
+		"publicUrl":   s.cfg.PublicURL,
 	})
 }
 

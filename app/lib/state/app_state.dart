@@ -1,5 +1,7 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -8,109 +10,331 @@ import '../api/api_client.dart';
 import '../api/models.dart';
 import '../theme/accent.dart';
 
-/// Persisted session: the server base URL, the auth token, and the current user.
-class Session {
-  const Session({this.baseUrl, this.token, this.user, this.serverInitialized = true});
+/// One connected group: a Check-In server plus this device's account on it. Because
+/// every group is a physically separate server, identity (user id, photo, token) is
+/// always per-group.
+class ServerAccount {
+  const ServerAccount({
+    required this.id,
+    required this.baseUrl,
+    required this.serverName,
+    this.token,
+    this.user,
+  });
 
-  final String? baseUrl;
+  /// Stable id derived from the server's host (one subdomain per group). Used to key
+  /// stored tokens, API clients, and image cache entries.
+  final String id;
+  final String baseUrl;
+  final String serverName;
   final String? token;
+
+  /// The signed-in user on this server. Fetched lazily after restore, so it can be
+  /// null for a moment (or while the server is unreachable) even when signed in.
   final User? user;
 
-  /// Whether the connected server already has an admin. When false, the first signup
-  /// becomes the host/admin, so onboarding shows host-setup framing instead of the
-  /// invite-list verify copy. Defaults to true (the common case) until known.
-  final bool serverInitialized;
+  bool get isSignedIn => token != null;
 
-  bool get hasServer => baseUrl != null && baseUrl!.isNotEmpty;
-  bool get isLoggedIn => hasServer && token != null && user != null;
-
-  Session copyWith({
-    String? baseUrl,
-    String? token,
-    User? user,
-    bool? serverInitialized,
-    bool clearAuth = false,
-  }) {
-    return Session(
-      baseUrl: baseUrl ?? this.baseUrl,
+  ServerAccount copyWith({String? serverName, String? token, User? user, bool clearAuth = false}) {
+    return ServerAccount(
+      id: id,
+      baseUrl: baseUrl,
+      serverName: serverName ?? this.serverName,
       token: clearAuth ? null : (token ?? this.token),
       user: clearAuth ? null : (user ?? this.user),
-      serverInitialized: serverInitialized ?? this.serverInitialized,
     );
   }
 }
 
-const _kBaseUrl = 'base_url';
-const _kToken = 'token';
+/// The app-level session: every connected group plus which one is being viewed.
+/// [activeGroupId] == null means the combined "All groups" view.
+class MultiSession {
+  const MultiSession({this.groups = const [], this.activeGroupId, this.restored = false});
 
-/// SessionController loads and persists the session across launches. The token lives in
-/// secure storage; the (non-secret) base URL lives in shared preferences.
-class SessionController extends StateNotifier<Session> {
-  SessionController() : super(const Session()) {
+  final List<ServerAccount> groups;
+  final String? activeGroupId;
+
+  /// True once persisted state has been loaded (so startup can tell "no groups yet"
+  /// from "still restoring").
+  final bool restored;
+
+  List<ServerAccount> get signedIn => [
+        for (final g in groups)
+          if (g.isSignedIn) g
+      ];
+
+  bool get anySignedIn => groups.any((g) => g.isSignedIn);
+
+  ServerAccount? byId(String? id) {
+    if (id == null) return null;
+    for (final g in groups) {
+      if (g.id == id) return g;
+    }
+    return null;
+  }
+
+  /// The explicitly selected group, or null in the All view.
+  ServerAccount? get active => byId(activeGroupId);
+
+  /// The account backing screens that need "the current group" (profile, admin,
+  /// settings, search): the active group, or the first signed-in one while viewing All.
+  ServerAccount? get current {
+    final a = active;
+    if (a != null) return a;
+    if (signedIn.isNotEmpty) return signedIn.first;
+    return groups.isNotEmpty ? groups.first : null;
+  }
+
+  /// Whether the feed is showing the merged all-groups view (only meaningful with more
+  /// than one signed-in group).
+  bool get isAllView => activeGroupId == null && signedIn.length > 1;
+}
+
+const _kGroups = 'groups_json';
+const _kActiveGroup = 'active_group_id'; // '' persists the All view
+// Pre-multi-group keys, migrated into the group list on first launch of this build.
+const _kLegacyBaseUrl = 'base_url';
+const _kLegacyToken = 'token';
+
+/// MultiSessionController loads and persists every group session across launches.
+/// Tokens live in secure storage (keyed per group); the non-secret group list lives in
+/// shared preferences.
+class MultiSessionController extends StateNotifier<MultiSession> {
+  MultiSessionController() : super(const MultiSession()) {
     _load();
   }
 
+  /// Starts from a fixed state and skips restore/hydration — for widget tests.
+  @visibleForTesting
+  MultiSessionController.seeded(super.initial);
+
   final _secure = const FlutterSecureStorage();
+
+  /// Derives the stable group id from a base URL: its host. One group per subdomain,
+  /// so the host is unique, readable, and survives reinstalling the group.
+  static String groupIdFor(String baseUrl) {
+    final host = Uri.tryParse(baseUrl)?.host ?? '';
+    return host.isNotEmpty ? host : baseUrl;
+  }
+
+  static String _tokenKey(String groupId) => 'token_$groupId';
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    final baseUrl = prefs.getString(_kBaseUrl);
-    final token = await _secure.read(key: _kToken);
-    User? user;
-    // The user object is re-fetched lazily; we only restore enough to route.
-    state = Session(baseUrl: baseUrl, token: token, user: user);
-    if (baseUrl != null && token != null) {
-      // Validate the token by fetching the current user.
-      try {
-        final client = ApiClient(baseUrl: baseUrl, token: token);
-        user = await client.me();
-        state = state.copyWith(user: user);
-      } on DioException catch (e) {
-        // Only a real auth rejection means the stored token is bad. A network/timeout/
-        // server-unreachable error must NOT drop a valid session — that's common for a
-        // self-hosted box that's briefly offline. Keep the restored baseUrl/token; the
-        // user can retry, and any later genuine 401 still triggers onUnauthorized.
-        final code = e.response?.statusCode;
-        if (code == 401 || code == 403) {
-          await signOut();
+    var entries = _decodeGroups(prefs.getString(_kGroups));
+
+    // Migration: fold the old single {base_url, token} session into the list as the
+    // first group, then drop the legacy keys.
+    if (entries.isEmpty) {
+      final legacyUrl = prefs.getString(_kLegacyBaseUrl);
+      if (legacyUrl != null && legacyUrl.isNotEmpty) {
+        final id = groupIdFor(legacyUrl);
+        final legacyToken = await _secure.read(key: _kLegacyToken);
+        if (legacyToken != null) {
+          await _secure.write(key: _tokenKey(id), value: legacyToken);
         }
+        entries = [(id: id, baseUrl: legacyUrl, name: 'Check-In')];
+        await prefs.setString(_kGroups, _encodeGroups(entries));
+        await prefs.setString(_kActiveGroup, id);
+        await prefs.remove(_kLegacyBaseUrl);
+        await _secure.delete(key: _kLegacyToken);
       }
     }
-  }
 
-  Future<void> setServer(String baseUrl, {bool serverInitialized = true}) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kBaseUrl, baseUrl);
-    state = state.copyWith(baseUrl: baseUrl, serverInitialized: serverInitialized);
-  }
-
-  Future<void> signIn(String token, User user) async {
-    await _secure.write(key: _kToken, value: token);
-    state = state.copyWith(token: token, user: user);
-  }
-
-  /// updateUser refreshes the cached current user (e.g. after editing the profile) so the
-  /// rest of the app reflects the new name/photo.
-  void updateUser(User user) {
-    state = state.copyWith(user: user);
-  }
-
-  Future<void> signOut() async {
-    await _secure.delete(key: _kToken);
-    // Drop cached media so a different account/server — or a server whose data was reset
-    // (which reuses media ids) — never shows another context's stale images.
-    try {
-      await DefaultCacheManager().emptyCache();
-    } catch (_) {
-      // Cache clearing is best-effort; never block sign-out on it.
+    final accounts = <ServerAccount>[];
+    for (final e in entries) {
+      final token = await _secure.read(key: _tokenKey(e.id));
+      accounts.add(ServerAccount(id: e.id, baseUrl: e.baseUrl, serverName: e.name, token: token));
     }
-    state = state.copyWith(clearAuth: true);
+    var activeId = prefs.getString(_kActiveGroup);
+    if (activeId == '') activeId = null; // All view
+    if (activeId != null && !accounts.any((g) => g.id == activeId)) {
+      activeId = accounts.isNotEmpty ? accounts.first.id : null;
+    }
+    state = MultiSession(groups: accounts, activeGroupId: activeId, restored: true);
+
+    // Hydrate each signed-in group's user (and refresh its display name) in parallel.
+    for (final g in accounts) {
+      if (g.isSignedIn) _hydrate(g);
+    }
+  }
+
+  /// Validates a restored token by fetching the current user, and refreshes the group's
+  /// display name. Only a real auth rejection drops the token — a network/timeout error
+  /// must NOT sign the group out (a self-hosted box being briefly offline is normal).
+  Future<void> _hydrate(ServerAccount g) async {
+    final client = ApiClient(baseUrl: g.baseUrl, token: g.token);
+    try {
+      final user = await client.me();
+      _update(g.id, (a) => a.copyWith(user: user));
+    } on DioException catch (e) {
+      final code = e.response?.statusCode;
+      if (code == 401 || code == 403) await signOutGroup(g.id);
+      return;
+    } catch (_) {
+      return;
+    }
+    try {
+      final info = await client.serverInfo();
+      if (info.name.isNotEmpty && info.name != g.serverName) {
+        _update(g.id, (a) => a.copyWith(serverName: info.name));
+        await _persistGroups();
+      }
+    } catch (_) {
+      // Name refresh is cosmetic; ignore failures.
+    }
+  }
+
+  void _update(String id, ServerAccount Function(ServerAccount) fn) {
+    state = MultiSession(
+      groups: [
+        for (final g in state.groups)
+          if (g.id == id) fn(g) else g
+      ],
+      activeGroupId: state.activeGroupId,
+      restored: state.restored,
+    );
+  }
+
+  Future<void> _persistGroups() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _kGroups,
+      _encodeGroups(
+          [for (final g in state.groups) (id: g.id, baseUrl: g.baseUrl, name: g.serverName)]),
+    );
+  }
+
+  Future<void> _persistActive() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kActiveGroup, state.activeGroupId ?? '');
+  }
+
+  /// Connects (or re-connects) a group after a successful login/signup and makes it
+  /// active. Re-adding an existing group replaces its entry (the re-login path).
+  Future<void> addGroup({
+    required String baseUrl,
+    required String serverName,
+    required String token,
+    required User user,
+  }) async {
+    final id = groupIdFor(baseUrl);
+    await _secure.write(key: _tokenKey(id), value: token);
+    final account =
+        ServerAccount(id: id, baseUrl: baseUrl, serverName: serverName, token: token, user: user);
+    final others = [
+      for (final g in state.groups)
+        if (g.id != id) g
+    ];
+    state = MultiSession(groups: [...others, account], activeGroupId: id, restored: state.restored);
+    await _persistGroups();
+    await _persistActive();
+  }
+
+  /// Drops one group's token (e.g. its server rejected it) but keeps the entry, so the
+  /// switcher can offer re-login. Never touches the other groups or the image cache.
+  Future<void> signOutGroup(String id) async {
+    await _secure.delete(key: _tokenKey(id));
+    _update(id, (g) => g.copyWith(clearAuth: true));
+  }
+
+  /// Leaves a group entirely: token gone, entry gone.
+  Future<void> removeGroup(String id) async {
+    await _secure.delete(key: _tokenKey(id));
+    final groups = [
+      for (final g in state.groups)
+        if (g.id != id) g
+    ];
+    var active = state.activeGroupId;
+    if (active == id) active = groups.isNotEmpty ? groups.first.id : null;
+    state = MultiSession(groups: groups, activeGroupId: active, restored: state.restored);
+    await _persistGroups();
+    await _persistActive();
+  }
+
+  /// Switches the viewed group; null selects the combined All view.
+  Future<void> setActive(String? id) async {
+    state = MultiSession(groups: state.groups, activeGroupId: id, restored: state.restored);
+    await _persistActive();
+  }
+
+  /// Refreshes the cached user for a group (e.g. after editing the profile there).
+  void updateUser(String groupId, User user) {
+    _update(groupId, (g) => g.copyWith(user: user));
+  }
+
+  static List<({String id, String baseUrl, String name})> _decodeGroups(String? raw) {
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final list = jsonDecode(raw) as List;
+      return [
+        for (final e in list.cast<Map<String, dynamic>>())
+          (
+            id: e['id'] as String,
+            baseUrl: e['baseUrl'] as String,
+            name: e['name'] as String? ?? 'Check-In',
+          )
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static String _encodeGroups(List<({String id, String baseUrl, String name})> entries) {
+    return jsonEncode([
+      for (final e in entries) {'id': e.id, 'baseUrl': e.baseUrl, 'name': e.name}
+    ]);
   }
 }
 
-final sessionProvider = StateNotifierProvider<SessionController, Session>(
-  (ref) => SessionController(),
+final multiSessionProvider = StateNotifierProvider<MultiSessionController, MultiSession>(
+  (ref) => MultiSessionController(),
 );
+
+/// An ApiClient bound to one group. A 401 there signs out ONLY that group — the other
+/// groups' sessions (and the shared image cache) stay intact.
+final apiForGroupProvider = Provider.family<ApiClient, String>((ref, groupId) {
+  final g = ref.watch(multiSessionProvider.select((s) => s.byId(groupId)));
+  return ApiClient(
+    baseUrl: g?.baseUrl ?? '',
+    token: g?.token,
+    onUnauthorized: () => ref.read(multiSessionProvider.notifier).signOutGroup(groupId),
+  );
+});
+
+/// The account for "the current group" — the active one, or the first signed-in group
+/// while viewing All. Screens that are inherently single-group (profile, admin,
+/// settings, search) hang off this.
+final currentAccountProvider = Provider<ServerAccount?>((ref) {
+  return ref.watch(multiSessionProvider).current;
+});
+
+/// ApiClient for the current group (see [currentAccountProvider]). The single-group
+/// screens keep reading this exactly like the old single-session apiProvider.
+final apiProvider = Provider<ApiClient>((ref) {
+  final acct = ref.watch(currentAccountProvider);
+  if (acct == null) return ApiClient(baseUrl: '');
+  return ref.watch(apiForGroupProvider(acct.id));
+});
+
+/// Resolves the account that owns a piece of content tagged with [groupId] (see
+/// Post.groupId). Null falls back to the current group, so single-group screens work
+/// unchanged.
+final contentAccountProvider = Provider.family<ServerAccount?, String?>((ref, groupId) {
+  if (groupId != null) {
+    final g = ref.watch(multiSessionProvider.select((s) => s.byId(groupId)));
+    if (g != null) return g;
+  }
+  return ref.watch(currentAccountProvider);
+});
+
+/// ApiClient for content from [groupId] — likes, comments, images on a post must hit
+/// the server the post lives on, which in the All view differs per post.
+final contentApiProvider = Provider.family<ApiClient, String?>((ref, groupId) {
+  final acct = ref.watch(contentAccountProvider(groupId));
+  if (acct == null) return ApiClient(baseUrl: '');
+  return ref.watch(apiForGroupProvider(acct.id));
+});
 
 const _kAccentId = 'accent_id';
 
@@ -137,29 +361,64 @@ final accentProvider = StateNotifierProvider<AccentController, AccentPalette>(
   (ref) => AccentController(),
 );
 
-/// An ApiClient bound to the current server URL and token. Rebuilds whenever the
-/// session changes.
-final apiProvider = Provider<ApiClient>((ref) {
-  final s = ref.watch(sessionProvider);
-  return ApiClient(
-    baseUrl: s.baseUrl ?? '',
-    token: s.token,
-    // If an authenticated request 401s, the session is dead — sign out so the user can
-    // re-login instead of being stuck on errors.
-    onUnauthorized: () => ref.read(sessionProvider.notifier).signOut(),
-  );
-});
-
-/// The location filter applied to the home feed — null means all places. Set it and the
-/// feed refetches server-side (so you see every check-in from that place, not just the
-/// loaded page).
+/// The location filter applied to the home feed — null means all places. Only applies
+/// to a single group's feed (the filter is hidden in the All view).
 final feedLocationProvider = StateProvider<String?>((ref) => null);
 
+/// What the feed shows: the merged posts plus which groups couldn't be reached (All
+/// view only), so the feed can degrade gracefully instead of failing whole.
+class FeedResult {
+  const FeedResult({required this.posts, this.unreachable = const []});
+
+  final List<Post> posts;
+  final List<ServerAccount> unreachable;
+}
+
+/// Merges per-group feed pages into one list, newest first. Ties break on post id so
+/// the order is stable across refreshes.
+List<Post> mergeFeeds(Iterable<List<Post>> pages) {
+  final merged = [for (final page in pages) ...page];
+  merged.sort((a, b) {
+    final byTime = b.createdAt.compareTo(a.createdAt);
+    return byTime != 0 ? byTime : b.id.compareTo(a.id);
+  });
+  return merged;
+}
+
 /// The home feed as a refreshable provider. Invalidate it (e.g. after creating a post)
-/// and the feed list updates without a manual pull-to-refresh.
-final feedProvider = FutureProvider.autoDispose<List<Post>>((ref) {
-  final location = ref.watch(feedLocationProvider);
-  return ref.watch(apiProvider).feed(location: location);
+/// and the feed list updates without a manual pull-to-refresh. Single group → that
+/// group's feed (with the location filter); All view → the first page of every
+/// signed-in group's feed, merged by time and tagged with its origin group.
+final feedProvider = FutureProvider.autoDispose<FeedResult>((ref) async {
+  final session = ref.watch(multiSessionProvider);
+  if (!session.isAllView) {
+    final acct = session.current;
+    if (acct == null || !acct.isSignedIn) return const FeedResult(posts: []);
+    final location = ref.watch(feedLocationProvider);
+    final posts = await ref.watch(apiForGroupProvider(acct.id)).feed(location: location);
+    return FeedResult(posts: [for (final p in posts) p.withGroup(acct.id)]);
+  }
+
+  final groups = session.signedIn;
+  final pages = await Future.wait([
+    for (final g in groups)
+      ref
+          .watch(apiForGroupProvider(g.id))
+          .feed()
+          .then<List<Post>?>((posts) => [for (final p in posts) p.withGroup(g.id)])
+          .catchError((_) => null),
+  ]);
+  final unreachable = <ServerAccount>[];
+  final loaded = <List<Post>>[];
+  for (var i = 0; i < groups.length; i++) {
+    final page = pages[i];
+    if (page == null) {
+      unreachable.add(groups[i]);
+    } else {
+      loaded.add(page);
+    }
+  }
+  return FeedResult(posts: mergeFeeds(loaded), unreachable: unreachable);
 });
 
 /// Distinct place labels across all check-ins (most-used first), for the location filter.

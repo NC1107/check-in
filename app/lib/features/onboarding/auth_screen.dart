@@ -16,6 +16,7 @@ import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
+import 'invite_links.dart';
 import 'phone_field.dart';
 import 'reset_password_screen.dart';
 import '../admin/contacts_picker_screen.dart';
@@ -39,11 +40,19 @@ const _kSeenSelfHostIntro = 'seen_selfhost_intro';
 
 enum _Step { entry, profile, invite, done }
 
-/// AuthScreen is the single entry point once the app launches (until logged in). The
-/// first step takes the server address *and* phone number together, then branches to
-/// login (returning members) or signup (new invitees / the first host).
+/// AuthScreen connects this device to a group's server. The first step takes the
+/// server address *and* phone number together, then branches to login (returning
+/// members) or signup (new invitees / the first host).
+///
+/// The flow is ADDITIVE: finishing appends the group to the multi-session list without
+/// touching other connected groups. It serves both the first-launch entry point (rooted
+/// by main.dart) and the "Add group" / re-login flows pushed from the group switcher.
 class AuthScreen extends ConsumerStatefulWidget {
-  const AuthScreen({super.key});
+  const AuthScreen({super.key, this.initialServer});
+
+  /// Prefills (e.g. from an invite link or a signed-out group's entry) the server
+  /// address. Null starts blank in the pushed add-group flow.
+  final String? initialServer;
 
   @override
   ConsumerState<AuthScreen> createState() => _AuthScreenState();
@@ -70,16 +79,28 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   bool _isFirstAdmin = false;
   AuthResult? _pendingAuth; // captured from signup, applied on "Enter Check-In"
   int? _invited; // number of invitees added on the host invite step (null = not done)
-  // The server URL we've successfully reached and bound the session to. Null until the
-  // first successful probe; used to avoid re-probing an unchanged address.
+  // The server URL we've successfully reached. Null until the first successful probe;
+  // used to avoid re-probing an unchanged address.
   String? _connectedUrl;
+  // What the probed server reported (name, whether it already has a host).
+  ServerInfo? _serverInfo;
 
   @override
   void initState() {
     super.initState();
-    // Pre-fill the last server we used so logging back in doesn't mean retyping it.
-    final saved = ref.read(sessionProvider).baseUrl;
+    // Pre-fill from the invite link / switcher entry, or — at the root, when signed out
+    // everywhere — the last server used, so logging back in doesn't mean retyping it.
+    final pendingInvite = ref.read(pendingInviteServerProvider);
+    final saved = widget.initialServer ??
+        pendingInvite ??
+        (Navigator.of(context).canPop() ? null : ref.read(multiSessionProvider).current?.baseUrl);
     if (saved != null && saved.isNotEmpty) _server.text = saved;
+    if (pendingInvite != null) {
+      // Consumed — don't re-prefill the next auth screen with a stale invite.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ref.read(pendingInviteServerProvider.notifier).state = null;
+      });
+    }
     // First-launch explainer: tell new users this is self-hosted before they hit the
     // server-address field wondering what to type. Runs after the first frame so a dialog
     // has a route to attach to.
@@ -99,13 +120,13 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   // --- self-hosting intro ---
 
-  /// Shows the self-hosting explainer once, on the first launch only. Someone who already
-  /// has a server bound is established and is quietly opted out.
+  /// Shows the self-hosting explainer once, on the first launch only. Someone who
+  /// already has a group connected (including the add-group flow) is established and is
+  /// quietly opted out.
   Future<void> _maybeShowSelfHostIntro() async {
     final prefs = await SharedPreferences.getInstance();
     if (prefs.getBool(_kSeenSelfHostIntro) ?? false) return;
-    final saved = ref.read(sessionProvider).baseUrl;
-    if (saved == null || saved.isEmpty) {
+    if (ref.read(multiSessionProvider).groups.isEmpty && _server.text.isEmpty) {
       if (!mounted) return;
       await _showSelfHostInfo();
     }
@@ -217,9 +238,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     return url;
   }
 
-  /// Probes the server address and binds the session to it. Returns true on success;
-  /// sets [_error] and returns false if blank or unreachable. No-ops if the address is
-  /// unchanged since the last successful probe.
+  /// Probes the server address. Returns true on success; sets [_error] and returns
+  /// false if blank or unreachable. No-ops if the address is unchanged since the last
+  /// successful probe. Nothing is persisted until login/signup completes ([_finish]).
   Future<bool> _ensureServer() async {
     final url = _normalizeServer(_server.text);
     if (url == null) {
@@ -229,7 +250,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     if (url == _connectedUrl) return true;
     try {
       final info = await ApiClient(baseUrl: url).serverInfo();
-      await ref.read(sessionProvider.notifier).setServer(url, serverInitialized: info.initialized);
+      _serverInfo = info;
       _connectedUrl = url;
       return true;
     } on DioException catch (_) {
@@ -237,6 +258,23 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           _serverError = "Couldn't reach that server. Check the address and your connection.");
       return false;
     }
+  }
+
+  /// An unauthenticated client for the probed server (only valid after [_ensureServer]).
+  ApiClient get _client => ApiClient(baseUrl: _connectedUrl ?? '');
+
+  /// Terminal step for every path (login, signup, password reset): append the group to
+  /// the connected list, make it active, and — when this screen was pushed from the
+  /// switcher — pop back to the shell. The root instance is swapped out automatically
+  /// once a session exists.
+  Future<void> _finish(AuthResult auth) async {
+    await ref.read(multiSessionProvider.notifier).addGroup(
+          baseUrl: _connectedUrl!,
+          serverName: _serverInfo?.name ?? 'Check-In',
+          token: auth.token,
+          user: auth.user,
+        );
+    if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop();
   }
 
   /// Single entry action: connect to the server, then check the number and branch to
@@ -250,7 +288,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     });
     try {
       if (!await _ensureServer()) return;
-      final res = await ref.read(apiProvider).checkPhone(_fullPhone);
+      final res = await _client.checkPhone(_fullPhone);
       if (res.registered) {
         setState(() => _loginMode = true); // existing account → reveal the password field
       } else if (res.allowed) {
@@ -278,8 +316,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     });
     try {
       if (!await _ensureServer()) return;
-      final res = await ref.read(apiProvider).login(phone: _fullPhone, password: _password.text);
-      await ref.read(sessionProvider.notifier).signIn(res.token, res.user);
+      final res = await _client.login(phone: _fullPhone, password: _password.text);
+      await _finish(res);
     } on DioException catch (e) {
       setState(() => _error = _msg(e, 'Incorrect phone or password.'));
     } finally {
@@ -294,11 +332,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     if (!connected || !mounted) return;
     final res = await Navigator.of(context).push<AuthResult>(
       MaterialPageRoute(
-        builder: (_) => ResetPasswordScreen(initialPhone: _fullPhone),
+        builder: (_) => ResetPasswordScreen(api: _client, initialPhone: _fullPhone),
       ),
     );
     if (res != null && mounted) {
-      await ref.read(sessionProvider.notifier).signIn(res.token, res.user);
+      await _finish(res);
     }
   }
 
@@ -312,7 +350,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       _error = null;
     });
     try {
-      final api = ref.read(apiProvider);
+      final api = _client;
       // Sign up first — this is unauthenticated and returns the token. We can't upload the
       // photo beforehand because media upload requires auth (chicken-and-egg).
       var res = await api.signup(
@@ -327,8 +365,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       // already exists, so a photo failure shouldn't block finishing signup.
       if (_photo != null) {
         try {
-          final baseUrl = ref.read(sessionProvider).baseUrl ?? '';
-          final authed = ApiClient(baseUrl: baseUrl, token: res.token);
+          final authed = ApiClient(baseUrl: _connectedUrl ?? '', token: res.token);
           final mediaId = await authed.uploadImage(_photo!.path);
           final updatedUser = await authed.setProfilePhoto(mediaId);
           res = AuthResult(token: res.token, user: updatedUser);
@@ -351,7 +388,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   Future<void> _enterApp() async {
     final auth = _pendingAuth;
     if (auth == null) return;
-    await ref.read(sessionProvider.notifier).signIn(auth.token, auth.user);
+    await _finish(auth);
   }
 
   /// Host invite step: pick contacts and add them to the allowlist using the freshly
@@ -363,8 +400,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     if (phones == null || phones.isEmpty || !mounted) return;
     setState(() => _busy = true);
     try {
-      final baseUrl = ref.read(sessionProvider).baseUrl ?? '';
-      final api = ApiClient(baseUrl: baseUrl, token: _pendingAuth!.token);
+      final api = ApiClient(baseUrl: _connectedUrl ?? '', token: _pendingAuth!.token);
       final result = await api.uploadContacts(phones);
       if (!mounted) return;
       setState(() => _invited = (result['added'] as int?) ?? phones.length);
@@ -378,6 +414,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   }
 
   void _back() {
+    if (_step == _Step.entry && !_loginMode && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop(); // leave the pushed add-group flow
+      return;
+    }
     setState(() {
       _error = null;
       _phoneError = null;
@@ -469,9 +509,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   }
 
   Widget _header() {
-    // The back arrow only appears where there's somewhere to go back to: the profile
-    // step (→ entry) or the login sub-state (→ neutral entry).
-    final canGoBack = _step == _Step.profile || (_step == _Step.entry && _loginMode);
+    // The back arrow appears where there's somewhere to go back to: the profile step
+    // (→ entry), the login sub-state (→ neutral entry), or — for the pushed add-group
+    // flow — the neutral entry itself (→ back to the app).
+    final pushed = Navigator.of(context).canPop();
+    final canGoBack = _step == _Step.profile || (_step == _Step.entry && (_loginMode || pushed));
     final pIndex = _step == _Step.profile ? 2 : 1;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 20, 4),
@@ -514,7 +556,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         Image.asset('assets/logo/echo-rings.png', width: 52, height: 52),
         const SizedBox(height: 20),
         Text(
-          _loginMode ? 'Welcome back' : 'Connect to Check-In',
+          _loginMode
+              ? 'Welcome back'
+              : (ref.watch(multiSessionProvider).anySignedIn
+                  ? 'Add a group'
+                  : 'Connect to Check-In'),
           style: const TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 22),
         ),
         const SizedBox(height: 24),
@@ -611,6 +657,28 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         const SizedBox(height: 6),
         const Text('This is how your circle will see you.',
             style: TextStyle(color: _fgSecondary, fontSize: 14, height: 1.5)),
+        if (_isFirstAdmin) ...[
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: context.accentLight,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.shield_outlined, size: 18, color: context.accent),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    "This group has no host yet — you'll become its host and admin.",
+                    style: TextStyle(color: context.accent, fontSize: 13, height: 1.4),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: 18),
         Center(
           child: GestureDetector(

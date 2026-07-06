@@ -23,10 +23,13 @@ String _relativeTime(DateTime dt) {
 String _fullLocalTime(DateTime dt) => DateFormat('MMM d, y · h:mm a').format(dt.toLocal());
 
 /// PostDetailScreen shows a single post with its full comment thread and a composer.
+/// [groupId] is the connected group the post lives on (null = the current group);
+/// every call from this screen goes to that server.
 class PostDetailScreen extends ConsumerStatefulWidget {
-  const PostDetailScreen({super.key, required this.postId});
+  const PostDetailScreen({super.key, required this.postId, this.groupId});
 
   final int postId;
+  final String? groupId;
 
   @override
   ConsumerState<PostDetailScreen> createState() => _PostDetailScreenState();
@@ -45,7 +48,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
 
   Future<void> _savePhoto(int mediaId) async {
     try {
-      final bytes = await ref.read(apiProvider).downloadMedia(mediaId);
+      final bytes = await ref.read(contentApiProvider(widget.groupId)).downloadMedia(mediaId);
       await Gal.putImageBytes(bytes);
       if (mounted) _snack('Saved to your photos');
     } on GalException catch (_) {
@@ -63,7 +66,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     final next = !current;
     setState(() => _likeOverride = next);
     try {
-      final api = ref.read(apiProvider);
+      final api = ref.read(contentApiProvider(widget.groupId));
       next ? await api.like(post.id) : await api.unlike(post.id);
     } catch (_) {
       if (mounted) setState(() => _likeOverride = current);
@@ -88,7 +91,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       _error = null;
     });
     try {
-      final api = ref.read(apiProvider);
+      final api = ref.read(contentApiProvider(widget.groupId));
       final post = await api.getPost(widget.postId);
       final comments = await api.comments(widget.postId);
       if (!mounted) return;
@@ -112,7 +115,8 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     setState(() => _sending = true);
     FocusScope.of(context).unfocus();
     try {
-      final added = await ref.read(apiProvider).addComment(widget.postId, text);
+      final added =
+          await ref.read(contentApiProvider(widget.groupId)).addComment(widget.postId, text);
       _comment.clear();
       // Append in place — no re-fetch, so the post and existing comments don't flash.
       if (mounted) setState(() => _comments = [..._comments, added]);
@@ -199,7 +203,8 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                           borderRadius: BorderRadius.circular(14),
                           child: AspectRatio(
                             aspectRatio: 4 / 3,
-                            child: PostImageCarousel(mediaIds: post.images),
+                            child:
+                                PostImageCarousel(mediaIds: post.images, groupId: widget.groupId),
                           ),
                         ),
                       ),
@@ -297,7 +302,8 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
               name: post.authorName,
               mediaId: post.authorPhotoId,
               size: 42,
-              colorSeed: post.authorId),
+              colorSeed: post.authorId,
+              groupId: widget.groupId),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -344,7 +350,12 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          UserAvatar(name: c.authorName, mediaId: c.authorPhotoId, size: 32, colorSeed: c.id),
+          UserAvatar(
+              name: c.authorName,
+              mediaId: c.authorPhotoId,
+              size: 32,
+              colorSeed: c.id,
+              groupId: widget.groupId),
           const SizedBox(width: 10),
           Expanded(
             child: Column(

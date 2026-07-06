@@ -14,9 +14,13 @@ import '../profile/profile_screen.dart';
 /// Full-content search across check-in captions, comments, and people. Queries are
 /// debounced and only run at 2+ characters, navigating to the matched check-in or profile.
 class GlobalSearchDelegate extends SearchDelegate<void> {
-  GlobalSearchDelegate(this._api) : super(searchFieldLabel: 'Search check-ins & people');
+  GlobalSearchDelegate(this._api, this._groupId)
+      : super(searchFieldLabel: 'Search check-ins & people');
 
   final ApiClient _api;
+  // Search is per-server; results (avatars, thumbnails, detail pushes) must stay scoped
+  // to the group that was searched.
+  final String _groupId;
   Timer? _debounce;
   final _results = ValueNotifier<({List<Post> posts, List<User> people})?>(null);
   String _lastQueried = '';
@@ -149,12 +153,14 @@ class GlobalSearchDelegate extends SearchDelegate<void> {
 
   Widget _personTile(BuildContext context, User u) {
     return ListTile(
-      leading: UserAvatar(name: u.name, mediaId: u.profileMediaId, size: 40, colorSeed: u.id),
+      leading: UserAvatar(
+          name: u.name, mediaId: u.profileMediaId, size: 40, colorSeed: u.id, groupId: _groupId),
       title: Text(u.name, style: const TextStyle(color: kFgPrimary, fontWeight: FontWeight.w600)),
       onTap: () {
         final nav = Navigator.of(context);
         close(context, null);
-        nav.push(MaterialPageRoute(builder: (_) => ProfileScreen(userId: u.id, isSelf: false)));
+        nav.push(MaterialPageRoute(
+            builder: (_) => ProfileScreen(userId: u.id, isSelf: false, groupId: _groupId)));
       },
     );
   }
@@ -167,7 +173,8 @@ class GlobalSearchDelegate extends SearchDelegate<void> {
       leading: p.kind == 'image' && p.mediaId != null
           ? ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: SizedBox(width: 40, height: 40, child: AuthImage(mediaId: p.mediaId!)),
+              child: SizedBox(
+                  width: 40, height: 40, child: AuthImage(mediaId: p.mediaId!, groupId: _groupId)),
             )
           : Container(
               width: 40,
@@ -185,7 +192,8 @@ class GlobalSearchDelegate extends SearchDelegate<void> {
       onTap: () {
         final nav = Navigator.of(context);
         close(context, null);
-        nav.push(MaterialPageRoute(builder: (_) => PostDetailScreen(postId: p.id)));
+        nav.push(
+            MaterialPageRoute(builder: (_) => PostDetailScreen(postId: p.id, groupId: _groupId)));
       },
     );
   }

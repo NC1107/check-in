@@ -18,6 +18,11 @@ type Config struct {
 	MediaDir string
 	// ServerName is a human-friendly name surfaced to clients via /api/server-info.
 	ServerName string
+	// PublicURL is this server's public base URL (e.g. "https://alpha.check-in.example.com").
+	// Surfaced via /api/server-info and stamped into push payloads so a client connected to
+	// several servers can attribute a notification to the right one. Optional; empty means
+	// the client falls back to matching on nothing (single-server installs don't need it).
+	PublicURL string
 	// SessionTTL is how long a login session token stays valid.
 	SessionTTL time.Duration
 	// MaxUploadBytes caps the size of an uploaded image.
@@ -42,6 +47,7 @@ func Load() (Config, error) {
 		DatabaseURL:        getenv("CHECKIN_DATABASE_URL", "postgres://checkin:checkin@localhost:5432/checkin?sslmode=disable"),
 		MediaDir:           getenv("CHECKIN_MEDIA_DIR", "./data/media"),
 		ServerName:         getenv("CHECKIN_SERVER_NAME", "Check-In"),
+		PublicURL:          getenv("CHECKIN_PUBLIC_URL", ""),
 		SessionTTL:         getdur("CHECKIN_SESSION_TTL", 30*24*time.Hour),
 		MaxUploadBytes:     getint64("CHECKIN_MAX_UPLOAD_BYTES", 10<<20), // 10 MiB
 		DebugToken:         getenv("CHECKIN_DEBUG_TOKEN", ""),

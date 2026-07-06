@@ -3,6 +3,7 @@ import 'package:timezone/data/latest.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
 import '../api/api_client.dart';
+import '../api/models.dart';
 
 /// On-device birthday reminders. The app fetches friends' birthdays from the server and
 /// schedules a local notification on the morning of each birthday — no cloud push
@@ -36,12 +37,72 @@ Future<void> requestNotificationPermission() async {
       ?.requestPermissions(alert: true, badge: true, sound: true);
 }
 
-/// scheduleBirthdayNotifications syncs birthdays and (re)schedules reminders for the
-/// next occurrence of each friend's birthday at 9am local time.
-Future<void> scheduleBirthdayNotifications(ApiClient api) async {
+/// A deterministic 31-bit id for one friend's reminder. User ids are only unique per
+/// group (server), so the id mixes in the group; FNV-1a keeps it stable across launches
+/// (Dart's String.hashCode isn't guaranteed to be).
+int birthdayNotificationId(String groupId, int userId) {
+  var hash = 0x811c9dc5;
+  for (final unit in '$groupId#$userId'.codeUnits) {
+    hash ^= unit;
+    hash = (hash * 0x01000193) & 0x7fffffff;
+  }
+  return hash;
+}
+
+/// One group whose birthdays should be scheduled: its client plus identity for the
+/// notification id (stable [id]) and the reminder title ([name]).
+typedef BirthdayGroup = ({ApiClient api, String id, String name});
+
+/// One friend's reminder, resolved to its next 9am occurrence.
+typedef BirthdayEntry = ({String groupId, String groupName, Birthday birthday, DateTime when});
+
+/// Resolves each birthday to its next 9am occurrence after [now] and keeps only what
+/// should be pre-scheduled: within [window] (default 3 months), soonest first, at most
+/// [max]. iOS silently drops pending local notifications beyond 64 per app, so
+/// scheduling a whole year of birthdays across several groups would lose the nearest
+/// ones; the schedule refreshes on every app open, which rolls the window forward.
+List<BirthdayEntry> upcomingBirthdaySchedule(
+  List<({String groupId, String groupName, Birthday birthday})> all,
+  DateTime now, {
+  Duration window = const Duration(days: 90),
+  int max = 60,
+}) {
+  final entries = <BirthdayEntry>[];
+  for (final e in all) {
+    var when = DateTime(now.year, e.birthday.month, e.birthday.day, 9);
+    if (when.isBefore(now)) {
+      when = DateTime(now.year + 1, e.birthday.month, e.birthday.day, 9);
+    }
+    if (when.isBefore(now.add(window))) {
+      entries.add((groupId: e.groupId, groupName: e.groupName, birthday: e.birthday, when: when));
+    }
+  }
+  entries.sort((a, b) => a.when.compareTo(b.when));
+  return entries.length > max ? entries.sublist(0, max) : entries;
+}
+
+/// The reminder title. With several groups connected the same name can exist in more
+/// than one of them, so the group's display name disambiguates; pass null otherwise.
+String birthdayReminderTitle(String friendName, String? groupName) => groupName == null
+    ? "It's $friendName's birthday! 🎂"
+    : "It's $friendName's birthday! 🎂 — $groupName";
+
+/// scheduleBirthdayNotifications syncs birthdays from every connected group and
+/// (re)schedules reminders for each friend's birthday at 9am local time (next 3
+/// months, see [upcomingBirthdaySchedule]). Groups that can't be reached right now
+/// are simply skipped until the next launch.
+Future<void> scheduleBirthdayNotifications(List<BirthdayGroup> groups) async {
   try {
     await _ensureInit();
-    final birthdays = await api.upcomingBirthdays();
+    final all = <({String groupId, String groupName, Birthday birthday})>[];
+    for (final g in groups) {
+      try {
+        final birthdays = await g.api.upcomingBirthdays();
+        all.addAll([for (final b in birthdays) (groupId: g.id, groupName: g.name, birthday: b)]);
+      } catch (_) {
+        // One offline group must not cost the others their reminders.
+      }
+    }
     await _plugin.cancelAll();
 
     const details = NotificationDetails(
@@ -55,16 +116,14 @@ Future<void> scheduleBirthdayNotifications(ApiClient api) async {
     );
 
     final now = tz.TZDateTime.now(tz.local);
-    for (final b in birthdays) {
-      var when = tz.TZDateTime(tz.local, now.year, b.month, b.day, 9);
-      if (when.isBefore(now)) {
-        when = tz.TZDateTime(tz.local, now.year + 1, b.month, b.day, 9);
-      }
+    final multiGroup = groups.length > 1;
+    for (final e in upcomingBirthdaySchedule(all, now)) {
       await _plugin.zonedSchedule(
-        b.userId, // stable id per friend so re-scheduling replaces, not duplicates
-        "It's ${b.name}'s birthday! 🎂",
+        // Stable id per (group, friend) so re-scheduling replaces, not duplicates.
+        birthdayNotificationId(e.groupId, e.birthday.userId),
+        birthdayReminderTitle(e.birthday.name, multiGroup ? e.groupName : null),
         'Open Check-In to wish them a happy birthday.',
-        when,
+        tz.TZDateTime(tz.local, e.when.year, e.when.month, e.when.day, e.when.hour),
         details,
         androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
         uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,

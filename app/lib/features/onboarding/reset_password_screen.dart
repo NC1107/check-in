@@ -2,16 +2,18 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../state/app_state.dart';
+import '../../api/api_client.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
 import 'phone_field.dart';
 
 /// Redeem a host-issued recovery code to set a new password. On success pops with the
-/// AuthResult so the caller can sign in. Assumes the server is already connected.
+/// AuthResult so the caller can sign in. The caller passes the client for the server
+/// being reset (the flow runs before any group session exists).
 class ResetPasswordScreen extends ConsumerStatefulWidget {
-  const ResetPasswordScreen({super.key, this.initialPhone = ''});
+  const ResetPasswordScreen({super.key, required this.api, this.initialPhone = ''});
 
+  final ApiClient api;
   final String initialPhone;
 
   @override
@@ -58,11 +60,11 @@ class _ResetPasswordScreenState extends ConsumerState<ResetPasswordScreen> {
       _error = null;
     });
     try {
-      final res = await ref.read(apiProvider).resetPassword(
-            phone: _fullPhone,
-            code: _code.text.trim(),
-            newPassword: _password.text,
-          );
+      final res = await widget.api.resetPassword(
+        phone: _fullPhone,
+        code: _code.text.trim(),
+        newPassword: _password.text,
+      );
       if (mounted) Navigator.of(context).pop(res);
     } on DioException catch (e) {
       final data = e.response?.data;

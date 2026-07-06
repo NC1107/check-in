@@ -2,6 +2,13 @@
 .env
 *.env.local
 
+# Multi-group registry (per-group debug tokens) and its generated artifacts.
+# Keep groups/example.env.sample; re-render the rest with scripts/gen-stack.sh.
+groups/*.env
+docker-compose.generated.yml
+Caddyfile.generated
+caddy-static/
+
 # Server
 server/data/
 server/server

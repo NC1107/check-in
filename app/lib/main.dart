@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:app_links/app_links.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -8,10 +9,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'features/feed/home_shell.dart';
 import 'features/onboarding/auth_screen.dart';
+import 'features/onboarding/invite_links.dart';
 import 'features/onboarding/terms_screen.dart';
 import 'notifications/push_messaging.dart';
 import 'state/app_state.dart';
 import 'theme/tokens.dart';
+
+/// Root navigator, so invite links can push the add-group flow from outside the tree.
+final rootNavigatorKey = GlobalKey<NavigatorState>();
 
 void main() {
   // Ensure plugins (secure storage, prefs) are ready before providers spin up, and route
@@ -53,23 +58,73 @@ Future<void> _initFirebase() async {
   }
 }
 
-class CheckInApp extends ConsumerWidget {
+class CheckInApp extends ConsumerStatefulWidget {
   const CheckInApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final session = ref.watch(sessionProvider);
+  ConsumerState<CheckInApp> createState() => _CheckInAppState();
+}
+
+class _CheckInAppState extends ConsumerState<CheckInApp> {
+  StreamSubscription<Uri>? _linkSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _initInviteLinks();
+  }
+
+  @override
+  void dispose() {
+    _linkSub?.cancel();
+    super.dispose();
+  }
+
+  /// Invite links (see invite_links.dart) open the add-group flow with the group's
+  /// server prefilled. Best-effort: without link support the paste-based flow remains.
+  Future<void> _initInviteLinks() async {
+    if (kIsWeb) return;
+    try {
+      final appLinks = AppLinks();
+      final initial = await appLinks.getInitialLink();
+      if (initial != null) _handleLink(initial);
+      _linkSub = appLinks.uriLinkStream.listen(_handleLink);
+    } catch (_) {}
+  }
+
+  void _handleLink(Uri uri) {
+    final server = inviteServerFromUri(uri);
+    if (server == null) return;
+    // Stash it so the root auth screen prefills even when we can't push (cold start,
+    // EULA still pending).
+    ref.read(pendingInviteServerProvider.notifier).state = server;
+    if (!ref.read(termsProvider)) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      rootNavigatorKey.currentState?.push(
+        MaterialPageRoute(builder: (_) => AuthScreen(initialServer: server)),
+      );
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = ref.watch(multiSessionProvider);
     final accent = ref.watch(accentProvider);
     final termsAccepted = ref.watch(termsProvider);
 
     // Show the EULA once before login/signup (Guideline 1.2). After acceptance the
-    // user lands on the normal auth flow.
+    // user lands on the normal auth flow — or straight into the app when any connected
+    // group still has a session. A blank frame covers the brief prefs restore so the
+    // auth screen doesn't flash on every warm start.
     final Widget home = !termsAccepted
         ? const TermsScreen()
-        : (session.isLoggedIn ? const HomeShell() : const AuthScreen());
+        : !session.restored
+            ? const Scaffold(body: SizedBox.shrink())
+            : (session.anySignedIn ? const HomeShell() : const AuthScreen());
 
     return MaterialApp(
       title: 'Check-In',
+      navigatorKey: rootNavigatorKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,

@@ -1,14 +1,19 @@
 // Plain data models mirroring the server's JSON responses.
 
 class ServerInfo {
-  ServerInfo({required this.name, required this.initialized});
+  ServerInfo({required this.name, required this.initialized, this.publicUrl});
 
   final String name;
   final bool initialized;
 
+  /// The server's canonical public base URL, when it advertises one (multi-group
+  /// installs). Used to match push payloads back to a connected group.
+  final String? publicUrl;
+
   factory ServerInfo.fromJson(Map<String, dynamic> j) => ServerInfo(
         name: j['name'] as String? ?? 'Check-In',
         initialized: j['initialized'] as bool? ?? false,
+        publicUrl: j['publicUrl'] as String?,
       );
 }
 
@@ -59,6 +64,7 @@ class Post {
     this.location,
     this.commentsPreview = const [],
     this.people = const [],
+    this.groupId,
   });
 
   final int id;
@@ -78,6 +84,31 @@ class Post {
 
   /// Members tagged as appearing in the post (id for filtering, name for display).
   final List<({int id, String name})> people;
+
+  /// Which connected group (server) this post came from. Never sent by the server —
+  /// the client stamps it when fetching, so likes/comments/images on this post can be
+  /// routed back to the right server in the multi-group views.
+  final String? groupId;
+
+  /// Returns this post tagged with its origin group.
+  Post withGroup(String groupId) => Post(
+        id: id,
+        authorId: authorId,
+        authorName: authorName,
+        kind: kind,
+        body: body,
+        createdAt: createdAt,
+        likeCount: likeCount,
+        commentCount: commentCount,
+        likedByViewer: likedByViewer,
+        mediaId: mediaId,
+        mediaIds: mediaIds,
+        authorPhotoId: authorPhotoId,
+        location: location,
+        commentsPreview: commentsPreview,
+        people: people,
+        groupId: groupId,
+      );
 
   /// The post's images in order. Prefers the multi-photo set, falling back to the legacy
   /// single cover so older posts still render.

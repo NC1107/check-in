@@ -107,8 +107,8 @@ func (s *Server) notifyPost(authorID int64, authorName string, postID int64) {
 	if err != nil || len(tokens) == 0 {
 		return
 	}
-	s.push.Send(ctx, tokens, "Check-In", authorName+" shared a check-in",
-		map[string]string{"type": "post", "postId": strconv.FormatInt(postID, 10)})
+	s.push.Send(ctx, tokens, s.cfg.ServerName, authorName+" shared a check-in",
+		s.pushData("post", postID))
 }
 
 // notifyReply pushes a reply notification to the post's author.
@@ -127,6 +127,17 @@ func (s *Server) notifyReply(commenterName string, postID, commenterID int64) {
 	if err != nil || len(tokens) == 0 {
 		return
 	}
-	s.push.Send(ctx, tokens, "Check-In", commenterName+" commented on your check-in",
-		map[string]string{"type": "comment", "postId": strconv.FormatInt(postID, 10)})
+	s.push.Send(ctx, tokens, s.cfg.ServerName, commenterName+" commented on your check-in",
+		s.pushData("comment", postID))
+}
+
+// pushData builds the data payload for a push message. Besides the post reference it
+// carries this server's identity ("server": public base URL) so an app connected to
+// several servers can attribute the notification — post ids alone collide across servers.
+func (s *Server) pushData(kind string, postID int64) map[string]string {
+	data := map[string]string{"type": kind, "postId": strconv.FormatInt(postID, 10)}
+	if s.cfg.PublicURL != "" {
+		data["server"] = s.cfg.PublicURL
+	}
+	return data
 }
