@@ -213,7 +213,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   void _openSearch() {
     final session = ref.read(multiSessionProvider);
     if (session.isAllView) {
-      _allViewHint('Search works within one group — pick a group to search.');
+      _allViewHint('Search works within one group — pick a group in Filters first.');
       return;
     }
     final account = session.current;
@@ -224,8 +224,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     );
   }
 
-  /// Search/filter are per-server; in the combined view they'd silently cover only one
-  /// group, so be honest and ask for a group instead.
+  /// Search is per-server; in the combined view it'd silently cover only one group, so
+  /// be honest and ask for a group instead.
   void _allViewHint(String msg) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
@@ -272,17 +272,18 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 
   Future<void> _openFilter() async {
-    if (ref.read(multiSessionProvider).isAllView) {
-      _allViewHint('Filters work within one group — pick a group to filter.');
-      return;
-    }
+    final session = ref.read(multiSessionProvider);
+    // The group whose filters are loaded: null in the combined All view.
+    final effectiveGroupId = session.isAllView ? null : session.current?.id;
     var locs = <({String location, int count})>[];
-    try {
-      locs = await ref.read(locationsProvider.future);
-    } catch (_) {}
+    if (effectiveGroupId != null) {
+      try {
+        locs = await ref.read(locationsProvider.future);
+      } catch (_) {}
+    }
     if (!mounted) return;
     final result = await showModalBottomSheet<
-        ({Set<int> people, bool includeTagged, String? date, String? location})>(
+        ({Set<int> people, bool includeTagged, String? date, String? location, String? groupId})>(
       context: context,
       isScrollControlled: true,
       backgroundColor: _bgSurface,
@@ -290,6 +291,15 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
       builder: (_) => _FilterSheet(
+        groups: session.groups,
+        groupId: effectiveGroupId,
+        onAddGroup: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const AuthScreen()),
+        ),
+        // Session expired there — run the (additive) login flow again.
+        onRelogin: (g) => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => AuthScreen(initialServer: g.baseUrl)),
+        ),
         authors: _authors(),
         selectedPeople: _people,
         includeTagged: _includeTagged,
@@ -298,18 +308,23 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         selectedLocation: _location,
       ),
     );
-    if (result != null && mounted) {
-      setState(() {
-        _people
-          ..clear()
-          ..addAll(result.people);
-        _includeTagged = result.includeTagged;
-        _datePreset = result.date;
-        _location = result.location;
-      });
-      // Location filters server-side, so update the provider to refetch the feed.
-      ref.read(feedLocationProvider.notifier).state = _location;
+    if (result == null || !mounted) return;
+    if (result.groupId != effectiveGroupId) {
+      // Changing group invalidates the per-group filters along with the feed.
+      _clearGroupFilters();
+      ref.read(multiSessionProvider.notifier).setActive(result.groupId);
+      return;
     }
+    setState(() {
+      _people
+        ..clear()
+        ..addAll(result.people);
+      _includeTagged = result.includeTagged;
+      _datePreset = result.date;
+      _location = result.location;
+    });
+    // Location filters server-side, so update the provider to refetch the feed.
+    ref.read(feedLocationProvider.notifier).state = _location;
   }
 
   List<_FeedItem> _buildItems(List<Post> posts, List<String> unreachable) {
@@ -376,6 +391,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     });
     final session = ref.watch(multiSessionProvider);
     final allView = session.isAllView;
+    // Viewing one group out of several: surfaced as a removable filter chip, since group
+    // selection lives in the filter sheet.
+    final groupFiltered = session.groups.length > 1 && session.activeGroupId != null;
     return Scaffold(
       backgroundColor: _bgMain,
       body: SafeArea(
@@ -414,7 +432,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                       return ListView.builder(
                         controller: _scrollCtrl,
                         keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                        padding: EdgeInsets.only(top: (_hasFilter ? 116 : 72) + 46, bottom: 24),
+                        padding: EdgeInsets.only(
+                            top: (_hasFilter || groupFiltered) ? 116 : 72, bottom: 24),
                         itemCount: posts.isEmpty ? 1 : items.length + (showSpinner ? 1 : 0),
                         itemBuilder: (_, i) {
                           if (posts.isEmpty) {
@@ -451,13 +470,12 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                   ignoring: _searchHidden,
                   child: Column(
                     children: [
-                      const _GroupSwitcher(),
                       _SearchBar(
                         onSearch: _openSearch,
                         onFilter: _openFilter,
-                        filterActive: _hasFilter,
+                        filterActive: _hasFilter || groupFiltered,
                       ),
-                      if (_hasFilter) _activeChips(),
+                      if (_hasFilter || groupFiltered) _activeChips(groupFiltered: groupFiltered),
                     ],
                   ),
                 ),
@@ -469,9 +487,27 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     );
   }
 
-  Widget _activeChips() {
+  /// People ids, dates shown, and places are all per-server, so leaving the group that
+  /// set them invalidates them.
+  void _clearGroupFilters() {
+    setState(() {
+      _people.clear();
+      _includeTagged = true;
+      _datePreset = null;
+      _location = null;
+    });
+    ref.read(feedLocationProvider.notifier).state = null;
+  }
+
+  Widget _activeChips({required bool groupFiltered}) {
+    final session = ref.read(multiSessionProvider);
     final names = {for (final p in _allPosts) p.authorId: p.authorName};
     final chips = <Widget>[
+      if (groupFiltered && session.active != null)
+        _filterChip(session.active!.serverName, () {
+          _clearGroupFilters();
+          ref.read(multiSessionProvider.notifier).setActive(null);
+        }),
       for (final id in _people)
         _filterChip(names[id] ?? 'Someone', () => setState(() => _people.remove(id))),
       if (_datePreset != null) _filterChip(_datePreset!, () => setState(() => _datePreset = null)),
@@ -509,106 +545,6 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
             const SizedBox(width: 5),
             Icon(Icons.close, size: 15, color: context.accent),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-/// The group switcher above the feed: All | each connected group | add. Signed-out
-/// groups show a lock and tap through to re-login; "+" starts the add-group flow.
-class _GroupSwitcher extends ConsumerWidget {
-  const _GroupSwitcher();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final session = ref.watch(multiSessionProvider);
-    final notifier = ref.read(multiSessionProvider.notifier);
-    final groups = session.groups;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
-      child: SizedBox(
-        height: 38,
-        child: ListView(
-          scrollDirection: Axis.horizontal,
-          children: [
-            if (session.signedIn.length > 1)
-              _chip(
-                context,
-                label: 'All',
-                selected: session.activeGroupId == null,
-                onTap: () => notifier.setActive(null),
-              ),
-            for (final g in groups)
-              _chip(
-                context,
-                label: g.serverName,
-                selected: session.activeGroupId == g.id,
-                locked: !g.isSignedIn,
-                onTap: () {
-                  if (g.isSignedIn) {
-                    notifier.setActive(g.id);
-                  } else {
-                    // Session expired there — run the (additive) login flow again.
-                    Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => AuthScreen(initialServer: g.baseUrl),
-                    ));
-                  }
-                },
-              ),
-            _chip(
-              context,
-              label: '+ Add group',
-              selected: false,
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const AuthScreen()),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _chip(
-    BuildContext context, {
-    required String label,
-    required bool selected,
-    required VoidCallback onTap,
-    bool locked = false,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          decoration: BoxDecoration(
-            color: selected ? context.accent : _bgSurface,
-            border: Border.all(color: selected ? context.accent : _border),
-            borderRadius: BorderRadius.circular(9999),
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.black.withAlpha(60), blurRadius: 18, offset: const Offset(0, 8)),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (locked) ...[
-                const Icon(Icons.lock_outline, size: 13, color: _fgMuted),
-                const SizedBox(width: 5),
-              ],
-              Text(
-                label,
-                style: TextStyle(
-                  color: selected ? context.onAccent : _fgSecondary,
-                  fontWeight: FontWeight.w600,
-                  fontSize: 13,
-                ),
-              ),
-            ],
-          ),
         ),
       ),
     );
@@ -677,6 +613,10 @@ class _SearchBar extends StatelessWidget {
 /// set and reports the chosen date preset back via the result/closure.
 class _FilterSheet extends StatefulWidget {
   const _FilterSheet({
+    required this.groups,
+    required this.groupId,
+    required this.onAddGroup,
+    required this.onRelogin,
     required this.authors,
     required this.selectedPeople,
     required this.includeTagged,
@@ -684,6 +624,15 @@ class _FilterSheet extends StatefulWidget {
     required this.locations,
     required this.selectedLocation,
   });
+
+  /// Every connected group; selection lives here rather than in a feed-top switcher.
+  final List<ServerAccount> groups;
+
+  /// The group whose people/places are loaded (null = combined All view). The other
+  /// sections only apply while this group stays selected — their data is per-server.
+  final String? groupId;
+  final VoidCallback onAddGroup;
+  final void Function(ServerAccount) onRelogin;
 
   final List<({int id, String name})> authors;
   final Set<int> selectedPeople;
@@ -697,6 +646,7 @@ class _FilterSheet extends StatefulWidget {
 }
 
 class _FilterSheetState extends State<_FilterSheet> {
+  late String? _groupId = widget.groupId;
   late final Set<int> _people = {...widget.selectedPeople};
   late bool _includeTagged = widget.includeTagged;
   late String? _date = widget.datePreset;
@@ -714,14 +664,21 @@ class _FilterSheetState extends State<_FilterSheet> {
     Color(0xFF0EA5E9),
   ];
 
-  void _apply() => Navigator.of(context)
-      .pop((people: _people, includeTagged: _includeTagged, date: _date, location: _location));
+  void _apply() => Navigator.of(context).pop((
+        people: _people,
+        includeTagged: _includeTagged,
+        date: _date,
+        location: _location,
+        groupId: _groupId,
+      ));
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 10, 18, 22),
-      child: Column(
+      // Scrolls so the sheet can never overflow a compact screen (the EULA lesson).
+      child: SingleChildScrollView(
+          child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -750,97 +707,140 @@ class _FilterSheetState extends State<_FilterSheet> {
             ],
           ),
           const SizedBox(height: 18),
-          if (widget.authors.isNotEmpty) ...[
-            const Text('PEOPLE',
-                style: TextStyle(
-                    color: _fgMuted,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 12,
-                    letterSpacing: 0.4)),
-            const SizedBox(height: 10),
-            if (widget.authors.length > 5) ...[
-              TextField(
-                onChanged: (v) => setState(() => _personQuery = v.trim().toLowerCase()),
-                style: const TextStyle(color: _fgPrimary, fontSize: 14),
-                cursorColor: context.accent,
-                decoration: InputDecoration(
-                  isDense: true,
-                  prefixIcon: const Icon(Icons.search, size: 18, color: _fgMuted),
-                  hintText: 'Search people',
-                  hintStyle: const TextStyle(color: _fgMuted, fontSize: 14),
-                  filled: true,
-                  fillColor: _bgMain,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                  enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(color: _border)),
-                  focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(color: context.accent)),
-                ),
-              ),
-              const SizedBox(height: 11),
-            ],
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final a in widget.authors.where(
-                    (a) => _personQuery.isEmpty || a.name.toLowerCase().contains(_personQuery)))
-                  _personChip(a),
-              ],
-            ),
-            if (_people.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => setState(() => _includeTagged = !_includeTagged),
-                  child: Row(
-                    children: [
-                      const Expanded(
-                        child: Text("Also show posts they're tagged in",
-                            style: TextStyle(color: _fgSecondary, fontSize: 13.5)),
-                      ),
-                      Switch.adaptive(
-                        value: _includeTagged,
-                        onChanged: (v) => setState(() => _includeTagged = v),
-                        activeThumbColor: context.accent,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            const SizedBox(height: 22),
-          ],
-          const Text('DATE',
+          const Text('GROUPS',
               style: TextStyle(
                   color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 12, letterSpacing: 0.4)),
           const SizedBox(height: 11),
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: [for (final d in _datePresets) _datePill(d)],
+            children: [
+              if (widget.groups.length > 1)
+                _groupPill('All',
+                    on: _groupId == null, onTap: () => setState(() => _groupId = null)),
+              for (final g in widget.groups)
+                _groupPill(
+                  g.serverName,
+                  on: _groupId == g.id,
+                  locked: !g.isSignedIn,
+                  onTap: () {
+                    if (g.isSignedIn) {
+                      setState(() => _groupId = g.id);
+                    } else {
+                      // Session expired there — run the (additive) login flow again.
+                      Navigator.of(context).pop();
+                      widget.onRelogin(g);
+                    }
+                  },
+                ),
+              _groupPill('+ Add group', on: false, onTap: () {
+                Navigator.of(context).pop();
+                widget.onAddGroup();
+              }),
+            ],
           ),
-          if (widget.locations.isNotEmpty) ...[
-            const SizedBox(height: 22),
-            const Text('PLACES',
+          const SizedBox(height: 22),
+          if (_groupId == null || _groupId != widget.groupId)
+            // People/places were loaded for the group the sheet opened on; the date match
+            // is applied per-group too. Apply the group change first, then filter within it.
+            const Text('People, date, and place filters are set while viewing one group.',
+                style: TextStyle(color: _fgMuted, fontSize: 13))
+          else ...[
+            if (widget.authors.isNotEmpty) ...[
+              const Text('PEOPLE',
+                  style: TextStyle(
+                      color: _fgMuted,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12,
+                      letterSpacing: 0.4)),
+              const SizedBox(height: 10),
+              if (widget.authors.length > 5) ...[
+                TextField(
+                  onChanged: (v) => setState(() => _personQuery = v.trim().toLowerCase()),
+                  style: const TextStyle(color: _fgPrimary, fontSize: 14),
+                  cursorColor: context.accent,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.search, size: 18, color: _fgMuted),
+                    hintText: 'Search people',
+                    hintStyle: const TextStyle(color: _fgMuted, fontSize: 14),
+                    filled: true,
+                    fillColor: _bgMain,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                    enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: _border)),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: context.accent)),
+                  ),
+                ),
+                const SizedBox(height: 11),
+              ],
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final a in widget.authors.where(
+                      (a) => _personQuery.isEmpty || a.name.toLowerCase().contains(_personQuery)))
+                    _personChip(a),
+                ],
+              ),
+              if (_people.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => setState(() => _includeTagged = !_includeTagged),
+                    child: Row(
+                      children: [
+                        const Expanded(
+                          child: Text("Also show posts they're tagged in",
+                              style: TextStyle(color: _fgSecondary, fontSize: 13.5)),
+                        ),
+                        Switch.adaptive(
+                          value: _includeTagged,
+                          onChanged: (v) => setState(() => _includeTagged = v),
+                          activeThumbColor: context.accent,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 22),
+            ],
+            const Text('DATE',
                 style: TextStyle(
                     color: _fgMuted,
                     fontWeight: FontWeight.w600,
                     fontSize: 12,
                     letterSpacing: 0.4)),
             const SizedBox(height: 11),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 180),
-              child: SingleChildScrollView(
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [for (final l in widget.locations) _placePill(l)],
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [for (final d in _datePresets) _datePill(d)],
+            ),
+            if (widget.locations.isNotEmpty) ...[
+              const SizedBox(height: 22),
+              const Text('PLACES',
+                  style: TextStyle(
+                      color: _fgMuted,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12,
+                      letterSpacing: 0.4)),
+              const SizedBox(height: 11),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 180),
+                child: SingleChildScrollView(
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [for (final l in widget.locations) _placePill(l)],
+                  ),
                 ),
               ),
-            ),
+            ],
           ],
           const SizedBox(height: 26),
           Row(
@@ -851,6 +851,8 @@ class _FilterSheetState extends State<_FilterSheet> {
                     _people.clear();
                     _date = null;
                     _location = null;
+                    // Clearing everything includes the group scope: back to All.
+                    if (widget.groups.length > 1) _groupId = null;
                   }),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: _fgSecondary,
@@ -878,6 +880,35 @@ class _FilterSheetState extends State<_FilterSheet> {
             ],
           ),
         ],
+      )),
+    );
+  }
+
+  Widget _groupPill(String label,
+      {required bool on, required VoidCallback onTap, bool locked = false}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+        decoration: BoxDecoration(
+          color: on ? context.accent : Colors.transparent,
+          border: Border.all(color: on ? context.accent : _border),
+          borderRadius: BorderRadius.circular(9999),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (locked) ...[
+              const Icon(Icons.lock_outline, size: 13, color: _fgMuted),
+              const SizedBox(width: 5),
+            ],
+            Text(label,
+                style: TextStyle(
+                    color: on ? context.onAccent : _fgSecondary,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13)),
+          ],
+        ),
       ),
     );
   }
