@@ -101,6 +101,7 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/posts/{id}/comments", s.handleAddComment)
 
 		r.Post("/api/posts/{id}/report", s.handleReportPost)
+		r.Post("/api/comments/{id}/report", s.handleReportComment)
 
 		r.Get("/api/me/blocks", s.handleListBlocks)
 		r.Get("/api/me/blocks/{id}", s.handleGetBlockStatus)
