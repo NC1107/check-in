@@ -283,7 +283,7 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	comments, err := s.db.ListComments(r.Context(), id)
+	comments, err := s.db.ListComments(r.Context(), id, userFrom(r).ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return

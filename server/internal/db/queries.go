@@ -15,7 +15,9 @@ import (
 const commentPreviewExpr = `, COALESCE((
 		SELECT json_agg(json_build_object('authorName', t.name, 'body', t.body) ORDER BY t.created_at)
 		FROM (SELECT u2.name, c.body, c.created_at FROM comments c JOIN users u2 ON u2.id = c.user_id
-		      WHERE c.post_id = p.id ORDER BY c.created_at DESC LIMIT 2) t), '[]'::json)`
+		      WHERE c.post_id = p.id
+		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)
+		      ORDER BY c.created_at DESC LIMIT 2) t), '[]'::json)`
 
 // postMediaExpr appends the post's full ordered set of image ids as a bigint[]. Empty for
 // text posts and (until backfill clients re-save) old single-image posts keep their cover.
@@ -662,7 +664,8 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at,
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
-		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
+		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
+		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
 		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+`
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
@@ -737,13 +740,17 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at,
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
-		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
+		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
+		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
 		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+`
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
-		WHERE u.status = 'active' AND (
+		WHERE u.status = 'active'
+		  AND p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)
+		  AND (
 		      p.body ILIKE '%' || $2 || '%'
-		   OR EXISTS (SELECT 1 FROM comments c WHERE c.post_id = p.id AND c.body ILIKE '%' || $2 || '%')
+		   OR EXISTS (SELECT 1 FROM comments c WHERE c.post_id = p.id AND c.body ILIKE '%' || $2 || '%'
+		              AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1))
 		)
 		ORDER BY p.created_at DESC
 		LIMIT $3`, viewerID, query, limit)
@@ -778,10 +785,12 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at,
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
-		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id),
+		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
+		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
 		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+`
 		FROM posts p JOIN users u ON u.id = p.author_id
-		WHERE p.id = $2 AND u.status = 'active'`, viewerID, postID,
+		WHERE p.id = $2 AND u.status = 'active'
+		  AND p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)`, viewerID, postID,
 	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt,
 		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &p.MediaIDs, &people)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -977,12 +986,13 @@ func (d *DB) AddComment(ctx context.Context, postID, userID int64, body string) 
 }
 
 // ListComments returns comments on a post in chronological order with author info.
-func (d *DB) ListComments(ctx context.Context, postID int64) ([]Comment, error) {
+func (d *DB) ListComments(ctx context.Context, postID, viewerID int64) ([]Comment, error) {
 	rows, err := d.Pool.Query(ctx, `
 		SELECT c.id, c.post_id, c.user_id, c.body, c.created_at, u.name, u.profile_media_id
 		FROM comments c JOIN users u ON u.id = c.user_id
 		WHERE c.post_id = $1
-		ORDER BY c.created_at ASC`, postID)
+		  AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $2)
+		ORDER BY c.created_at ASC`, postID, viewerID)
 	if err != nil {
 		return nil, err
 	}
@@ -1046,18 +1056,31 @@ func (d *DB) ListBlockedIDs(ctx context.Context, blockerID int64) ([]int64, erro
 
 // ---- content reports ----
 
-// ReportPost stores a member's flag on a post.
+// CommentExists reports whether a comment id refers to a real comment.
+func (d *DB) CommentExists(ctx context.Context, commentID int64) (bool, error) {
+	var exists bool
+	err := d.Pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM comments WHERE id = $1)`, commentID).Scan(&exists)
+	return exists, err
+}
+
+// ReportPost stores a member's flag on a post. A member reporting the same post more than
+// once is a no-op (see the unique index in migration 0010) so the admin queue can't be
+// flooded with duplicates.
 func (d *DB) ReportPost(ctx context.Context, reporterID, postID int64, reason string) error {
 	_, err := d.Pool.Exec(ctx,
-		`INSERT INTO content_reports (reporter_id, post_id, reason) VALUES ($1, $2, $3)`,
+		`INSERT INTO content_reports (reporter_id, post_id, reason) VALUES ($1, $2, $3)
+		 ON CONFLICT DO NOTHING`,
 		reporterID, postID, reason)
 	return err
 }
 
-// ReportComment stores a member's flag on a comment.
+// ReportComment stores a member's flag on a comment. Duplicate reports on the same comment
+// by the same member are a no-op (see migration 0010).
 func (d *DB) ReportComment(ctx context.Context, reporterID, commentID int64, reason string) error {
 	_, err := d.Pool.Exec(ctx,
-		`INSERT INTO content_reports (reporter_id, comment_id, reason) VALUES ($1, $2, $3)`,
+		`INSERT INTO content_reports (reporter_id, comment_id, reason) VALUES ($1, $2, $3)
+		 ON CONFLICT DO NOTHING`,
 		reporterID, commentID, reason)
 	return err
 }
@@ -1110,6 +1133,17 @@ func (d *DB) DismissReport(ctx context.Context, reportID int64) error {
 }
 
 // ---- account deletion ----
+
+// OtherAdminExists reports whether any admin other than excludeUserID exists. Used to stop
+// the sole admin from deleting themselves, which would leave the server with no one able to
+// invite members, review reports, or remove content.
+func (d *DB) OtherAdminExists(ctx context.Context, excludeUserID int64) (bool, error) {
+	var exists bool
+	err := d.Pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM users WHERE is_admin = TRUE AND id <> $1)`,
+		excludeUserID).Scan(&exists)
+	return exists, err
+}
 
 // DeleteAccount permanently removes a user and all their content. Returns the file paths
 // of any media that became orphaned so the caller can remove them from disk.

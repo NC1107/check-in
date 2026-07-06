@@ -13,6 +13,32 @@ EXIF/GPS, and a sensible secure-headers/CSP baseline. The items below are the ga
 
 ---
 
+## Fixed 2026-07-06 (safety-hardening audit of the App Store block/report/delete features)
+
+- **[security/safety/medium] Blocking only filtered the feed** - the blocked-author exclusion
+  lived only in `Feed`. `ListComments`, the inline comment-preview expr, `SearchPosts`, and
+  `GetPost` (`server/internal/db/queries.go`) ignored blocks, so a blocked abuser's comments
+  still showed everywhere and their posts stayed reachable via search + direct link. Threaded
+  the block exclusion (and viewer id) through all of them; `handleListComments` now passes the
+  viewer.
+- **[correctness/moderation/medium] Sole admin could delete themselves and brick moderation**
+  - `handleDeleteAccount` had no last-admin guard, so the only admin deleting their account
+  left a server no one could administer (`server_config.initialized` stays true, so no new
+  first-admin is created). Added `OtherAdminExists` + a `409` guard requiring the admin to
+  promote someone first.
+- **[robustness/low] Report/block on a missing target 500'd; report had no length cap or dedup**
+  - `handleReportPost`/`handleBlockUser` now verify the target exists (`404` instead of an FK
+  `500`), cap the reason at 1000 chars, and dedupe via `ON CONFLICT DO NOTHING` backed by new
+  unique partial indexes (migration `0010_report_dedup.sql`).
+- **[hygiene/low] Dead `ReportComment` query wired up** - added `POST /api/comments/{id}/report`
+  (`handleReportComment`) with the same validation, so comment reporting is reachable (the
+  admin report list + DB already supported it). Comments are the main harassment channel.
+
+All server-side; deploys via CI + watchtower with no App Review impact. `go build`/`vet`/`test`
+green; `gofmt` clean.
+
+---
+
 ## Fixed in this audit
 
 - **[security/medium] Image "pixel bomb" DoS** — `server/internal/storage/storage.go`
