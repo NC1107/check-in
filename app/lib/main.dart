@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:app_links/app_links.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -9,7 +8,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'features/feed/home_shell.dart';
 import 'features/onboarding/auth_screen.dart';
-import 'features/onboarding/invite_links.dart';
 import 'features/onboarding/terms_screen.dart';
 import 'notifications/push_messaging.dart';
 import 'state/app_state.dart';
@@ -66,46 +64,6 @@ class CheckInApp extends ConsumerStatefulWidget {
 }
 
 class _CheckInAppState extends ConsumerState<CheckInApp> {
-  StreamSubscription<Uri>? _linkSub;
-
-  @override
-  void initState() {
-    super.initState();
-    _initInviteLinks();
-  }
-
-  @override
-  void dispose() {
-    _linkSub?.cancel();
-    super.dispose();
-  }
-
-  /// Invite links (see invite_links.dart) open the add-group flow with the group's
-  /// server prefilled. Best-effort: without link support the paste-based flow remains.
-  Future<void> _initInviteLinks() async {
-    if (kIsWeb) return;
-    try {
-      final appLinks = AppLinks();
-      final initial = await appLinks.getInitialLink();
-      if (initial != null) _handleLink(initial);
-      _linkSub = appLinks.uriLinkStream.listen(_handleLink);
-    } catch (_) {}
-  }
-
-  void _handleLink(Uri uri) {
-    final server = inviteServerFromUri(uri);
-    if (server == null) return;
-    // Stash it so the root auth screen prefills even when we can't push (cold start,
-    // EULA still pending).
-    ref.read(pendingInviteServerProvider.notifier).state = server;
-    if (!ref.read(termsProvider)) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      rootNavigatorKey.currentState?.push(
-        MaterialPageRoute(builder: (_) => AuthScreen(initialServer: server)),
-      );
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(multiSessionProvider);
