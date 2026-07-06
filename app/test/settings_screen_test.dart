@@ -53,4 +53,38 @@ void main() {
     expect(find.text('Edit profile'), findsOneWidget);
     expect(find.text('Delete account'), findsOneWidget);
   });
+
+  testWidgets('group rename sets a local nickname; empty restores the server name', (tester) async {
+    final controller = MultiSessionController.seeded(MultiSession(
+      groups: [account(isAdmin: false)],
+      activeGroupId: 'alpha.invalid',
+      restored: true,
+    ));
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [multiSessionProvider.overrideWith((ref) => controller)],
+        child: const MaterialApp(home: SettingsScreen(groupId: 'alpha.invalid')),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Group name'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'College crew');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    final renamed = controller.state.byId('alpha.invalid')!;
+    expect(renamed.displayName, 'College crew');
+    expect(renamed.serverName, 'Alpha'); // the server's own name is untouched
+
+    // Clearing the field falls back to the server's own name.
+    await tester.tap(find.text('Group name'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '');
+    await tester.tap(find.text('Save'));
+    await tester.pumpAndSettle();
+    final cleared = controller.state.byId('alpha.invalid')!;
+    expect(cleared.displayName, 'Alpha');
+    expect(cleared.nickname, isNull);
+  });
 }

@@ -18,6 +18,7 @@ class ServerAccount {
     required this.id,
     required this.baseUrl,
     required this.serverName,
+    this.nickname,
     this.token,
     this.user,
   });
@@ -27,6 +28,11 @@ class ServerAccount {
   final String id;
   final String baseUrl;
   final String serverName;
+
+  /// Optional per-device rename. Purely local, so every member can label their groups
+  /// however they like without touching the server (whose own name keeps refreshing
+  /// into [serverName] underneath).
+  final String? nickname;
   final String? token;
 
   /// The signed-in user on this server. Fetched lazily after restore, so it can be
@@ -35,11 +41,25 @@ class ServerAccount {
 
   bool get isSignedIn => token != null;
 
-  ServerAccount copyWith({String? serverName, String? token, User? user, bool clearAuth = false}) {
+  /// What the UI calls this group: the local nickname when set, else the server's name.
+  String get displayName {
+    final n = nickname;
+    return (n == null || n.isEmpty) ? serverName : n;
+  }
+
+  ServerAccount copyWith({
+    String? serverName,
+    String? nickname,
+    bool clearNickname = false,
+    String? token,
+    User? user,
+    bool clearAuth = false,
+  }) {
     return ServerAccount(
       id: id,
       baseUrl: baseUrl,
       serverName: serverName ?? this.serverName,
+      nickname: clearNickname ? null : (nickname ?? this.nickname),
       token: clearAuth ? null : (token ?? this.token),
       user: clearAuth ? null : (user ?? this.user),
     );
@@ -133,7 +153,7 @@ class MultiSessionController extends StateNotifier<MultiSession> {
         if (legacyToken != null) {
           await _secure.write(key: _tokenKey(id), value: legacyToken);
         }
-        entries = [(id: id, baseUrl: legacyUrl, name: 'Check-In')];
+        entries = [(id: id, baseUrl: legacyUrl, name: 'Check-In', nickname: null)];
         await prefs.setString(_kGroups, _encodeGroups(entries));
         await prefs.setString(_kActiveGroup, id);
         await prefs.remove(_kLegacyBaseUrl);
@@ -144,7 +164,8 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     final accounts = <ServerAccount>[];
     for (final e in entries) {
       final token = await _secure.read(key: _tokenKey(e.id));
-      accounts.add(ServerAccount(id: e.id, baseUrl: e.baseUrl, serverName: e.name, token: token));
+      accounts.add(ServerAccount(
+          id: e.id, baseUrl: e.baseUrl, serverName: e.name, nickname: e.nickname, token: token));
     }
     var activeId = prefs.getString(_kActiveGroup);
     if (activeId == '') activeId = null; // All view
@@ -200,8 +221,10 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
       _kGroups,
-      _encodeGroups(
-          [for (final g in state.groups) (id: g.id, baseUrl: g.baseUrl, name: g.serverName)]),
+      _encodeGroups([
+        for (final g in state.groups)
+          (id: g.id, baseUrl: g.baseUrl, name: g.serverName, nickname: g.nickname)
+      ]),
     );
   }
 
@@ -252,6 +275,16 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     await _persistActive();
   }
 
+  /// Sets (or clears, with null/empty) this device's local name for a group. Purely
+  /// cosmetic and per-device: the server's own name is untouched and reappears wherever
+  /// no nickname is set.
+  Future<void> renameGroup(String id, String? nickname) async {
+    final trimmed = nickname?.trim() ?? '';
+    _update(id,
+        (g) => trimmed.isEmpty ? g.copyWith(clearNickname: true) : g.copyWith(nickname: trimmed));
+    await _persistGroups();
+  }
+
   /// Switches the viewed group; null selects the combined All view.
   Future<void> setActive(String? id) async {
     state = MultiSession(groups: state.groups, activeGroupId: id, restored: state.restored);
@@ -263,7 +296,8 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     _update(groupId, (g) => g.copyWith(user: user));
   }
 
-  static List<({String id, String baseUrl, String name})> _decodeGroups(String? raw) {
+  static List<({String id, String baseUrl, String name, String? nickname})> _decodeGroups(
+      String? raw) {
     if (raw == null || raw.isEmpty) return const [];
     try {
       final list = jsonDecode(raw) as List;
@@ -273,6 +307,7 @@ class MultiSessionController extends StateNotifier<MultiSession> {
             id: e['id'] as String,
             baseUrl: e['baseUrl'] as String,
             name: e['name'] as String? ?? 'Check-In',
+            nickname: e['nickname'] as String?,
           )
       ];
     } catch (_) {
@@ -280,9 +315,16 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     }
   }
 
-  static String _encodeGroups(List<({String id, String baseUrl, String name})> entries) {
+  static String _encodeGroups(
+      List<({String id, String baseUrl, String name, String? nickname})> entries) {
     return jsonEncode([
-      for (final e in entries) {'id': e.id, 'baseUrl': e.baseUrl, 'name': e.name}
+      for (final e in entries)
+        {
+          'id': e.id,
+          'baseUrl': e.baseUrl,
+          'name': e.name,
+          if (e.nickname != null) 'nickname': e.nickname,
+        }
     ]);
   }
 }

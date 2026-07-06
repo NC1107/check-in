@@ -342,7 +342,7 @@ class _PostCardState extends ConsumerState<PostCard> {
                       borderRadius: BorderRadius.circular(9999),
                     ),
                     child: Text(
-                      account.serverName,
+                      account.displayName,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(

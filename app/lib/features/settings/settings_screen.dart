@@ -53,6 +53,61 @@ class SettingsScreen extends ConsumerWidget {
     nav.popUntil((route) => route.isFirst);
   }
 
+  /// Renames how this group shows on this device only — the server's own name (set by
+  /// the host) is untouched, so other members see no change.
+  Future<void> _renameGroup(BuildContext context, WidgetRef ref) async {
+    final account = ref.read(contentAccountProvider(groupId));
+    if (account == null) return;
+    final ctrl = TextEditingController(text: account.displayName);
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kBgSurface,
+        title: const Text('Group name',
+            style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              maxLength: 40,
+              style: const TextStyle(color: kFgPrimary),
+              decoration: InputDecoration(
+                hintText: account.serverName,
+                hintStyle: const TextStyle(color: kFgMuted),
+              ),
+            ),
+            Text(
+              'Only on this device. Leave empty to use the group\'s own name '
+              '("${account.serverName}").',
+              style: const TextStyle(color: kFgMuted, fontSize: 12.5, height: 1.4),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: kFgSecondary)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (saved == true) {
+      final v = ctrl.text.trim();
+      // Typing the server's own name back counts as "no nickname" so the display keeps
+      // following any future server-side rename.
+      await ref
+          .read(multiSessionProvider.notifier)
+          .renameGroup(account.id, v == account.serverName ? null : v);
+    }
+  }
+
   Future<void> _deleteAccount(BuildContext context, WidgetRef ref) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -101,7 +156,7 @@ class SettingsScreen extends ConsumerWidget {
     final user = account?.user;
     final groupCount = ref.watch(multiSessionProvider.select((s) => s.groups.length));
     final title =
-        groupCount > 1 && account != null ? 'Settings · ${account.serverName}' : 'Settings';
+        groupCount > 1 && account != null ? 'Settings · ${account.displayName}' : 'Settings';
 
     return Scaffold(
       backgroundColor: kBgMain,
@@ -131,6 +186,11 @@ class SettingsScreen extends ConsumerWidget {
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const NotificationSettingsScreen()),
             ),
+          ),
+          _tile(
+            icon: Icons.drive_file_rename_outline,
+            label: 'Group name',
+            onTap: () => _renameGroup(context, ref),
           ),
           if (user?.isAdmin ?? false)
             _tile(

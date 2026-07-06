@@ -87,7 +87,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         title: Builder(builder: (context) {
           final groupCount = ref.watch(multiSessionProvider.select((s) => s.groups.length));
           final name =
-              ref.watch(contentAccountProvider(widget.groupId).select((a) => a?.serverName));
+              ref.watch(contentAccountProvider(widget.groupId).select((a) => a?.displayName));
           final base = widget.isSelf ? 'My profile' : 'Profile';
           return Text(groupCount > 1 && name != null ? '$base · $name' : base,
               style: const TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 18));
