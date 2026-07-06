@@ -103,8 +103,12 @@ Future<void> initPush() async {
     // System-tray taps: background → onMessageOpenedApp; terminated → getInitialMessage.
     FirebaseMessaging.onMessageOpenedApp
         .listen((m) => _dispatchTap(Map<String, dynamic>.from(m.data)));
-    final initial = await FirebaseMessaging.instance.getInitialMessage();
-    if (initial != null) _dispatchTap(Map<String, dynamic>.from(initial.data));
+    // getInitialMessage can hang on iOS, and initPush runs before runApp - awaiting it
+    // here left the app stuck on the launch screen. Resolve it in the background instead;
+    // a tap that arrives before HomeShell installs the handler is buffered (_pendingTap).
+    unawaited(FirebaseMessaging.instance.getInitialMessage().then((initial) {
+      if (initial != null) _dispatchTap(Map<String, dynamic>.from(initial.data));
+    }).catchError((_) {}));
   } catch (_) {
     // Push is optional; never block startup on it.
   }
