@@ -10,7 +10,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_riverpod: ^2.6.1
+  flutter_riverpod: ^3.3.2
   dio: ^5.7.0
   http_parser: ^4.0.2
   flutter_secure_storage: ^9.2.2
