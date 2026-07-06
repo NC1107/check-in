@@ -32,7 +32,12 @@ void main() {
         debugPrint('[CHECKIN] $error');
         return true;
       };
-      await _initFirebase();
+      // Cap Firebase/push init so a hung native call can never hold the first frame
+      // hostage (build 9301-9501 shipped stuck on the launch screen this way). Push is
+      // best-effort; the app must always start.
+      await _initFirebase().timeout(const Duration(seconds: 8), onTimeout: () {
+        debugPrint('[CHECKIN] firebase init timed out; starting without push');
+      });
       runApp(const ProviderScope(child: CheckInApp()));
     },
     (error, stack) => debugPrint('[CHECKIN] uncaught: $error'),
