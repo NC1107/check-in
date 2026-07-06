@@ -285,6 +285,11 @@ jobs:
       - name: Build IPA
         working-directory: app
         run: |
+          # Disable Flutter's experimental Swift Package Manager integration so every iOS
+          # plugin (Firebase, app_links, …) links via CocoaPods (flutter_install_all_ios_pods
+          # in the Podfile) - the stable path 1.0 shipped on. SPM's linking left the app stuck
+          # on a white launch screen (Firebase's grpc native init trapped before runApp).
+          flutter config --no-enable-swift-package-manager
           flutter pub get
           flutter build ipa --release \
             --build-name=${{ needs.version.outputs.new_version }} \
