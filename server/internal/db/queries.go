@@ -52,6 +52,33 @@ func (d *DB) MarkInitialized(ctx context.Context) error {
 	return err
 }
 
+// GetServerName returns the group's display name (what clients show for this server).
+func (d *DB) GetServerName(ctx context.Context) (string, error) {
+	var name string
+	err := d.Pool.QueryRow(ctx, `SELECT name FROM server_config WHERE id = 1`).Scan(&name)
+	return name, err
+}
+
+// SetServerName updates the group's display name. Admin-controlled, so it's the one
+// name every member sees.
+func (d *DB) SetServerName(ctx context.Context, name string) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE server_config SET name = $1 WHERE id = 1`, name)
+	return err
+}
+
+// SeedServerName copies the configured CHECKIN_SERVER_NAME into the database exactly
+// once, while the stored name is still the schema default. This migrates existing
+// env-configured installs to the DB-backed name without clobbering a name an admin has
+// since chosen (renaming back to the literal default 'Check-In' is the sole edge case).
+func (d *DB) SeedServerName(ctx context.Context, envName string) error {
+	if envName == "" || envName == "Check-In" {
+		return nil
+	}
+	_, err := d.Pool.Exec(ctx,
+		`UPDATE server_config SET name = $1 WHERE id = 1 AND name = 'Check-In'`, envName)
+	return err
+}
+
 // ---- users ----
 
 // CreateUser inserts a new user and returns it.

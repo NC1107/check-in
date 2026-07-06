@@ -53,11 +53,12 @@ class SettingsScreen extends ConsumerWidget {
     nav.popUntil((route) => route.isFirst);
   }
 
-  /// Renames how this group shows on this device only — the server's own name (set by
-  /// the host) is untouched, so other members see no change.
+  /// Renames the group. An admin renames it server-side (everyone sees the new name);
+  /// anyone else sets a per-device nickname (local only, the server's name is untouched).
   Future<void> _renameGroup(BuildContext context, WidgetRef ref) async {
     final account = ref.read(contentAccountProvider(groupId));
     if (account == null) return;
+    final isAdmin = account.user?.isAdmin ?? false;
     final ctrl = TextEditingController(text: account.displayName);
     final saved = await showDialog<bool>(
       context: context,
@@ -80,8 +81,10 @@ class SettingsScreen extends ConsumerWidget {
               ),
             ),
             Text(
-              'Only on this device. Leave empty to use the group\'s own name '
-              '("${account.serverName}").',
+              isAdmin
+                  ? 'This renames the group for everyone.'
+                  : 'Only on this device. Leave empty to use the group\'s own name '
+                      '("${account.serverName}").',
               style: const TextStyle(color: kFgMuted, fontSize: 12.5, height: 1.4),
             ),
           ],
@@ -98,13 +101,24 @@ class SettingsScreen extends ConsumerWidget {
         ],
       ),
     );
-    if (saved == true) {
-      final v = ctrl.text.trim();
+    if (saved != true || !context.mounted) return;
+    final v = ctrl.text.trim();
+    final notifier = ref.read(multiSessionProvider.notifier);
+    if (isAdmin) {
+      // An empty field would blank the group's name for everyone — keep the current one.
+      if (v.isEmpty) return;
+      final messenger = ScaffoldMessenger.of(context);
+      try {
+        await ref.read(contentApiProvider(groupId)).renameServer(v);
+        await notifier.applyServerName(account.id, v);
+      } catch (_) {
+        messenger
+            .showSnackBar(const SnackBar(content: Text('Could not rename the group. Try again.')));
+      }
+    } else {
       // Typing the server's own name back counts as "no nickname" so the display keeps
       // following any future server-side rename.
-      await ref
-          .read(multiSessionProvider.notifier)
-          .renameGroup(account.id, v == account.serverName ? null : v);
+      await notifier.renameGroup(account.id, v == account.serverName ? null : v);
     }
   }
 

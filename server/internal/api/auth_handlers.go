@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nc1107/check-in/server/internal/auth"
 	"github.com/nc1107/check-in/server/internal/db"
@@ -37,10 +38,51 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":        s.cfg.ServerName,
+		"name":        s.serverName(r.Context()),
 		"initialized": initialized,
 		"publicUrl":   s.cfg.PublicURL,
 	})
+}
+
+// serverName is the group's current display name: the admin-set value in the database,
+// falling back to the configured env name if the row can't be read.
+func (s *Server) serverName(ctx context.Context) string {
+	name, err := s.db.GetServerName(ctx)
+	if err != nil || name == "" {
+		return s.cfg.ServerName
+	}
+	return name
+}
+
+// validServerName trims and bounds a proposed group name (1–40 runes), returning the
+// cleaned value and whether it's acceptable.
+func validServerName(raw string) (string, bool) {
+	name := strings.TrimSpace(raw)
+	if name == "" || utf8.RuneCountInString(name) > 40 {
+		return "", false
+	}
+	return name, true
+}
+
+// handleRenameServer lets an admin rename the group for everyone (stored server-side).
+func (s *Server) handleRenameServer(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	name, ok := validServerName(req.Name)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "name must be 1–40 characters")
+		return
+	}
+	if err := s.db.SetServerName(r.Context(), name); err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"name": name})
 }
 
 type checkPhoneReq struct {

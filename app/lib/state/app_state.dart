@@ -285,6 +285,14 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     await _persistGroups();
   }
 
+  /// Records a new server-side name after an admin rename, so it shows immediately
+  /// without waiting for the next hydrate. Clears any local nickname so the group falls
+  /// back to showing the (now-updated) server name.
+  Future<void> applyServerName(String id, String name) async {
+    _update(id, (g) => g.copyWith(serverName: name, clearNickname: true));
+    await _persistGroups();
+  }
+
   /// Switches the viewed group; null selects the combined All view.
   Future<void> setActive(String? id) async {
     state = MultiSession(groups: state.groups, activeGroupId: id, restored: state.restored);

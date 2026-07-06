@@ -41,6 +41,12 @@ func main() {
 		log.Fatalf("migrate: %v", err)
 	}
 
+	// One-time migration of the env-configured name into the DB, so it's editable by
+	// admins from the app afterward. No-op once a name has been set.
+	if err := database.SeedServerName(ctx, cfg.ServerName); err != nil {
+		log.Printf("seed server name: %v", err)
+	}
+
 	store, err := storage.New(cfg.MediaDir)
 	if err != nil {
 		log.Fatalf("storage: %v", err)
