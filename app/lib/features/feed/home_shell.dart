@@ -130,6 +130,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
           backgroundColor: context.accent,
           foregroundColor: context.onAccent,
           elevation: 4,
+          tooltip: 'New check-in',
           shape: const CircleBorder(),
           child: const Icon(Icons.add, size: 28),
         ),
@@ -189,16 +190,22 @@ class _NavItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = selected ? context.accent : _fgMuted;
     return Expanded(
-      child: InkResponse(
-        onTap: onTap,
-        radius: 42,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(selected ? activeIcon : icon, size: 23, color: color),
-            const SizedBox(height: 3),
-            Text(label, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600)),
-          ],
+      child: Semantics(
+        button: true,
+        selected: selected,
+        label: label,
+        child: InkResponse(
+          onTap: onTap,
+          radius: 42,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(selected ? activeIcon : icon, size: 23, color: color),
+              const SizedBox(height: 3),
+              Text(label,
+                  style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600)),
+            ],
+          ),
         ),
       ),
     );
@@ -341,28 +348,44 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
           child: Image.file(File(_images[i].path), width: 100, height: 100, fit: BoxFit.cover),
         ),
         Positioned(
-          top: 4,
-          right: 4,
-          child: GestureDetector(
-            onTap: () async {
-              final removed = _images[i].path;
-              setState(() => _images.removeAt(i));
-              // If the removed photo is the one that supplied the location, drop it and
-              // re-derive from the remaining photos so a deleted photo's place can't stay
-              // attached to the post.
-              if (removed == _locationSource) {
-                setState(() {
-                  _location = null;
-                  _locationSource = null;
-                });
-                await _resolveLocation();
-              }
-            },
-            behavior: HitTestBehavior.opaque,
-            child: Container(
-              padding: const EdgeInsets.all(2),
-              decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
-              child: const Icon(Icons.close, size: 15, color: Colors.white),
+          top: 0,
+          right: 0,
+          child: Semantics(
+            button: true,
+            label: 'Remove photo',
+            child: GestureDetector(
+              onTap: () async {
+                final removed = _images[i].path;
+                setState(() => _images.removeAt(i));
+                // If the removed photo is the one that supplied the location, drop it and
+                // re-derive from the remaining photos so a deleted photo's place can't stay
+                // attached to the post.
+                if (removed == _locationSource) {
+                  setState(() {
+                    _location = null;
+                    _locationSource = null;
+                  });
+                  await _resolveLocation();
+                }
+              },
+              behavior: HitTestBehavior.opaque,
+              // 44px hit area; the visual X stays tucked in the top-right corner.
+              child: SizedBox(
+                width: 44,
+                height: 44,
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Align(
+                    alignment: Alignment.topRight,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration:
+                          const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                      child: const Icon(Icons.close, size: 15, color: Colors.white),
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
         ),

@@ -253,27 +253,34 @@ class _PostCardState extends ConsumerState<PostCard> {
     required IconData icon,
     required Color iconColor,
     required String label,
+    required String semantic,
     required VoidCallback onTap,
   }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkResponse(
-        onTap: onTap,
-        radius: 28,
-        containedInkWell: true,
-        highlightShape: BoxShape.rectangle,
-        borderRadius: BorderRadius.circular(9),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 22, color: iconColor),
-              const SizedBox(width: 6),
-              Text(label,
-                  style: const TextStyle(
-                      color: _fgSecondary, fontWeight: FontWeight.w600, fontSize: 13)),
-            ],
+    return Semantics(
+      button: true,
+      label: semantic,
+      value: label,
+      child: Material(
+        color: Colors.transparent,
+        child: InkResponse(
+          onTap: onTap,
+          radius: 28,
+          containedInkWell: true,
+          highlightShape: BoxShape.rectangle,
+          borderRadius: BorderRadius.circular(9),
+          child: Padding(
+            // Vertical 11 keeps the row at the 44px minimum tap target.
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 22, color: iconColor),
+                const SizedBox(width: 6),
+                Text(label,
+                    style: const TextStyle(
+                        color: _fgSecondary, fontWeight: FontWeight.w600, fontSize: 13)),
+              ],
+            ),
           ),
         ),
       ),
@@ -369,10 +376,11 @@ class _PostCardState extends ConsumerState<PostCard> {
                       // ⋯ menu: always shown. Save photo on image posts; Report for others;
                       // Delete only for the author.
                       SizedBox(
-                        height: 30,
-                        width: 30,
+                        height: 44,
+                        width: 44,
                         child: PopupMenuButton<String>(
                           icon: const Icon(Icons.more_horiz, size: 20, color: _fgMuted),
+                          tooltip: 'Post options',
                           padding: EdgeInsets.zero,
                           color: _bgSurface,
                           shape: RoundedRectangleBorder(
@@ -467,12 +475,14 @@ class _PostCardState extends ConsumerState<PostCard> {
                         icon: _liked ? Icons.favorite : Icons.favorite_border,
                         iconColor: _liked ? _like : _fgSecondary,
                         label: '$_likes',
+                        semantic: _liked ? 'Unlike' : 'Like',
                         onTap: _toggleLike,
                       ),
                       _action(
                         icon: Icons.chat_bubble_outline,
                         iconColor: _fgSecondary,
                         label: '$_comments',
+                        semantic: 'Comments',
                         onTap: () => Navigator.of(context).push(
                           MaterialPageRoute(
                               builder: (_) => PostDetailScreen(postId: p.id, groupId: p.groupId)),
@@ -557,9 +567,8 @@ class _PostCardState extends ConsumerState<PostCard> {
                           return TextButton(
                             onPressed: canPost ? _addComment : null,
                             style: TextButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(horizontal: 4),
-                              minimumSize: Size.zero,
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              padding: const EdgeInsets.symmetric(horizontal: 10),
+                              minimumSize: const Size(44, 44),
                             ),
                             child: Text(
                               'Post',

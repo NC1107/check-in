@@ -13,10 +13,12 @@ const kBgSurface = Color(0xFF161616);
 const kBgSurfaceHover = Color(0xFF1F1F1F);
 const kBorder = Color(0xFF2A2A2A);
 
-// Text hierarchy (neutral greys).
+// Text hierarchy (neutral greys). kFgMuted is lifted to clear WCAG AA (~5.4:1 on the
+// surface cards) since it carries a lot of small body text: timestamps, hints, helper
+// lines, empty-state copy.
 const kFgPrimary = Color(0xFFF4F4F5);
 const kFgSecondary = Color(0xFFA1A1AA);
-const kFgMuted = Color(0xFF6B6B72);
+const kFgMuted = Color(0xFF8B8B93);
 
 // Accent — a vivid green that pops on the black/grey base. Bright, so text on it is dark.
 const kAccent = Color(0xFF37E07E);
