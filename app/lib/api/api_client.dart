@@ -325,6 +325,9 @@ class ApiClient {
 
   Future<void> revokeUser(int id) => _dio.delete('/api/admin/users/$id');
 
+  /// renameServer changes this group's display name for everyone (admin only).
+  Future<void> renameServer(String name) => _dio.patch('/api/admin/server', data: {'name': name});
+
   // ---- reports ----
 
   Future<void> reportPost(int postId, String reason) =>

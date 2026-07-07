@@ -53,6 +53,75 @@ class SettingsScreen extends ConsumerWidget {
     nav.popUntil((route) => route.isFirst);
   }
 
+  /// Renames the group. An admin renames it server-side (everyone sees the new name);
+  /// anyone else sets a per-device nickname (local only, the server's name is untouched).
+  Future<void> _renameGroup(BuildContext context, WidgetRef ref) async {
+    final account = ref.read(contentAccountProvider(groupId));
+    if (account == null) return;
+    final isAdmin = account.user?.isAdmin ?? false;
+    final ctrl = TextEditingController(text: account.displayName);
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kBgSurface,
+        title: const Text('Group name',
+            style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              maxLength: 40,
+              style: const TextStyle(color: kFgPrimary),
+              decoration: InputDecoration(
+                hintText: account.serverName,
+                hintStyle: const TextStyle(color: kFgMuted),
+              ),
+            ),
+            Text(
+              isAdmin
+                  ? 'This renames the group for everyone.'
+                  : 'Only on this device. Leave empty to use the group\'s own name '
+                      '("${account.serverName}").',
+              style: const TextStyle(color: kFgMuted, fontSize: 12.5, height: 1.4),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: kFgSecondary)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (saved != true || !context.mounted) return;
+    final v = ctrl.text.trim();
+    final notifier = ref.read(multiSessionProvider.notifier);
+    if (isAdmin) {
+      // An empty field would blank the group's name for everyone — keep the current one.
+      if (v.isEmpty) return;
+      final messenger = ScaffoldMessenger.of(context);
+      try {
+        await ref.read(contentApiProvider(groupId)).renameServer(v);
+        await notifier.applyServerName(account.id, v);
+      } catch (_) {
+        messenger
+            .showSnackBar(const SnackBar(content: Text('Could not rename the group. Try again.')));
+      }
+    } else {
+      // Typing the server's own name back counts as "no nickname" so the display keeps
+      // following any future server-side rename.
+      await notifier.renameGroup(account.id, v == account.serverName ? null : v);
+    }
+  }
+
   Future<void> _deleteAccount(BuildContext context, WidgetRef ref) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -101,7 +170,7 @@ class SettingsScreen extends ConsumerWidget {
     final user = account?.user;
     final groupCount = ref.watch(multiSessionProvider.select((s) => s.groups.length));
     final title =
-        groupCount > 1 && account != null ? 'Settings · ${account.serverName}' : 'Settings';
+        groupCount > 1 && account != null ? 'Settings · ${account.displayName}' : 'Settings';
 
     return Scaffold(
       backgroundColor: kBgMain,
@@ -131,6 +200,11 @@ class SettingsScreen extends ConsumerWidget {
             onTap: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const NotificationSettingsScreen()),
             ),
+          ),
+          _tile(
+            icon: Icons.drive_file_rename_outline,
+            label: 'Group name',
+            onTap: () => _renameGroup(context, ref),
           ),
           if (user?.isAdmin ?? false)
             _tile(

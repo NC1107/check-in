@@ -57,7 +57,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     if (session.signedIn.isEmpty) return;
     scheduleBirthdayNotifications([
       for (final g in session.signedIn)
-        (api: ref.read(apiForGroupProvider(g.id)), id: g.id, name: g.serverName)
+        (api: ref.read(apiForGroupProvider(g.id)), id: g.id, name: g.displayName)
     ]);
     requestDeviceToken([for (final g in session.signedIn) ref.read(apiForGroupProvider(g.id))]);
   }
@@ -417,7 +417,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                 size: 14, color: on || done ? context.onAccent : _fgMuted),
             const SizedBox(width: 6),
             Text(
-              g.serverName,
+              g.displayName,
               style: TextStyle(
                 color: on || done ? context.onAccent : _fgSecondary,
                 fontWeight: FontWeight.w600,
@@ -496,10 +496,10 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
       Navigator.of(context).pop(true);
       return;
     }
-    final failedNames = [for (final g in failed) g.serverName].join(', ');
+    final failedNames = [for (final g in failed) g.displayName].join(', ');
     final postedNames = [
       for (final g in session.signedIn)
-        if (_posted.contains(g.id)) g.serverName
+        if (_posted.contains(g.id)) g.displayName
     ].join(', ');
     setState(() {
       _busy = false;

@@ -107,7 +107,7 @@ func (s *Server) notifyPost(authorID int64, authorName string, postID int64) {
 	if err != nil || len(tokens) == 0 {
 		return
 	}
-	s.push.Send(ctx, tokens, s.cfg.ServerName, authorName+" shared a check-in",
+	s.push.Send(ctx, tokens, s.serverName(ctx), authorName+" shared a check-in",
 		s.pushData("post", postID))
 }
 
@@ -127,7 +127,7 @@ func (s *Server) notifyReply(commenterName string, postID, commenterID int64) {
 	if err != nil || len(tokens) == 0 {
 		return
 	}
-	s.push.Send(ctx, tokens, s.cfg.ServerName, commenterName+" commented on your check-in",
+	s.push.Send(ctx, tokens, s.serverName(ctx), commenterName+" commented on your check-in",
 		s.pushData("comment", postID))
 }
 

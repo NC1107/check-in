@@ -426,7 +426,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                         ]);
                       }
                       final items =
-                          _buildItems(posts, [for (final g in result.unreachable) g.serverName]);
+                          _buildItems(posts, [for (final g in result.unreachable) g.displayName]);
                       // Trailing spinner row while the next page loads.
                       final showSpinner = _loadingMore && posts.isNotEmpty;
                       return ListView.builder(
@@ -504,7 +504,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     final names = {for (final p in _allPosts) p.authorId: p.authorName};
     final chips = <Widget>[
       if (groupFiltered && session.active != null)
-        _filterChip(session.active!.serverName, () {
+        _filterChip(session.active!.displayName, () {
           _clearGroupFilters();
           ref.read(multiSessionProvider.notifier).setActive(null);
         }),
@@ -720,7 +720,7 @@ class _FilterSheetState extends State<_FilterSheet> {
                     on: _groupId == null, onTap: () => setState(() => _groupId = null)),
               for (final g in widget.groups)
                 _groupPill(
-                  g.serverName,
+                  g.displayName,
                   on: _groupId == g.id,
                   locked: !g.isSignedIn,
                   onTap: () {

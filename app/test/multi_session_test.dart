@@ -141,4 +141,43 @@ void main() {
     expect(MultiSessionController.groupIdFor('https://x.dev:8443'), 'x.dev');
     expect(MultiSessionController.groupIdFor('not a url'), 'not a url');
   });
+
+  test('renameGroup sets/clears a local nickname and persists it', () async {
+    SharedPreferences.setMockInitialValues({
+      'groups_json': jsonEncode([
+        {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha'},
+      ]),
+    });
+    final controller = await restoredController();
+
+    await controller.renameGroup('a.invalid', 'Book Club');
+    expect(controller.state.byId('a.invalid')!.displayName, 'Book Club');
+    expect(controller.state.byId('a.invalid')!.serverName, 'Alpha');
+    // Persisted so it survives a restart.
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('groups_json'), contains('Book Club'));
+
+    await controller.renameGroup('a.invalid', '   ');
+    expect(controller.state.byId('a.invalid')!.nickname, isNull);
+    expect(controller.state.byId('a.invalid')!.displayName, 'Alpha');
+  });
+
+  test('applyServerName updates the server name for everyone and drops any nickname', () async {
+    SharedPreferences.setMockInitialValues({
+      'groups_json': jsonEncode([
+        {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha', 'nickname': 'Mine'},
+      ]),
+    });
+    final controller = await restoredController();
+    expect(controller.state.byId('a.invalid')!.displayName, 'Mine');
+
+    await controller.applyServerName('a.invalid', 'Weekend Warriors');
+    final g = controller.state.byId('a.invalid')!;
+    expect(g.serverName, 'Weekend Warriors');
+    expect(g.nickname, isNull); // the new server name is authoritative now
+    expect(g.displayName, 'Weekend Warriors');
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('groups_json'), contains('Weekend Warriors'));
+  });
 }
