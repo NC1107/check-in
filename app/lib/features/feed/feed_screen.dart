@@ -395,22 +395,49 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
               child: ref.watch(feedProvider).when(
                     loading: () => const FeedSkeleton(),
                     error: (e, _) => ListView(children: [
-                      const SizedBox(height: 140),
+                      const SizedBox(height: 120),
                       Center(
-                        child: Text('Could not load feed.\n$e',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: _fgSecondary)),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.cloud_off_outlined, size: 42, color: _fgMuted),
+                            const SizedBox(height: 12),
+                            const Text('Could not load the feed.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: _fgSecondary, fontSize: 15)),
+                            const SizedBox(height: 10),
+                            TextButton(onPressed: _refresh, child: const Text('Try again')),
+                          ],
+                        ),
                       ),
                     ]),
                     data: (result) {
                       _allPosts = [...result.posts, ..._morePosts];
                       final posts = _applyFilter(_allPosts);
                       if (_allPosts.isEmpty) {
-                        return ListView(children: const [
-                          SizedBox(height: 180),
+                        final shown = ref.read(multiSessionProvider).shownGroups;
+                        final where = shown.length > 1
+                            ? ' in ${[for (final g in shown) g.displayName].join(', ')}'
+                            : '';
+                        return ListView(children: [
+                          const SizedBox(height: 150),
                           Center(
-                            child: Text('No check-ins yet.\nTap + to share an update.',
-                                textAlign: TextAlign.center, style: TextStyle(color: _fgMuted)),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.photo_camera_outlined, size: 44, color: _fgMuted),
+                                const SizedBox(height: 14),
+                                Text('No check-ins yet$where',
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                        color: _fgSecondary,
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w600)),
+                                const SizedBox(height: 6),
+                                const Text('Tap + to share an update.',
+                                    style: TextStyle(color: _fgMuted, fontSize: 13)),
+                              ],
+                            ),
                           ),
                         ]);
                       }
@@ -573,8 +600,6 @@ class _SearchBar extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(13, 6, 6, 6),
       child: Row(
         children: [
-          const Icon(Icons.search, size: 19, color: _fgMuted),
-          const SizedBox(width: 9),
           Expanded(
             child: Semantics(
               button: true,
@@ -582,8 +607,17 @@ class _SearchBar extends StatelessWidget {
               child: GestureDetector(
                 onTap: onSearch,
                 behavior: HitTestBehavior.opaque,
-                child: const Text('Search check-ins & people',
-                    style: TextStyle(color: _fgMuted, fontSize: 14)),
+                // Icon + hint are one tap target (the magnifier used to be dead).
+                child: const Row(
+                  children: [
+                    Icon(Icons.search, size: 19, color: _fgMuted),
+                    SizedBox(width: 9),
+                    Expanded(
+                      child: Text('Search check-ins & people',
+                          style: TextStyle(color: _fgMuted, fontSize: 14)),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),

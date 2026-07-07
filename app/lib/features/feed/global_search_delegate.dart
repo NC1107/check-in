@@ -107,9 +107,19 @@ class GlobalSearchDelegate extends SearchDelegate<void> {
       return Container(
         color: kBgMain,
         alignment: Alignment.topCenter,
-        padding: const EdgeInsets.only(top: 60),
-        child: const Text('Type at least 2 letters to search\ncaptions, comments, and people.',
-            textAlign: TextAlign.center, style: TextStyle(color: kFgMuted, height: 1.5)),
+        padding: const EdgeInsets.only(top: 72),
+        child: const Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.search, size: 44, color: kFgMuted),
+            SizedBox(height: 14),
+            Text('Search this group',
+                style: TextStyle(color: kFgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            SizedBox(height: 6),
+            Text('Type at least 2 letters to find\ncaptions, comments, and people.',
+                textAlign: TextAlign.center, style: TextStyle(color: kFgMuted, height: 1.5)),
+          ],
+        ),
       );
     }
     return Container(

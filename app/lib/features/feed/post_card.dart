@@ -78,7 +78,7 @@ class _ReportSheet extends StatelessWidget {
         ..._reportReasons.map(
           (r) => ListTile(
             title: Text(r, style: const TextStyle(color: _fgPrimary, fontSize: 15)),
-            trailing: const Icon(Icons.chevron_right, color: _fgMuted, size: 20),
+            // No chevron: tapping a reason submits the report, it doesn't drill in.
             onTap: () => Navigator.of(context).pop(r),
           ),
         ),
@@ -497,19 +497,19 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                   )
                 else
                   const SizedBox(height: 10),
-                // Image(s)
+                // Image(s) - the carousel sizes itself (single images keep their own
+                // clamped aspect ratio); the heart burst overlays it.
                 if (p.kind == 'image' && p.images.isNotEmpty)
                   GestureDetector(
                     onDoubleTap: _doubleTapLike,
-                    child: AspectRatio(
-                      aspectRatio: 4 / 3,
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          PostImageCarousel(mediaIds: p.images, groupId: p.groupId),
-                          Center(child: _HeartBurst(_burst)),
-                        ],
-                      ),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        PostImageCarousel(mediaIds: p.images, groupId: p.groupId),
+                        Positioned.fill(
+                          child: IgnorePointer(child: Center(child: _HeartBurst(_burst))),
+                        ),
+                      ],
                     ),
                   ),
                 // Actions row
