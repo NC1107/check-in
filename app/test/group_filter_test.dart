@@ -22,7 +22,7 @@ void main() {
       id: 'beta.invalid', baseUrl: 'https://beta.invalid', serverName: 'Beta', token: 't2');
 
   Future<MultiSessionController> pump(WidgetTester tester, MultiSession seed,
-      {List<Post> posts = const []}) async {
+      {List<Post> posts = const [], Map<String, List<User>> members = const {}}) async {
     final controller = MultiSessionController.seeded(seed);
     await tester.pumpWidget(
       ProviderScope(
@@ -30,6 +30,7 @@ void main() {
           multiSessionProvider.overrideWith((ref) => controller),
           feedProvider.overrideWith((ref) async => FeedResult(posts: posts)),
           locationsProvider.overrideWith((ref, groupId) async => []),
+          groupMembersProvider.overrideWith((ref, groupId) async => members[groupId] ?? []),
         ],
         child: const MaterialApp(home: FeedScreen()),
       ),
@@ -124,6 +125,55 @@ void main() {
     await openFilter(tester);
     expect(find.text('Gamma'), findsOneWidget);
     expect(find.byIcon(Icons.lock_outline), findsOneWidget);
+  });
+
+  testWidgets('the same person in two groups merges into one People pill by phone', (tester) async {
+    Post post(int id, String groupId, int authorId, String authorName) => Post(
+          id: id,
+          authorId: authorId,
+          authorName: authorName,
+          kind: 'text',
+          body: 'hi',
+          createdAt: DateTime(2026, 7, id),
+          likeCount: 0,
+          commentCount: 0,
+          likedByViewer: false,
+          groupId: groupId,
+        );
+    // Nick is user 1 on alpha and user 7 on beta - same phone. Ada is alpha-only.
+    await pump(
+      tester,
+      const MultiSession(groups: [alpha, beta], restored: true),
+      posts: [
+        post(3, 'beta.invalid', 7, 'Nick'),
+        post(2, 'alpha.invalid', 1, 'Nick'),
+        post(1, 'alpha.invalid', 2, 'Ada'),
+      ],
+      members: {
+        'alpha.invalid': [
+          User(id: 1, name: 'Nick', phone: '+15550001111', isAdmin: true),
+          User(id: 2, name: 'Ada', phone: '+15550002222', isAdmin: false),
+        ],
+        'beta.invalid': [
+          User(id: 7, name: 'Nick', phone: '+15550001111', isAdmin: false),
+        ],
+      },
+    );
+
+    await openFilter(tester);
+    // Scope to the sheet: the feed behind it also renders author names.
+    final sheet = find.byType(BottomSheet);
+    // One Nick pill, not two; Ada unaffected.
+    expect(find.descendant(of: sheet, matching: find.text('Nick')), findsOneWidget);
+    expect(find.descendant(of: sheet, matching: find.text('Ada')), findsOneWidget);
+
+    // Selecting the merged Nick matches his posts from BOTH groups.
+    await tester.tap(find.descendant(of: sheet, matching: find.text('Nick')));
+    await tester.pump();
+    await tester.tap(find.text('Show results'));
+    await tester.pumpAndSettle();
+    expect(find.text('hi'), findsNWidgets(2)); // Nick's alpha + beta posts
+    expect(find.text('Ada'), findsNothing); // Ada's post filtered out
   });
 
   testWidgets('Clear resets the group scope back to All', (tester) async {
