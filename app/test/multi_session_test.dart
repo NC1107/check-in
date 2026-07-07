@@ -63,7 +63,8 @@ void main() {
     expect(s.groups.single.id, 'one.invalid');
     expect(s.groups.single.baseUrl, 'https://one.invalid');
     expect(s.groups.single.token, 'legacy-tok');
-    expect(s.activeGroupId, 'one.invalid');
+    // A single group is shown by default (nothing hidden).
+    expect(s.hiddenGroupIds, isEmpty);
 
     // Legacy keys are gone; the token is re-keyed per group.
     final prefs = await SharedPreferences.getInstance();
@@ -72,13 +73,12 @@ void main() {
     expect(secureStore['token_one.invalid'], 'legacy-tok');
   });
 
-  test('restores a multi-group list with per-group tokens and the active group', () async {
+  test('restores a multi-group list with per-group tokens; nothing hidden by default', () async {
     SharedPreferences.setMockInitialValues({
       'groups_json': jsonEncode([
         {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha'},
         {'id': 'b.invalid', 'baseUrl': 'https://b.invalid', 'name': 'Beta'},
       ]),
-      'active_group_id': 'b.invalid',
     });
     secureStore['token_a.invalid'] = 'tok-a';
     // b has no token: signed out there, but the entry must survive for re-login.
@@ -89,38 +89,87 @@ void main() {
     expect([for (final g in s.groups) g.id], ['a.invalid', 'b.invalid']);
     expect(s.byId('a.invalid')!.token, 'tok-a');
     expect(s.byId('b.invalid')!.isSignedIn, isFalse);
-    expect(s.activeGroupId, 'b.invalid');
+    expect(s.hiddenGroupIds, isEmpty);
     expect(s.signedIn.map((g) => g.id), ['a.invalid']);
   });
 
-  test("'' persists the All view and an unknown active id falls back", () async {
-    SharedPreferences.setMockInitialValues({
-      'groups_json': jsonEncode([
-        {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha'},
-      ]),
-      'active_group_id': 'gone.invalid',
-    });
-
-    final controller = await restoredController();
-    expect(controller.state.activeGroupId, 'a.invalid');
-
-    await controller.setActive(null);
-    final prefs = await SharedPreferences.getInstance();
-    expect(prefs.getString('active_group_id'), '');
-  });
-
-  test('signOutGroup drops only that group; removeGroup drops the entry too', () async {
+  test('migrates active_group_id: a specific group hides the others, then drops the key', () async {
     SharedPreferences.setMockInitialValues({
       'groups_json': jsonEncode([
         {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha'},
         {'id': 'b.invalid', 'baseUrl': 'https://b.invalid', 'name': 'Beta'},
       ]),
-      'active_group_id': 'a.invalid',
+      'active_group_id': 'b.invalid',
     });
     secureStore['token_a.invalid'] = 'tok-a';
     secureStore['token_b.invalid'] = 'tok-b';
 
     final controller = await restoredController();
+    // "Show only Beta" becomes "hide everyone but Beta".
+    expect(controller.state.hiddenGroupIds, {'a.invalid'});
+    expect(controller.state.shownGroups.map((g) => g.id), ['b.invalid']);
+
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('active_group_id'), isNull); // retired
+    expect(prefs.getString('hidden_group_ids'), jsonEncode(['a.invalid']));
+  });
+
+  test("migrates '' / unknown active_group_id to the All view (nothing hidden)", () async {
+    SharedPreferences.setMockInitialValues({
+      'groups_json': jsonEncode([
+        {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha'},
+        {'id': 'b.invalid', 'baseUrl': 'https://b.invalid', 'name': 'Beta'},
+      ]),
+      'active_group_id': 'gone.invalid',
+    });
+
+    final controller = await restoredController();
+    expect(controller.state.hiddenGroupIds, isEmpty);
+  });
+
+  test('toggleGroup hides/shows a group and persists; the last shown group is protected', () async {
+    SharedPreferences.setMockInitialValues({
+      'groups_json': jsonEncode([
+        {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha'},
+        {'id': 'b.invalid', 'baseUrl': 'https://b.invalid', 'name': 'Beta'},
+      ]),
+    });
+    secureStore['token_a.invalid'] = 'tok-a';
+    secureStore['token_b.invalid'] = 'tok-b';
+    final controller = await restoredController();
+    final prefs = await SharedPreferences.getInstance();
+
+    await controller.toggleGroup('b.invalid');
+    expect(controller.state.hiddenGroupIds, {'b.invalid'});
+    expect(controller.state.shownGroups.map((g) => g.id), ['a.invalid']);
+    expect(prefs.getString('hidden_group_ids'), jsonEncode(['b.invalid']));
+
+    // Hiding the last shown group is refused (an empty feed helps no one).
+    await controller.toggleGroup('a.invalid');
+    expect(controller.state.hiddenGroupIds, {'b.invalid'});
+
+    // Re-showing, then All resets.
+    await controller.toggleGroup('b.invalid');
+    expect(controller.state.hiddenGroupIds, isEmpty);
+    await controller.toggleGroup('a.invalid');
+    await controller.showAllGroups();
+    expect(controller.state.hiddenGroupIds, isEmpty);
+    expect(prefs.getString('hidden_group_ids'), jsonEncode(<String>[]));
+  });
+
+  test('signOutGroup drops only that group; removeGroup drops the entry and un-hides it', () async {
+    SharedPreferences.setMockInitialValues({
+      'groups_json': jsonEncode([
+        {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha'},
+        {'id': 'b.invalid', 'baseUrl': 'https://b.invalid', 'name': 'Beta'},
+      ]),
+      'hidden_group_ids': jsonEncode(['a.invalid']),
+    });
+    secureStore['token_a.invalid'] = 'tok-a';
+    secureStore['token_b.invalid'] = 'tok-b';
+
+    final controller = await restoredController();
+    expect(controller.state.hiddenGroupIds, {'a.invalid'});
 
     await controller.signOutGroup('b.invalid');
     expect(controller.state.byId('b.invalid'), isNotNull);
@@ -132,8 +181,8 @@ void main() {
     await controller.removeGroup('a.invalid');
     expect(controller.state.byId('a.invalid'), isNull);
     expect(secureStore.containsKey('token_a.invalid'), isFalse);
-    // Active falls to the remaining group.
-    expect(controller.state.activeGroupId, 'b.invalid');
+    // Removing a hidden group clears it from the hidden set too.
+    expect(controller.state.hiddenGroupIds, isEmpty);
   });
 
   test('groupIdFor derives the host', () {
