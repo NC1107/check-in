@@ -390,10 +390,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       builder: (_) => _FilterSheet(
         groups: session.groups,
         hiddenGroupIds: session.hiddenGroupIds,
-        onAddGroup: () => Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const AuthScreen()),
-        ),
-        // Session expired there — run the (additive) login flow again.
+        // Session expired there — run the (additive) login flow again. (Adding a group
+        // lives in Settings > Edit groups, not here.)
         onRelogin: (g) => Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => AuthScreen(initialServer: g.baseUrl)),
         ),
@@ -762,7 +760,6 @@ class _FilterSheet extends StatefulWidget {
   const _FilterSheet({
     required this.groups,
     required this.hiddenGroupIds,
-    required this.onAddGroup,
     required this.onRelogin,
     required this.authors,
     required this.selectedPeople,
@@ -775,7 +772,6 @@ class _FilterSheet extends StatefulWidget {
   /// Every connected group (signed-out ones offer re-login).
   final List<ServerAccount> groups;
   final Set<String> hiddenGroupIds;
-  final VoidCallback onAddGroup;
   final void Function(ServerAccount) onRelogin;
 
   final List<_FilterPerson> authors;
@@ -919,14 +915,6 @@ class _FilterSheetState extends State<_FilterSheet> {
                       widget.onRelogin(g);
                     },
                   ),
-              _groupPill(
-                label: '+ Add group',
-                on: false,
-                onTap: () {
-                  Navigator.of(context).pop();
-                  widget.onAddGroup();
-                },
-              ),
             ],
           ),
           const SizedBox(height: 22),

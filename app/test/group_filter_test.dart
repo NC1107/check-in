@@ -8,9 +8,10 @@ import 'package:checkin/features/feed/feed_screen.dart';
 import 'package:checkin/state/app_state.dart';
 
 /// Group visibility lives in the filter sheet's GROUPS section: multi-select pills
-/// (All | each group | + Add group) applied together with people/date/place via
-/// "Show results". There is no group bubble or chip anywhere on the feed itself, and
-/// every group can be toggled off (the feed then shows a "no groups shown" state).
+/// (All | each group) applied together with people/date/place via "Show results".
+/// Adding a group lives in Settings > Edit groups, not here. There is no group bubble or
+/// chip anywhere on the feed itself, and every group can be toggled off (the feed then
+/// shows a "no groups shown" state).
 /// Overrides the session with a seeded controller and the feed/locations with fixed
 /// results so no network is touched.
 void main() {
@@ -66,17 +67,18 @@ void main() {
     expect(find.text('All'), findsOneWidget);
     expect(find.text('Alpha'), findsOneWidget);
     expect(find.text('Beta'), findsOneWidget);
-    expect(find.text('+ Add group'), findsOneWidget);
+    // Adding a group moved to Settings > Edit groups.
+    expect(find.text('+ Add group'), findsNothing);
     expect(find.text('DATE'), findsOneWidget);
   });
 
-  testWidgets('single group: no All pill, still Add group', (tester) async {
+  testWidgets('single group: no All pill, no add-group entry', (tester) async {
     await pump(tester, const MultiSession(groups: [alpha], restored: true));
 
     await openFilter(tester);
     expect(find.text('All'), findsNothing);
     expect(find.text('Alpha'), findsOneWidget);
-    expect(find.text('+ Add group'), findsOneWidget);
+    expect(find.text('+ Add group'), findsNothing);
   });
 
   testWidgets('deselecting a group applies with Show results; no chip appears', (tester) async {

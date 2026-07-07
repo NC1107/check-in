@@ -53,154 +53,6 @@ class SettingsScreen extends ConsumerWidget {
     nav.popUntil((route) => route.isFirst);
   }
 
-  /// Sets a per-device nickname for the group (local only, the server's name is
-  /// untouched). Admins rename the group for everyone via Edit group instead.
-  Future<void> _renameGroup(BuildContext context, WidgetRef ref) async {
-    final account = ref.read(contentAccountProvider(groupId));
-    if (account == null) return;
-    final ctrl = TextEditingController(text: account.displayName);
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: kBgSurface,
-        title: const Text('Group name',
-            style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: ctrl,
-              autofocus: true,
-              maxLength: 40,
-              style: const TextStyle(color: kFgPrimary),
-              decoration: InputDecoration(
-                hintText: account.serverName,
-                hintStyle: const TextStyle(color: kFgMuted),
-              ),
-            ),
-            Text(
-              'Only on this device. Leave empty to use the group\'s own name '
-              '("${account.serverName}").',
-              style: const TextStyle(color: kFgMuted, fontSize: 12.5, height: 1.4),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel', style: TextStyle(color: kFgSecondary)),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-    if (saved != true || !context.mounted) return;
-    final v = ctrl.text.trim();
-    // Typing the server's own name back counts as "no nickname" so the display keeps
-    // following any future server-side rename.
-    await ref
-        .read(multiSessionProvider.notifier)
-        .renameGroup(account.id, v == account.serverName ? null : v);
-  }
-
-  /// Leaves a group: removes it from this device (token + entry). The account and
-  /// check-ins stay on that group's server, so it's recoverable by signing back in -
-  /// unlike Delete account. With several groups, the user picks which one to leave.
-  Future<void> _leaveGroup(BuildContext context, WidgetRef ref) async {
-    final session = ref.read(multiSessionProvider);
-    final groups = session.signedIn;
-    if (groups.isEmpty) return;
-
-    ServerAccount? picked = groups.length == 1 ? groups.first : null;
-    if (picked == null) {
-      final id = await showModalBottomSheet<String>(
-        context: context,
-        backgroundColor: kBgSurface,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-        ),
-        builder: (_) => SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Padding(
-                padding: EdgeInsets.fromLTRB(20, 18, 20, 6),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text('Leave which group?',
-                      style:
-                          TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 17)),
-                ),
-              ),
-              for (final g in groups)
-                ListTile(
-                  leading: Container(
-                    width: 12,
-                    height: 12,
-                    decoration: BoxDecoration(color: g.displayColor, shape: BoxShape.circle),
-                  ),
-                  title:
-                      Text(g.displayName, style: const TextStyle(color: kFgPrimary, fontSize: 15)),
-                  trailing: const Icon(Icons.chevron_right, size: 18, color: kFgMuted),
-                  onTap: () => Navigator.of(context).pop(g.id),
-                ),
-              const SizedBox(height: 10),
-            ],
-          ),
-        ),
-      );
-      if (id == null || !context.mounted) return;
-      picked = session.byId(id);
-      if (picked == null) return;
-    }
-
-    final lastGroup = groups.length == 1;
-    if (!context.mounted) return;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: kBgSurface,
-        title: Text('Leave ${picked!.displayName}?',
-            style: const TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700)),
-        content: Text(
-          'This removes the group from this device. Your account and check-ins stay on the '
-          "group's server, and you can sign back in anytime. To erase them permanently, use "
-          'Delete account instead.'
-          '${lastGroup ? "\n\nThis is your only group - you'll land back on the connect screen." : ''}',
-          style: const TextStyle(color: kFgSecondary, fontSize: 14, height: 1.5),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel', style: TextStyle(color: kFgSecondary)),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Leave'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !context.mounted) return;
-    HapticFeedback.mediumImpact();
-    final nav = Navigator.of(context);
-    // Best effort: stop that group's push and invalidate its session server-side. The
-    // local removal happens regardless (the server may simply be unreachable).
-    final api = ref.read(apiForGroupProvider(picked.id));
-    try {
-      await clearDeviceToken(api);
-    } catch (_) {}
-    try {
-      await api.logout();
-    } catch (_) {}
-    await ref.read(multiSessionProvider.notifier).removeGroup(picked.id);
-    nav.popUntil((route) => route.isFirst);
-  }
-
   Future<void> _deleteAccount(BuildContext context, WidgetRef ref) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -247,15 +99,8 @@ class SettingsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final account = ref.watch(contentAccountProvider(groupId));
-    final user = account?.user;
     final session = ref.watch(multiSessionProvider);
     final groupCount = session.groups.length;
-    // Every group this user hosts is editable from here (name/color/members), so a
-    // multi-group admin never has to switch the feed to another group first.
-    final adminGroups = [
-      for (final g in session.signedIn)
-        if (g.user?.isAdmin ?? false) g
-    ];
     final title =
         groupCount > 1 && account != null ? 'Settings · ${account.displayName}' : 'Settings';
 
@@ -282,15 +127,9 @@ class SettingsScreen extends ConsumerWidget {
               MaterialPageRoute(builder: (_) => const NotificationSettingsScreen()),
             ),
           ),
-          // Admins edit their groups (name/color/members) from one submenu; everyone
-          // else can still nickname the group locally.
-          if (!(user?.isAdmin ?? false))
-            _tile(
-              icon: Icons.drive_file_rename_outline,
-              label: 'Group name',
-              onTap: () => _renameGroup(context, ref),
-            ),
-          if (adminGroups.isNotEmpty)
+          // Everything group-shaped - name/color/members for hosts, local nickname for
+          // everyone, adding a group, leaving a group - lives in the Edit groups submenu.
+          if (session.signedIn.isNotEmpty)
             _tile(
               icon: Icons.tune,
               label: 'Edit groups',
@@ -304,12 +143,6 @@ class SettingsScreen extends ConsumerWidget {
             label: 'Log out',
             onTap: () => _logOut(context, ref),
           ),
-          if (session.signedIn.isNotEmpty)
-            _tile(
-              icon: Icons.group_off_outlined,
-              label: 'Leave group',
-              onTap: () => _leaveGroup(context, ref),
-            ),
           _tile(
             icon: Icons.delete_forever_outlined,
             label: 'Delete account',
