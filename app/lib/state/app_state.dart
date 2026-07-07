@@ -66,13 +66,20 @@ class ServerAccount {
   }
 }
 
-/// The app-level session: every connected group plus which one is being viewed.
-/// [activeGroupId] == null means the combined "All groups" view.
+/// The app-level session: every connected group plus which ones the feed shows.
+/// [hiddenGroupIds] holds the groups toggled off in the group bubble; empty means every
+/// group is shown (the combined "All groups" view).
 class MultiSession {
-  const MultiSession({this.groups = const [], this.activeGroupId, this.restored = false});
+  const MultiSession({
+    this.groups = const [],
+    this.hiddenGroupIds = const {},
+    this.restored = false,
+  });
 
   final List<ServerAccount> groups;
-  final String? activeGroupId;
+
+  /// Groups the user has toggled off in the feed. Empty = show every group (All view).
+  final Set<String> hiddenGroupIds;
 
   /// True once persisted state has been loaded (so startup can tell "no groups yet"
   /// from "still restoring").
@@ -93,25 +100,44 @@ class MultiSession {
     return null;
   }
 
-  /// The explicitly selected group, or null in the All view.
-  ServerAccount? get active => byId(activeGroupId);
+  /// Signed-in groups currently visible in the feed: all minus the hidden ones. Never
+  /// empty while any group is signed in (the last shown group can't be hidden).
+  List<ServerAccount> get shownGroups {
+    final shown = [
+      for (final g in signedIn)
+        if (!hiddenGroupIds.contains(g.id)) g
+    ];
+    return shown.isNotEmpty ? shown : signedIn;
+  }
+
+  /// The single group in focus when exactly one is shown; null when zero or many.
+  ServerAccount? get soleShown => shownGroups.length == 1 ? shownGroups.first : null;
 
   /// The account backing screens that need "the current group" (profile, admin,
-  /// settings, search): the active group, or the first signed-in one while viewing All.
+  /// settings, search): the sole shown group, or the first signed-in one otherwise.
   ServerAccount? get current {
-    final a = active;
-    if (a != null) return a;
+    final one = soleShown;
+    if (one != null) return one;
     if (signedIn.isNotEmpty) return signedIn.first;
     return groups.isNotEmpty ? groups.first : null;
   }
 
-  /// Whether the feed is showing the merged all-groups view (only meaningful with more
-  /// than one signed-in group).
-  bool get isAllView => activeGroupId == null && signedIn.length > 1;
+  /// Exactly one group shown → per-group search + filters + pagination apply.
+  bool get isSingleGroupView => shownGroups.length == 1;
+
+  /// More than one group shown → the merged feed (per-group origin colors, no per-group
+  /// search/filter).
+  bool get isAllView => shownGroups.length > 1;
+
+  /// Whether nothing is hidden (every signed-in group is shown). Only meaningful with more
+  /// than one signed-in group.
+  bool get showingAll => signedIn.length > 1 && shownGroups.length == signedIn.length;
 }
 
 const _kGroups = 'groups_json';
-const _kActiveGroup = 'active_group_id'; // '' persists the All view
+const _kHiddenGroups = 'hidden_group_ids'; // JSON list of groups toggled off; [] = All
+// Retired single-select key, migrated into [_kHiddenGroups] on first launch of this build.
+const _kActiveGroup = 'active_group_id';
 // Pre-multi-group keys, migrated into the group list on first launch of this build.
 const _kLegacyBaseUrl = 'base_url';
 const _kLegacyToken = 'token';
@@ -155,7 +181,6 @@ class MultiSessionController extends StateNotifier<MultiSession> {
         }
         entries = [(id: id, baseUrl: legacyUrl, name: 'Check-In', nickname: null)];
         await prefs.setString(_kGroups, _encodeGroups(entries));
-        await prefs.setString(_kActiveGroup, id);
         await prefs.remove(_kLegacyBaseUrl);
         await _secure.delete(key: _kLegacyToken);
       }
@@ -167,12 +192,22 @@ class MultiSessionController extends StateNotifier<MultiSession> {
       accounts.add(ServerAccount(
           id: e.id, baseUrl: e.baseUrl, serverName: e.name, nickname: e.nickname, token: token));
     }
-    var activeId = prefs.getString(_kActiveGroup);
-    if (activeId == '') activeId = null; // All view
-    if (activeId != null && !accounts.any((g) => g.id == activeId)) {
-      activeId = accounts.isNotEmpty ? accounts.first.id : null;
+    final ids = {for (final g in accounts) g.id};
+    var hidden = <String>{};
+    final rawHidden = prefs.getString(_kHiddenGroups);
+    if (rawHidden != null) {
+      hidden = _decodeHidden(rawHidden).where(ids.contains).toSet();
+    } else {
+      // Migrate the retired single-select `active_group_id`: a specific group meant "show
+      // only that one" → hide the others; '' / absent meant All → hide nothing.
+      final oldActive = prefs.getString(_kActiveGroup);
+      if (oldActive != null && oldActive.isNotEmpty && ids.contains(oldActive)) {
+        hidden = {for (final id in ids) if (id != oldActive) id};
+      }
+      await prefs.setString(_kHiddenGroups, _encodeHidden(hidden));
+      await prefs.remove(_kActiveGroup);
     }
-    state = MultiSession(groups: accounts, activeGroupId: activeId, restored: true);
+    state = MultiSession(groups: accounts, hiddenGroupIds: hidden, restored: true);
 
     // Hydrate each signed-in group's user (and refresh its display name) in parallel.
     for (final g in accounts) {
@@ -212,7 +247,7 @@ class MultiSessionController extends StateNotifier<MultiSession> {
         for (final g in state.groups)
           if (g.id == id) fn(g) else g
       ],
-      activeGroupId: state.activeGroupId,
+      hiddenGroupIds: state.hiddenGroupIds,
       restored: state.restored,
     );
   }
@@ -228,9 +263,9 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     );
   }
 
-  Future<void> _persistActive() async {
+  Future<void> _persistHidden() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kActiveGroup, state.activeGroupId ?? '');
+    await prefs.setString(_kHiddenGroups, _encodeHidden(state.hiddenGroupIds));
   }
 
   /// Connects (or re-connects) a group after a successful login/signup and makes it
@@ -249,9 +284,14 @@ class MultiSessionController extends StateNotifier<MultiSession> {
       for (final g in state.groups)
         if (g.id != id) g
     ];
-    state = MultiSession(groups: [...others, account], activeGroupId: id, restored: state.restored);
+    // A newly connected (or re-logged-in) group is always shown.
+    state = MultiSession(
+      groups: [...others, account],
+      hiddenGroupIds: state.hiddenGroupIds.difference({id}),
+      restored: state.restored,
+    );
     await _persistGroups();
-    await _persistActive();
+    await _persistHidden();
   }
 
   /// Drops one group's token (e.g. its server rejected it) but keeps the entry, so the
@@ -268,11 +308,13 @@ class MultiSessionController extends StateNotifier<MultiSession> {
       for (final g in state.groups)
         if (g.id != id) g
     ];
-    var active = state.activeGroupId;
-    if (active == id) active = groups.isNotEmpty ? groups.first.id : null;
-    state = MultiSession(groups: groups, activeGroupId: active, restored: state.restored);
+    state = MultiSession(
+      groups: groups,
+      hiddenGroupIds: state.hiddenGroupIds.difference({id}),
+      restored: state.restored,
+    );
     await _persistGroups();
-    await _persistActive();
+    await _persistHidden();
   }
 
   /// Sets (or clears, with null/empty) this device's local name for a group. Purely
@@ -293,10 +335,35 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     await _persistGroups();
   }
 
-  /// Switches the viewed group; null selects the combined All view.
-  Future<void> setActive(String? id) async {
-    state = MultiSession(groups: state.groups, activeGroupId: id, restored: state.restored);
-    await _persistActive();
+  /// Shows every group again (clears the hidden set): the combined All view.
+  Future<void> showAllGroups() async {
+    if (state.hiddenGroupIds.isEmpty) return;
+    state = MultiSession(groups: state.groups, hiddenGroupIds: const {}, restored: state.restored);
+    await _persistHidden();
+  }
+
+  /// Toggles a group's visibility in the feed. Hiding is refused when it would hide the
+  /// last shown group (an empty feed) - callers surface that as a no-op.
+  Future<void> toggleGroup(String id) async {
+    final hidden = {...state.hiddenGroupIds};
+    if (hidden.contains(id)) {
+      hidden.remove(id);
+    } else {
+      final anotherStaysShown =
+          state.signedIn.any((g) => g.id != id && !hidden.contains(g.id));
+      if (!anotherStaysShown) return;
+      hidden.add(id);
+    }
+    state = MultiSession(groups: state.groups, hiddenGroupIds: hidden, restored: state.restored);
+    await _persistHidden();
+  }
+
+  /// Ensures a group is visible in the feed (used when a push tap lands you in it).
+  Future<void> showGroup(String id) async {
+    if (!state.hiddenGroupIds.contains(id)) return;
+    final hidden = {...state.hiddenGroupIds}..remove(id);
+    state = MultiSession(groups: state.groups, hiddenGroupIds: hidden, restored: state.restored);
+    await _persistHidden();
   }
 
   /// Refreshes the cached user for a group (e.g. after editing the profile there).
@@ -335,6 +402,16 @@ class MultiSessionController extends StateNotifier<MultiSession> {
         }
     ]);
   }
+
+  static Set<String> _decodeHidden(String raw) {
+    try {
+      return {for (final e in jsonDecode(raw) as List) e as String};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  static String _encodeHidden(Set<String> ids) => jsonEncode(ids.toList());
 }
 
 final multiSessionProvider = StateNotifierProvider<MultiSessionController, MultiSession>(
@@ -436,20 +513,20 @@ List<Post> mergeFeeds(Iterable<List<Post>> pages) {
 }
 
 /// The home feed as a refreshable provider. Invalidate it (e.g. after creating a post)
-/// and the feed list updates without a manual pull-to-refresh. Single group → that
-/// group's feed (with the location filter); All view → the first page of every
-/// signed-in group's feed, merged by time and tagged with its origin group.
+/// and the feed list updates without a manual pull-to-refresh. One group shown → that
+/// group's feed (with the location filter); more than one → the first page of every shown
+/// group's feed, merged by time and tagged with its origin group.
 final feedProvider = FutureProvider.autoDispose<FeedResult>((ref) async {
   final session = ref.watch(multiSessionProvider);
-  if (!session.isAllView) {
-    final acct = session.current;
-    if (acct == null || !acct.isSignedIn) return const FeedResult(posts: []);
+  final groups = session.shownGroups;
+  if (groups.isEmpty) return const FeedResult(posts: []);
+  if (groups.length == 1) {
+    final acct = groups.first;
     final location = ref.watch(feedLocationProvider);
     final posts = await ref.watch(apiForGroupProvider(acct.id)).feed(location: location);
     return FeedResult(posts: [for (final p in posts) p.withGroup(acct.id)]);
   }
 
-  final groups = session.signedIn;
   final pages = await Future.wait([
     for (final g in groups)
       ref

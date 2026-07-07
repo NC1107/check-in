@@ -23,7 +23,6 @@ void main() {
   Future<void> pump(WidgetTester tester, {required bool isAdmin}) async {
     final controller = MultiSessionController.seeded(MultiSession(
       groups: [account(isAdmin: isAdmin)],
-      activeGroupId: 'alpha.invalid',
       restored: true,
     ));
     await tester.pumpWidget(
@@ -57,7 +56,6 @@ void main() {
   testWidgets('group rename sets a local nickname; empty restores the server name', (tester) async {
     final controller = MultiSessionController.seeded(MultiSession(
       groups: [account(isAdmin: false)],
-      activeGroupId: 'alpha.invalid',
       restored: true,
     ));
     await tester.pumpWidget(

@@ -76,9 +76,8 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     }
     final t = target ?? session.current;
     if (t == null || !t.isSignedIn || !mounted) return;
-    if (session.activeGroupId != t.id) {
-      ref.read(multiSessionProvider.notifier).setActive(t.id);
-    }
+    // Make sure the tapped group is visible in the feed when you return to it.
+    ref.read(multiSessionProvider.notifier).showGroup(t.id);
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => PostDetailScreen(postId: postId, groupId: t.id)),
     );
@@ -240,9 +239,10 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   void initState() {
     super.initState();
     final session = ref.read(multiSessionProvider);
-    final active = session.active;
-    if (active != null && active.isSignedIn) {
-      _targets.add(active.id);
+    // Default the cross-post targets to the single group in focus, if any.
+    final focus = session.soleShown;
+    if (focus != null) {
+      _targets.add(focus.id);
     } else if (session.signedIn.length == 1) {
       _targets.add(session.signedIn.first.id);
     }
