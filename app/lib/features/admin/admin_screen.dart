@@ -13,8 +13,12 @@ import 'contacts_picker_screen.dart';
 
 /// AdminScreen lets the admin build the signup allowlist (invite list) — from contacts or
 /// typed numbers — see who's been invited and who has joined, and manage members.
+/// Scoped to [groupId] (null = the current group) so a multi-group host can manage any
+/// group they admin without switching the feed over first.
 class AdminScreen extends ConsumerStatefulWidget {
-  const AdminScreen({super.key});
+  const AdminScreen({super.key, this.groupId});
+
+  final String? groupId;
 
   @override
   ConsumerState<AdminScreen> createState() => _AdminScreenState();
@@ -30,9 +34,9 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
   @override
   void initState() {
     super.initState();
-    _invites = ref.read(apiProvider).adminListAllowed();
-    _users = ref.read(apiProvider).adminListUsers();
-    _reports = ref.read(apiProvider).adminListReports();
+    _invites = ref.read(contentApiProvider(widget.groupId)).adminListAllowed();
+    _users = ref.read(contentApiProvider(widget.groupId)).adminListUsers();
+    _reports = ref.read(contentApiProvider(widget.groupId)).adminListReports();
   }
 
   @override
@@ -41,9 +45,12 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
     super.dispose();
   }
 
-  void _refreshInvites() => setState(() => _invites = ref.read(apiProvider).adminListAllowed());
-  void _refreshUsers() => setState(() => _users = ref.read(apiProvider).adminListUsers());
-  void _refreshReports() => setState(() => _reports = ref.read(apiProvider).adminListReports());
+  void _refreshInvites() =>
+      setState(() => _invites = ref.read(contentApiProvider(widget.groupId)).adminListAllowed());
+  void _refreshUsers() =>
+      setState(() => _users = ref.read(contentApiProvider(widget.groupId)).adminListUsers());
+  void _refreshReports() =>
+      setState(() => _reports = ref.read(contentApiProvider(widget.groupId)).adminListReports());
 
   /// Parse the free-text field into phone numbers separated by newlines, commas, or
   /// semicolons.
@@ -76,7 +83,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
   Future<void> _upload(List<String> phones) async {
     setState(() => _uploading = true);
     try {
-      final r = await ref.read(apiProvider).uploadContacts(phones);
+      final r = await ref.read(contentApiProvider(widget.groupId)).uploadContacts(phones);
       final added = r['added'] as int? ?? 0;
       final valid = r['valid'] as int? ?? 0;
       final dupes = valid - added;
@@ -93,7 +100,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
 
   Future<void> _removeInvite(Invite inv) async {
     try {
-      await ref.read(apiProvider).adminRemoveInvite(inv.phone);
+      await ref.read(contentApiProvider(widget.groupId)).adminRemoveInvite(inv.phone);
       _refreshInvites();
     } catch (_) {
       _snack('Could not remove that number.');
@@ -334,7 +341,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
 
   Future<void> _issueResetCode(User u) async {
     try {
-      final res = await ref.read(apiProvider).issueResetCode(u.id);
+      final res = await ref.read(contentApiProvider(widget.groupId)).issueResetCode(u.id);
       if (!mounted) return;
       await showDialog<void>(
         context: context,
@@ -418,7 +425,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
       ),
     );
     if (ok == true) {
-      await ref.read(apiProvider).revokeUser(u.id);
+      await ref.read(contentApiProvider(widget.groupId)).revokeUser(u.id);
       _refreshUsers();
     }
   }
@@ -512,7 +519,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
           TextButton(
             onPressed: () async {
               try {
-                await ref.read(apiProvider).adminDismissReport(r.id);
+                await ref.read(contentApiProvider(widget.groupId)).adminDismissReport(r.id);
                 _refreshReports();
               } catch (_) {
                 _snack('Could not dismiss report.');

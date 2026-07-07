@@ -4,11 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../notifications/push_messaging.dart';
 import '../../state/app_state.dart';
-import '../../theme/group_color.dart';
 import '../../theme/tokens.dart';
-import '../admin/admin_screen.dart';
 import '../profile/edit_profile_sheet.dart';
 import 'appearance_screen.dart';
+import 'edit_group_screen.dart';
 import 'notification_settings_screen.dart';
 
 /// SettingsScreen gathers the account actions behind the profile's gear icon: edit
@@ -55,12 +54,11 @@ class SettingsScreen extends ConsumerWidget {
     nav.popUntil((route) => route.isFirst);
   }
 
-  /// Renames the group. An admin renames it server-side (everyone sees the new name);
-  /// anyone else sets a per-device nickname (local only, the server's name is untouched).
+  /// Sets a per-device nickname for the group (local only, the server's name is
+  /// untouched). Admins rename the group for everyone via Edit group instead.
   Future<void> _renameGroup(BuildContext context, WidgetRef ref) async {
     final account = ref.read(contentAccountProvider(groupId));
     if (account == null) return;
-    final isAdmin = account.user?.isAdmin ?? false;
     final ctrl = TextEditingController(text: account.displayName);
     final saved = await showDialog<bool>(
       context: context,
@@ -83,10 +81,8 @@ class SettingsScreen extends ConsumerWidget {
               ),
             ),
             Text(
-              isAdmin
-                  ? 'This renames the group for everyone.'
-                  : 'Only on this device. Leave empty to use the group\'s own name '
-                      '("${account.serverName}").',
+              'Only on this device. Leave empty to use the group\'s own name '
+              '("${account.serverName}").',
               style: const TextStyle(color: kFgMuted, fontSize: 12.5, height: 1.4),
             ),
           ],
@@ -105,75 +101,57 @@ class SettingsScreen extends ConsumerWidget {
     );
     if (saved != true || !context.mounted) return;
     final v = ctrl.text.trim();
-    final notifier = ref.read(multiSessionProvider.notifier);
-    if (isAdmin) {
-      // An empty field would blank the group's name for everyone — keep the current one.
-      if (v.isEmpty) return;
-      final messenger = ScaffoldMessenger.of(context);
-      try {
-        await ref.read(contentApiProvider(groupId)).renameServer(v);
-        await notifier.applyServerName(account.id, v);
-      } catch (_) {
-        messenger
-            .showSnackBar(const SnackBar(content: Text('Could not rename the group. Try again.')));
-      }
-    } else {
-      // Typing the server's own name back counts as "no nickname" so the display keeps
-      // following any future server-side rename.
-      await notifier.renameGroup(account.id, v == account.serverName ? null : v);
-    }
+    // Typing the server's own name back counts as "no nickname" so the display keeps
+    // following any future server-side rename.
+    await ref
+        .read(multiSessionProvider.notifier)
+        .renameGroup(account.id, v == account.serverName ? null : v);
   }
 
-  /// Admin-only: set the group's color for everyone from the shared group palette. Color
-  /// is a server-owned identity cue (unlike the per-device nickname), so only hosts see
-  /// this. Picking "Automatic" clears it back to the deterministic color.
-  Future<void> _pickGroupColor(BuildContext context, WidgetRef ref) async {
-    final account = ref.read(contentAccountProvider(groupId));
-    if (account == null) return;
-    final current = account.color ?? '';
-    final picked = await showDialog<String>(
+  /// Opens the group editor. A host of several groups picks which one first - every
+  /// group they admin is editable from here, no switching required.
+  Future<void> _editGroup(BuildContext context, WidgetRef ref, List<ServerAccount> admin) async {
+    if (admin.length == 1) {
+      Navigator.of(context)
+          .push(MaterialPageRoute(builder: (_) => EditGroupScreen(groupId: admin.first.id)));
+      return;
+    }
+    final picked = await showModalBottomSheet<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: kBgSurface,
-        title: const Text('Group color',
-            style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700)),
-        content: Column(
+      backgroundColor: kBgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (_) => SafeArea(
+        child: Column(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Shown to everyone so groups are told apart in the combined feed.',
-                style: TextStyle(color: kFgMuted, fontSize: 12.5, height: 1.4)),
-            const SizedBox(height: 18),
-            Wrap(
-              spacing: 14,
-              runSpacing: 14,
-              children: [
-                for (final g in kGroupColors)
-                  _ColorSwatch(
-                    color: g.color,
-                    selected: current == g.id,
-                    onTap: () => Navigator.pop(ctx, g.id),
-                  ),
-                _ColorSwatch(
-                  color: null,
-                  selected: current.isEmpty,
-                  onTap: () => Navigator.pop(ctx, ''),
-                ),
-              ],
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 18, 20, 6),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('Edit which group?',
+                    style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 17)),
+              ),
             ),
+            for (final g in admin)
+              ListTile(
+                leading: Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(color: g.displayColor, shape: BoxShape.circle),
+                ),
+                title: Text(g.displayName, style: const TextStyle(color: kFgPrimary, fontSize: 15)),
+                trailing: const Icon(Icons.chevron_right, size: 18, color: kFgMuted),
+                onTap: () => Navigator.of(context).pop(g.id),
+              ),
+            const SizedBox(height: 10),
           ],
         ),
       ),
     );
-    if (picked == null || picked == current || !context.mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      await ref.read(contentApiProvider(groupId)).setGroupColor(picked);
-      await ref.read(multiSessionProvider.notifier).applyServerColor(account.id, picked);
-    } catch (_) {
-      messenger
-          .showSnackBar(const SnackBar(content: Text('Could not update the color. Try again.')));
-    }
+    if (picked == null || !context.mounted) return;
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => EditGroupScreen(groupId: picked)));
   }
 
   Future<void> _deleteAccount(BuildContext context, WidgetRef ref) async {
@@ -223,7 +201,14 @@ class SettingsScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final account = ref.watch(contentAccountProvider(groupId));
     final user = account?.user;
-    final groupCount = ref.watch(multiSessionProvider.select((s) => s.groups.length));
+    final session = ref.watch(multiSessionProvider);
+    final groupCount = session.groups.length;
+    // Every group this user hosts is editable from here (name/color/members), so a
+    // multi-group admin never has to switch the feed to another group first.
+    final adminGroups = [
+      for (final g in session.signedIn)
+        if (g.user?.isAdmin ?? false) g
+    ];
     final title =
         groupCount > 1 && account != null ? 'Settings · ${account.displayName}' : 'Settings';
 
@@ -256,24 +241,19 @@ class SettingsScreen extends ConsumerWidget {
               MaterialPageRoute(builder: (_) => const NotificationSettingsScreen()),
             ),
           ),
-          _tile(
-            icon: Icons.drive_file_rename_outline,
-            label: 'Group name',
-            onTap: () => _renameGroup(context, ref),
-          ),
-          if (user?.isAdmin ?? false)
+          // Admins edit the group itself (name/color/members) in one place; everyone
+          // else can still nickname the group locally.
+          if (!(user?.isAdmin ?? false))
             _tile(
-              icon: Icons.palette_outlined,
-              label: 'Group color',
-              onTap: () => _pickGroupColor(context, ref),
+              icon: Icons.drive_file_rename_outline,
+              label: 'Group name',
+              onTap: () => _renameGroup(context, ref),
             ),
-          if (user?.isAdmin ?? false)
+          if (adminGroups.isNotEmpty)
             _tile(
-              icon: Icons.group_outlined,
-              label: 'Members',
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const AdminScreen()),
-              ),
+              icon: Icons.tune,
+              label: 'Edit group',
+              onTap: () => _editGroup(context, ref, adminGroups),
             ),
           const Divider(color: kBorder, height: 24),
           _tile(
@@ -304,41 +284,6 @@ class SettingsScreen extends ConsumerWidget {
       leading: Icon(icon, size: 22, color: danger ? kLike : kFgSecondary),
       title: Text(label, style: TextStyle(color: color, fontSize: 15)),
       trailing: danger ? null : const Icon(Icons.chevron_right, size: 18, color: kFgMuted),
-    );
-  }
-}
-
-/// One swatch in the admin group-color picker. A null [color] is the "Automatic" option
-/// (clears the admin color back to the deterministic one).
-class _ColorSwatch extends StatelessWidget {
-  const _ColorSwatch({required this.color, required this.selected, required this.onTap});
-
-  final Color? color;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: color == null ? 'Automatic color' : 'Group color',
-      child: GestureDetector(
-        onTap: onTap,
-        behavior: HitTestBehavior.opaque,
-        child: Container(
-          width: 46,
-          height: 46,
-          decoration: BoxDecoration(
-            color: color ?? kBgMain,
-            shape: BoxShape.circle,
-            border: Border.all(color: selected ? kFgPrimary : kBorder, width: selected ? 3 : 1),
-          ),
-          child: color == null
-              ? const Icon(Icons.format_color_reset_outlined, size: 20, color: kFgMuted)
-              : (selected ? const Icon(Icons.check, size: 22, color: Colors.black) : null),
-        ),
-      ),
     );
   }
 }
