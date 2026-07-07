@@ -148,6 +148,12 @@ class MultiSession {
   /// Whether nothing is hidden (every signed-in group is shown). Only meaningful with more
   /// than one signed-in group.
   bool get showingAll => signedIn.length > 1 && shownGroups.length == signedIn.length;
+
+  /// Default cross-post targets for a new check-in: the groups currently in view
+  /// ("post where you're looking"), or every signed-in group when the feed selection is
+  /// empty. The compose sheet shows the choice prominently, so the default is one tap to
+  /// change.
+  List<ServerAccount> get composeDefaults => shownGroups.isNotEmpty ? shownGroups : signedIn;
 }
 
 const _kGroups = 'groups_json';

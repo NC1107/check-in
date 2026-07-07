@@ -231,6 +231,26 @@ void main() {
     expect(prefs.getString('groups_json'), contains('Weekend Warriors'));
   });
 
+  test('composeDefaults: post where you are looking, else every signed-in group', () {
+    const a =
+        ServerAccount(id: 'a.invalid', baseUrl: 'https://a.invalid', serverName: 'A', token: 't1');
+    const b =
+        ServerAccount(id: 'b.invalid', baseUrl: 'https://b.invalid', serverName: 'B', token: 't2');
+
+    // Everything shown → both are targets.
+    const all = MultiSession(groups: [a, b], restored: true);
+    expect(all.composeDefaults.map((g) => g.id), ['a.invalid', 'b.invalid']);
+
+    // One group in view → just that one.
+    const one = MultiSession(groups: [a, b], hiddenGroupIds: {'b.invalid'}, restored: true);
+    expect(one.composeDefaults.map((g) => g.id), ['a.invalid']);
+
+    // Nothing shown → fall back to every signed-in group (an empty compose helps no one).
+    const none =
+        MultiSession(groups: [a, b], hiddenGroupIds: {'a.invalid', 'b.invalid'}, restored: true);
+    expect(none.composeDefaults.map((g) => g.id), ['a.invalid', 'b.invalid']);
+  });
+
   test('applyServerColor sets/clears the group color and persists it', () async {
     SharedPreferences.setMockInitialValues({
       'groups_json': jsonEncode([

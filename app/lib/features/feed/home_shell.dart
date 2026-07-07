@@ -252,14 +252,9 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   @override
   void initState() {
     super.initState();
-    final session = ref.read(multiSessionProvider);
-    // Default the cross-post targets to the single group in focus, if any.
-    final focus = session.soleShown;
-    if (focus != null) {
-      _targets.add(focus.id);
-    } else if (session.signedIn.length == 1) {
-      _targets.add(session.signedIn.first.id);
-    }
+    // Post where you're looking: the shown groups (every signed-in one if none shown).
+    // The POST TO section makes the selection obvious and one tap to change.
+    _targets.addAll([for (final g in ref.read(multiSessionProvider).composeDefaults) g.id]);
   }
 
   @override
@@ -633,25 +628,50 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                             height: 16,
                             child:
                                 CircularProgressIndicator(strokeWidth: 2, color: context.onAccent))
-                        : Text(retrying ? 'Retry' : 'Share',
+                        : Text(
+                            // Say how many groups this goes to, so cross-posting is
+                            // never a surprise.
+                            retrying
+                                ? 'Retry'
+                                : (_targets.length > 1 ? 'Share (${_targets.length})' : 'Share'),
                             style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
                   ),
                 ),
               ],
             ),
           ),
-          // Cross-post targets: one chip per connected group. Hidden with a single
-          // group (nothing to choose). Groups already posted to show a check and lock.
+          // Cross-post targets: one pill per connected group, under an explicit POST TO
+          // label so "where is this going" is a first-class choice, not an afterthought.
+          // Hidden with a single group (nothing to choose). Groups already posted to
+          // (partial-failure retry) show a check and lock.
           if (session.signedIn.length > 1)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [for (final g in session.signedIn) _targetChip(g)],
-                ),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Text('POST TO',
+                          style: TextStyle(
+                              color: _fgMuted,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                              letterSpacing: 0.4)),
+                      if (_targets.isEmpty) ...[
+                        const SizedBox(width: 8),
+                        const Text('pick at least one group',
+                            style: TextStyle(color: _fgMuted, fontSize: 12)),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [for (final g in session.signedIn) _targetChip(g)],
+                  ),
+                ],
               ),
             ),
           const SizedBox(height: 14),
