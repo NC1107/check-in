@@ -212,7 +212,7 @@ func (s *Server) renderDebug(w http.ResponseWriter, r *http.Request, notice stri
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := debugTmpl.Execute(w, debugView{
-		ServerName:     s.cfg.ServerName,
+		ServerName:     s.serverName(r.Context()),
 		Token:          token,
 		Stats:          stats,
 		Users:          users,

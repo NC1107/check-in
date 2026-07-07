@@ -27,7 +27,7 @@ Under Compose, sensible values are already wired up; override only if you need t
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CHECKIN_SERVER_NAME` | `Check-In` | Friendly name shown to clients via `/api/server-info`. |
+| `CHECKIN_SERVER_NAME` | `Check-In` | Initial group name, seeded into the database on first boot. After that, an admin renames the group in-app (Settings → Group name) and that stored name is what clients see via `/api/server-info` and in push titles; changing this variable later has no effect once a name is set. |
 | `CHECKIN_PUBLIC_URL` | *(empty)* | This server's public base URL (e.g. `https://alpha.check-in.example.com`). Surfaced via `/api/server-info` and stamped into push payloads so an app connected to several servers can attribute notifications. Set automatically by the multi-group generator; optional for single-group installs. |
 | `CHECKIN_HTTP_ADDR` | `:8080` | Address the API listens on inside the container. |
 | `CHECKIN_DATABASE_URL` | `postgres://checkin:checkin@localhost:5432/checkin?sslmode=disable` | Full PostgreSQL connection string. Set automatically by Compose; only override for a custom/external database. |
