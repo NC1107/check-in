@@ -107,6 +107,100 @@ class SettingsScreen extends ConsumerWidget {
         .renameGroup(account.id, v == account.serverName ? null : v);
   }
 
+  /// Leaves a group: removes it from this device (token + entry). The account and
+  /// check-ins stay on that group's server, so it's recoverable by signing back in -
+  /// unlike Delete account. With several groups, the user picks which one to leave.
+  Future<void> _leaveGroup(BuildContext context, WidgetRef ref) async {
+    final session = ref.read(multiSessionProvider);
+    final groups = session.signedIn;
+    if (groups.isEmpty) return;
+
+    ServerAccount? picked = groups.length == 1 ? groups.first : null;
+    if (picked == null) {
+      final id = await showModalBottomSheet<String>(
+        context: context,
+        backgroundColor: kBgSurface,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+        ),
+        builder: (_) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 18, 20, 6),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Leave which group?',
+                      style:
+                          TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 17)),
+                ),
+              ),
+              for (final g in groups)
+                ListTile(
+                  leading: Container(
+                    width: 12,
+                    height: 12,
+                    decoration: BoxDecoration(color: g.displayColor, shape: BoxShape.circle),
+                  ),
+                  title:
+                      Text(g.displayName, style: const TextStyle(color: kFgPrimary, fontSize: 15)),
+                  trailing: const Icon(Icons.chevron_right, size: 18, color: kFgMuted),
+                  onTap: () => Navigator.of(context).pop(g.id),
+                ),
+              const SizedBox(height: 10),
+            ],
+          ),
+        ),
+      );
+      if (id == null || !context.mounted) return;
+      picked = session.byId(id);
+      if (picked == null) return;
+    }
+
+    final lastGroup = groups.length == 1;
+    if (!context.mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kBgSurface,
+        title: Text('Leave ${picked!.displayName}?',
+            style: const TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700)),
+        content: Text(
+          'This removes the group from this device. Your account and check-ins stay on the '
+          "group's server, and you can sign back in anytime. To erase them permanently, use "
+          'Delete account instead.'
+          '${lastGroup ? "\n\nThis is your only group - you'll land back on the connect screen." : ''}',
+          style: const TextStyle(color: kFgSecondary, fontSize: 14, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: kFgSecondary)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Leave'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+    HapticFeedback.mediumImpact();
+    final nav = Navigator.of(context);
+    // Best effort: stop that group's push and invalidate its session server-side. The
+    // local removal happens regardless (the server may simply be unreachable).
+    final api = ref.read(apiForGroupProvider(picked.id));
+    try {
+      await clearDeviceToken(api);
+    } catch (_) {}
+    try {
+      await api.logout();
+    } catch (_) {}
+    await ref.read(multiSessionProvider.notifier).removeGroup(picked.id);
+    nav.popUntil((route) => route.isFirst);
+  }
+
   Future<void> _deleteAccount(BuildContext context, WidgetRef ref) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -210,6 +304,12 @@ class SettingsScreen extends ConsumerWidget {
             label: 'Log out',
             onTap: () => _logOut(context, ref),
           ),
+          if (session.signedIn.isNotEmpty)
+            _tile(
+              icon: Icons.group_off_outlined,
+              label: 'Leave group',
+              onTap: () => _leaveGroup(context, ref),
+            ),
           _tile(
             icon: Icons.delete_forever_outlined,
             label: 'Delete account',
