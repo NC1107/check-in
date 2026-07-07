@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 /// Central color tokens for the Check-In dark theme. Every screen aliases these, so
 /// changing the palette means editing this one file.
 ///
-/// "Onyx" — a simple near-black + greys theme with a single popping green accent (used
+/// "Onyx" - a simple near-black + greys theme with a single popping green accent (used
 /// for buttons, links, and the timeline connector nodes). The accent is bright, so text
 /// on it (kOnAccent) is near-black for legibility.
 
@@ -20,7 +20,7 @@ const kFgPrimary = Color(0xFFF4F4F5);
 const kFgSecondary = Color(0xFFA1A1AA);
 const kFgMuted = Color(0xFF8B8B93);
 
-// Accent — a vivid green that pops on the black/grey base. Bright, so text on it is dark.
+// Accent - a vivid green that pops on the black/grey base. Bright, so text on it is dark.
 const kAccent = Color(0xFF37E07E);
 const kAccentHover = Color(0xFF5CE89A);
 const kAccentLight = Color(0x2937E07E); // ~16% alpha, for tints/connectors

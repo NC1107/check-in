@@ -74,7 +74,7 @@ class _NotificationSettingsScreenState extends ConsumerState<NotificationSetting
         _saving = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't update — check your connection.")),
+        const SnackBar(content: Text("Couldn't update - check your connection.")),
       );
     }
   }

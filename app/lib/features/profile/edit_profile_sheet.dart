@@ -13,7 +13,7 @@ import '../../widgets/auth_image.dart';
 import '../settings/appearance_screen.dart';
 
 /// Bottom sheet to edit the signed-in user's display name and photo on one group
-/// ([groupId], null = the current group — identity is per-server). Pops the updated
+/// ([groupId], null = the current group - identity is per-server). Pops the updated
 /// User on success; the caller refreshes the session/screen.
 class EditProfileSheet extends ConsumerStatefulWidget {
   const EditProfileSheet({super.key, required this.user, this.groupId});

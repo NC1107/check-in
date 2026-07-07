@@ -22,7 +22,7 @@ void main() {
   runZonedGuarded(
     () async {
       WidgetsFlutterBinding.ensureInitialized();
-      // Lock the app to portrait — no landscape or upside-down.
+      // Lock the app to portrait - no landscape or upside-down.
       await SystemChrome.setPreferredOrientations(const [DeviceOrientation.portraitUp]);
       FlutterError.onError = (details) {
         FlutterError.presentError(details);
@@ -46,7 +46,7 @@ void main() {
 
 /// Bring up Firebase + push on mobile only. The native google-services config is read
 /// automatically. Best-effort: if Firebase isn't configured for a build (e.g. web), the
-/// app still starts — it just won't receive cloud push.
+/// app still starts - it just won't receive cloud push.
 Future<void> _initFirebase() async {
   if (kIsWeb ||
       (defaultTargetPlatform != TargetPlatform.android &&
@@ -76,7 +76,7 @@ class _CheckInAppState extends ConsumerState<CheckInApp> {
     final termsAccepted = ref.watch(termsProvider);
 
     // Show the EULA once before login/signup (Guideline 1.2). After acceptance the
-    // user lands on the normal auth flow — or straight into the app when any connected
+    // user lands on the normal auth flow - or straight into the app when any connected
     // group still has a session. A blank frame covers the brief prefs restore so the
     // auth screen doesn't flash on every warm start.
     final Widget home = !termsAccepted

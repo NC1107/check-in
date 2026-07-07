@@ -172,7 +172,7 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     _load();
   }
 
-  /// Starts from a fixed state and skips restore/hydration — for widget tests.
+  /// Starts from a fixed state and skips restore/hydration - for widget tests.
   @visibleForTesting
   MultiSessionController.seeded(super.initial);
 
@@ -246,7 +246,7 @@ class MultiSessionController extends StateNotifier<MultiSession> {
   }
 
   /// Validates a restored token by fetching the current user, and refreshes the group's
-  /// display name. Only a real auth rejection drops the token — a network/timeout error
+  /// display name. Only a real auth rejection drops the token - a network/timeout error
   /// must NOT sign the group out (a self-hosted box being briefly offline is normal).
   Future<void> _hydrate(ServerAccount g) async {
     final client = ApiClient(baseUrl: g.baseUrl, token: g.token);
@@ -475,7 +475,7 @@ final multiSessionProvider = StateNotifierProvider<MultiSessionController, Multi
   (ref) => MultiSessionController(),
 );
 
-/// An ApiClient bound to one group. A 401 there signs out ONLY that group — the other
+/// An ApiClient bound to one group. A 401 there signs out ONLY that group - the other
 /// groups' sessions (and the shared image cache) stay intact.
 final apiForGroupProvider = Provider.family<ApiClient, String>((ref, groupId) {
   final g = ref.watch(multiSessionProvider.select((s) => s.byId(groupId)));
@@ -486,7 +486,7 @@ final apiForGroupProvider = Provider.family<ApiClient, String>((ref, groupId) {
   );
 });
 
-/// The account for "the current group" — the active one, or the first signed-in group
+/// The account for "the current group" - the active one, or the first signed-in group
 /// while viewing All. Screens that are inherently single-group (profile, admin,
 /// settings, search) hang off this.
 final currentAccountProvider = Provider<ServerAccount?>((ref) {
@@ -512,7 +512,7 @@ final contentAccountProvider = Provider.family<ServerAccount?, String?>((ref, gr
   return ref.watch(currentAccountProvider);
 });
 
-/// ApiClient for content from [groupId] — likes, comments, images on a post must hit
+/// ApiClient for content from [groupId] - likes, comments, images on a post must hit
 /// the server the post lives on, which in the All view differs per post.
 final contentApiProvider = Provider.family<ApiClient, String?>((ref, groupId) {
   final acct = ref.watch(contentAccountProvider(groupId));
@@ -545,7 +545,7 @@ final accentProvider = StateNotifierProvider<AccentController, AccentPalette>(
   (ref) => AccentController(),
 );
 
-/// The location filter applied to the home feed — null means all places. Only applies
+/// The location filter applied to the home feed - null means all places. Only applies
 /// to a single group's feed (the filter is hidden in the All view).
 final feedLocationProvider = StateProvider<String?>((ref) => null);
 

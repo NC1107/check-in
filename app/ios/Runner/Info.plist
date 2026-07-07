@@ -44,9 +44,9 @@
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Check-In saves photos to your library.</string>
 	<key>NSContactsUsageDescription</key>
-	<string>Check-In uses your contacts so you can pick who to invite to your server.</string>
+	<string>Check-In uses your contacts so you can pick who to invite to your group.</string>
 	<key>NSUserNotificationUsageDescription</key>
-	<string>Check-In sends notifications for new messages and activity.</string>
+	<string>Check-In sends notifications for new check-ins and activity.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>fetch</string>

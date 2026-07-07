@@ -113,7 +113,7 @@ func (s *Server) handleUpdateServer(w http.ResponseWriter, r *http.Request) {
 	if req.Name != nil {
 		name, ok := validServerName(*req.Name)
 		if !ok {
-			writeErr(w, http.StatusBadRequest, "name must be 1–40 characters")
+			writeErr(w, http.StatusBadRequest, "name must be 1-40 characters")
 			return
 		}
 		if err := s.db.SetServerName(r.Context(), name); err != nil {
@@ -405,7 +405,7 @@ func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 	me := userFrom(r)
 	name := strings.TrimSpace(req.Name)
 	if name == "" || len(name) > 100 {
-		writeErr(w, http.StatusBadRequest, "name must be 1–100 characters")
+		writeErr(w, http.StatusBadRequest, "name must be 1-100 characters")
 		return
 	}
 	// Treat empty first/last as "leave unchanged" so older clients (display name only)

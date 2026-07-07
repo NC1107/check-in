@@ -6,7 +6,7 @@ import '../api/api_client.dart';
 import '../api/models.dart';
 
 /// On-device birthday reminders. The app fetches friends' birthdays from the server and
-/// schedules a local notification on the morning of each birthday — no cloud push
+/// schedules a local notification on the morning of each birthday - no cloud push
 /// infrastructure required. Re-running this each app open keeps the schedule fresh.
 
 final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
@@ -21,7 +21,7 @@ Future<void> _ensureInit() async {
   );
   await _plugin.initialize(settings);
   // Request Android 13+ notification permission (no-op on earlier versions).
-  // iOS permission is deferred — request it explicitly via requestNotificationPermission()
+  // iOS permission is deferred - request it explicitly via requestNotificationPermission()
   // so the system dialog only appears when the user has seen the feature.
   await _plugin
       .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
@@ -85,7 +85,7 @@ List<BirthdayEntry> upcomingBirthdaySchedule(
 /// than one of them, so the group's display name disambiguates; pass null otherwise.
 String birthdayReminderTitle(String friendName, String? groupName) => groupName == null
     ? "It's $friendName's birthday! 🎂"
-    : "It's $friendName's birthday! 🎂 — $groupName";
+    : "It's $friendName's birthday! 🎂 - $groupName";
 
 /// scheduleBirthdayNotifications syncs birthdays from every connected group and
 /// (re)schedules reminders for each friend's birthday at 9am local time (next 3

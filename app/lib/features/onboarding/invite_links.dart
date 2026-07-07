@@ -6,7 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 ///     checkin://join?server=https%3A%2F%2FGROUP_DOMAIN (custom-scheme fallback,
 ///                                                       used by the /join web page)
 ///
-/// Membership is still gated by the group's phone allowlist — the link only tells the
+/// Membership is still gated by the group's phone allowlist - the link only tells the
 /// app which server to talk to.
 
 /// Extracts the group server base URL from an invite link, or null when the URI isn't

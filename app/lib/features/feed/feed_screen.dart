@@ -204,7 +204,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 
   /// Fetch the next page using the oldest loaded post as a composite (time,id) cursor.
-  /// Single-group view only — the All view is a first-page merge (cross-group cursor
+  /// Single-group view only - the All view is a first-page merge (cross-group cursor
   /// pagination is a follow-up), so infinite scroll is disabled there.
   Future<void> _loadMore() async {
     if (_loadingMore || _reachedEnd || _allPosts.isEmpty) return;
@@ -240,7 +240,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     final session = ref.read(multiSessionProvider);
     final account = session.soleShown;
     if (account == null) {
-      _allViewHint('Search works within one group — pick a single group in Filters first.');
+      _allViewHint('Search works within one group - pick a single group in Filters first.');
       return;
     }
     showSearch<void>(
@@ -282,7 +282,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         .toList();
   }
 
-  /// People present in the loaded feed — authors plus anyone tagged in a post — for the
+  /// People present in the loaded feed - authors plus anyone tagged in a post - for the
   /// filter sheet, so you can filter by someone who only appears in photos. Keys come
   /// from the directory, so the same human in several groups collapses to one entry
   /// (freshest name/photo wins - the feed is newest-first); their group memberships
@@ -390,7 +390,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       builder: (_) => _FilterSheet(
         groups: session.groups,
         hiddenGroupIds: session.hiddenGroupIds,
-        // Session expired there — run the (additive) login flow again. (Adding a group
+        // Session expired there - run the (additive) login flow again. (Adding a group
         // lives in Settings > Edit groups, not here.)
         onRelogin: (g) => Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => AuthScreen(initialServer: g.baseUrl)),
@@ -454,7 +454,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    "Couldn't reach ${names.join(', ')} — showing the rest.",
+                    "Couldn't reach ${names.join(', ')} - showing the rest.",
                     style: const TextStyle(color: _fgSecondary, fontSize: 12.5),
                   ),
                 ),
@@ -567,7 +567,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                     },
                   ),
             ),
-            // Floating search bar + active filter chips — slide away on scroll down.
+            // Floating search bar + active filter chips - slide away on scroll down.
             AnimatedSlide(
               offset: _searchHidden ? const Offset(0, -2) : Offset.zero,
               duration: const Duration(milliseconds: 280),
@@ -916,7 +916,7 @@ class _FilterSheetState extends State<_FilterSheet> {
                       locked: true,
                       on: false,
                       onTap: () {
-                        // Session expired there — run the (additive) login flow again.
+                        // Session expired there - run the (additive) login flow again.
                         Navigator.of(context).pop();
                         widget.onRelogin(g);
                       },

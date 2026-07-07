@@ -11,8 +11,8 @@ import '../../widgets/app_widgets.dart';
 import '../../widgets/user_avatar.dart';
 import 'contacts_picker_screen.dart';
 
-/// AdminScreen lets the admin build the signup allowlist (invite list) — from contacts or
-/// typed numbers — see who's been invited and who has joined, and manage members.
+/// AdminScreen lets the admin build the signup allowlist (invite list) - from contacts or
+/// typed numbers - see who's been invited and who has joined, and manage members.
 /// Scoped to [groupId] (null = the current group) so a multi-group host can manage any
 /// group they admin without switching the feed over first.
 class AdminScreen extends ConsumerStatefulWidget {
@@ -88,7 +88,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
       final valid = r['valid'] as int? ?? 0;
       final dupes = valid - added;
       _snack(added == 0
-          ? 'No new numbers — those ${valid == 1 ? 'one was' : '$valid were'} already invited.'
+          ? 'No new numbers - those ${valid == 1 ? 'one was' : '$valid were'} already invited.'
           : 'Added $added to the invite list${dupes > 0 ? ' ($dupes already invited)' : ''}.');
       _refreshInvites();
     } catch (e) {
@@ -151,7 +151,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
               style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 16)),
           const SizedBox(height: 6),
           const Text(
-            'Each number becomes its own invite — they just enter it to sign up. Add from '
+            'Each number becomes its own invite - they just enter it to sign up. Add from '
             'your contacts or type numbers in.',
             style: TextStyle(color: kFgSecondary, fontSize: 13, height: 1.5),
           ),
@@ -212,7 +212,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
             else if (snap.hasError)
               _hint('Could not load the invite list.')
             else if (invites.isEmpty)
-              _hint('No one invited yet. Add numbers above and they’ll appear here.')
+              _hint("No one invited yet. Add numbers above and they'll appear here.")
             else
               _panel(
                 padded: false,
@@ -451,7 +451,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
             const SizedBox(height: 6),
             const Text(
               'Members flag content here. Review each report and dismiss it once actioned '
-              '(delete the post or remove the member from the Members section below).',
+              '(delete the check-in or remove the member from the Members section below).',
               style: TextStyle(color: kFgMuted, fontSize: 12, height: 1.5),
             ),
             const SizedBox(height: 10),
@@ -480,7 +480,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
   }
 
   Widget _reportRow(ContentReport r) {
-    final kind = r.postId != null ? 'Post' : 'Comment';
+    final kind = r.postId != null ? 'Check-in' : 'Comment';
     final date = DateFormat.yMMMd().format(r.createdAt.toLocal());
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 12, 8, 12),

@@ -9,7 +9,7 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../api/api_client.dart';
 
 /// Cloud push (FCM). A single Firebase channel reaches Android directly and iOS through
-/// APNs. Server payloads carry only a short title/body — never post content — so the
+/// APNs. Server payloads carry only a short title/body - never post content - so the
 /// providers see as little as possible. Birthday reminders stay on-device (see
 /// birthday_notifier.dart); this file is just for server-originated posts/replies.
 ///
@@ -97,7 +97,7 @@ Future<void> initPush() async {
     await FirebaseMessaging.instance
         .setForegroundNotificationPresentationOptions(alert: true, badge: true, sound: true);
 
-    // Android won't show a foregrounded message on its own — render it ourselves.
+    // Android won't show a foregrounded message on its own - render it ourselves.
     FirebaseMessaging.onMessage.listen(_showForeground);
 
     // System-tray taps: background → onMessageOpenedApp; terminated → getInitialMessage.
@@ -142,7 +142,7 @@ StreamSubscription<String>? _refreshSub;
 
 /// requestDeviceToken asks for notification permission, then registers this device's FCM
 /// token with every connected server so each group can push. Also keeps the token fresh
-/// on rotation. Idempotent (the servers upsert on the token) — safe to call on every
+/// on rotation. Idempotent (the servers upsert on the token) - safe to call on every
 /// launch, after login, and whenever the set of groups changes.
 Future<void> requestDeviceToken(List<ApiClient> apis) async {
   if (!_supported || apis.isEmpty) return;
@@ -178,7 +178,7 @@ Future<void> requestDeviceToken(List<ApiClient> apis) async {
       }
     });
   } catch (_) {
-    // Network hiccup or unsupported device — try again next launch.
+    // Network hiccup or unsupported device - try again next launch.
   }
 }
 

@@ -9,7 +9,7 @@ import '../state/app_state.dart';
 ///
 /// [groupId] says which connected group the media belongs to (null = the current
 /// group). Media ids are only unique per server, so both the request and the cache key
-/// must be scoped to the group — otherwise group B's photo 5 would render group A's.
+/// must be scoped to the group - otherwise group B's photo 5 would render group A's.
 class AuthImage extends ConsumerWidget {
   const AuthImage({super.key, required this.mediaId, this.fit = BoxFit.cover, this.groupId});
 
