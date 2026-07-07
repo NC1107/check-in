@@ -72,13 +72,30 @@ void main() {
     expect(find.text('DATE'), findsOneWidget);
   });
 
-  testWidgets('single group: no All pill, no add-group entry', (tester) async {
+  testWidgets('single group: the GROUPS section is hidden entirely', (tester) async {
     await pump(tester, const MultiSession(groups: [alpha], restored: true));
 
     await openFilter(tester);
+    // One group = nothing to scope: no section, no pills, no All.
+    expect(find.text('GROUPS'), findsNothing);
     expect(find.text('All'), findsNothing);
-    expect(find.text('Alpha'), findsOneWidget);
-    expect(find.text('+ Add group'), findsNothing);
+    expect(find.text('Alpha'), findsNothing);
+    // The rest of the filter is untouched.
+    expect(find.text('DATE'), findsOneWidget);
+  });
+
+  testWidgets('two groups with one signed out: GROUPS stays (re-login is reachable)',
+      (tester) async {
+    const betaOut = ServerAccount(
+        id: 'beta.invalid', baseUrl: 'https://beta.invalid', serverName: 'Beta', token: null);
+    await pump(tester, const MultiSession(groups: [alpha, betaOut], restored: true));
+
+    await openFilter(tester);
+    expect(find.text('GROUPS'), findsOneWidget);
+    expect(find.text('Beta'), findsOneWidget);
+    expect(find.byIcon(Icons.lock_outline), findsOneWidget);
+    // Only one signed-in group, so no All pill.
+    expect(find.text('All'), findsNothing);
   });
 
   testWidgets('deselecting a group applies with Show results; no chip appears', (tester) async {

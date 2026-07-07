@@ -872,52 +872,59 @@ class _FilterSheetState extends State<_FilterSheet> {
             ],
           ),
           const SizedBox(height: 18),
-          const Text('GROUPS',
-              style: TextStyle(
-                  color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 12, letterSpacing: 0.4)),
-          const SizedBox(height: 11),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              if (_signedIn.length > 1)
-                _groupPill(
-                  label: 'All',
-                  on: _hidden.isEmpty,
-                  // A real toggle: everything on, or - when already all on - everything
-                  // off (the feed then shows its "no groups shown" state).
-                  onTap: () => setState(() {
-                    if (_hidden.isEmpty) {
-                      _hidden.addAll([for (final g in _signedIn) g.id]);
-                    } else {
-                      _hidden.clear();
-                    }
-                  }),
-                ),
-              for (final g in widget.groups)
-                if (g.isSignedIn)
+          // With a single connected group there is nothing to scope, so the whole GROUPS
+          // section disappears - a one-group member never sees multi-group machinery.
+          if (widget.groups.length > 1) ...[
+            const Text('GROUPS',
+                style: TextStyle(
+                    color: _fgMuted,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    letterSpacing: 0.4)),
+            const SizedBox(height: 11),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (_signedIn.length > 1)
                   _groupPill(
-                    label: g.displayName,
-                    dot: g.displayColor,
-                    on: !_hidden.contains(g.id),
+                    label: 'All',
+                    on: _hidden.isEmpty,
+                    // A real toggle: everything on, or - when already all on - everything
+                    // off (the feed then shows its "no groups shown" state).
                     onTap: () => setState(() {
-                      if (!_hidden.remove(g.id)) _hidden.add(g.id);
+                      if (_hidden.isEmpty) {
+                        _hidden.addAll([for (final g in _signedIn) g.id]);
+                      } else {
+                        _hidden.clear();
+                      }
                     }),
-                  )
-                else
-                  _groupPill(
-                    label: g.displayName,
-                    locked: true,
-                    on: false,
-                    onTap: () {
-                      // Session expired there — run the (additive) login flow again.
-                      Navigator.of(context).pop();
-                      widget.onRelogin(g);
-                    },
                   ),
-            ],
-          ),
-          const SizedBox(height: 22),
+                for (final g in widget.groups)
+                  if (g.isSignedIn)
+                    _groupPill(
+                      label: g.displayName,
+                      dot: g.displayColor,
+                      on: !_hidden.contains(g.id),
+                      onTap: () => setState(() {
+                        if (!_hidden.remove(g.id)) _hidden.add(g.id);
+                      }),
+                    )
+                  else
+                    _groupPill(
+                      label: g.displayName,
+                      locked: true,
+                      on: false,
+                      onTap: () {
+                        // Session expired there — run the (additive) login flow again.
+                        Navigator.of(context).pop();
+                        widget.onRelogin(g);
+                      },
+                    ),
+              ],
+            ),
+            const SizedBox(height: 22),
+          ],
           // The section stays put as long as anyone exists at all - scoping it empty
           // swaps in a hint instead of collapsing the whole block, and the size change
           // animates so the sheet never jumps.
