@@ -7,10 +7,10 @@ import 'package:checkin/api/models.dart';
 import 'package:checkin/features/feed/feed_screen.dart';
 import 'package:checkin/state/app_state.dart';
 
-/// Group visibility lives in the "group bubble" left of the search bar: a globe that opens
-/// a bottom sheet of live multi-select toggles (All groups | each group | Add group).
-/// Every group can be toggled off - the feed then shows a "no groups shown" state.
-/// The filter button stays available in the merged view (its data merges across groups).
+/// Group visibility lives in the filter sheet's GROUPS section: multi-select pills
+/// (All | each group | + Add group) applied together with people/date/place via
+/// "Show results". There is no group bubble or chip anywhere on the feed itself, and
+/// every group can be toggled off (the feed then shows a "no groups shown" state).
 /// Overrides the session with a seeded controller and the feed/locations with fixed
 /// results so no network is touched.
 void main() {
@@ -38,49 +38,59 @@ void main() {
     return controller;
   }
 
-  Future<void> openBubble(WidgetTester tester) async {
-    // The bubble is the only globe on screen until the sheet opens.
-    await tester.tap(find.byIcon(Icons.public));
+  Future<void> openFilter(WidgetTester tester) async {
+    await tester.tap(find.byIcon(Icons.filter_list));
     await tester.pumpAndSettle();
   }
 
-  testWidgets('the bubble opens the group sheet with All + every group + Add group',
-      (tester) async {
+  testWidgets('no group UI on the feed itself; the filter sheet carries GROUPS', (tester) async {
     await pump(tester, const MultiSession(groups: [alpha, beta], restored: true));
 
-    // No switcher chips on the feed; the filter button stays even while merged.
+    // Nothing group-shaped on the feed: no bubble, no chips.
+    expect(find.byIcon(Icons.public), findsNothing);
     expect(find.text('All'), findsNothing);
+    expect(find.text('Alpha'), findsNothing);
+    // The filter button is present even in the merged view.
     expect(find.byIcon(Icons.filter_list), findsOneWidget);
-    expect(find.byIcon(Icons.public), findsOneWidget);
 
-    await openBubble(tester);
-    expect(find.text('Groups'), findsOneWidget); // sheet title
-    expect(find.text('All groups'), findsOneWidget);
+    await openFilter(tester);
+    expect(find.text('GROUPS'), findsOneWidget);
+    expect(find.text('All'), findsOneWidget);
     expect(find.text('Alpha'), findsOneWidget);
     expect(find.text('Beta'), findsOneWidget);
-    expect(find.text('Add group'), findsOneWidget);
+    expect(find.text('+ Add group'), findsOneWidget);
+    expect(find.text('DATE'), findsOneWidget);
   });
 
-  testWidgets('hides the bubble entirely with a single connected group', (tester) async {
+  testWidgets('single group: no All pill, still Add group', (tester) async {
     await pump(tester, const MultiSession(groups: [alpha], restored: true));
 
-    expect(find.byIcon(Icons.public), findsNothing);
-    expect(find.byIcon(Icons.filter_list), findsOneWidget);
+    await openFilter(tester);
+    expect(find.text('All'), findsNothing);
+    expect(find.text('Alpha'), findsOneWidget);
+    expect(find.text('+ Add group'), findsOneWidget);
   });
 
-  testWidgets('toggling a group hides it live; All groups resets', (tester) async {
+  testWidgets('deselecting a group applies with Show results; no chip appears', (tester) async {
     final controller =
         await pump(tester, const MultiSession(groups: [alpha, beta], restored: true));
 
-    await openBubble(tester);
+    await openFilter(tester);
     await tester.tap(find.text('Beta'));
+    await tester.pump();
+    await tester.tap(find.text('Show results'));
     await tester.pumpAndSettle();
-    // Live update, sheet stays open, and the shown set drops Beta.
     expect(controller.state.hiddenGroupIds, {'beta.invalid'});
     expect(controller.state.shownGroups.map((g) => g.id), ['alpha.invalid']);
-    expect(find.text('All groups'), findsOneWidget); // still open
+    // The group scope never shows as a chip under the search bar.
+    expect(find.text('Beta'), findsNothing);
+    expect(find.text('Alpha'), findsNothing);
 
-    await tester.tap(find.text('All groups'));
+    // The All pill resets the scope.
+    await openFilter(tester);
+    await tester.tap(find.text('All'));
+    await tester.pump();
+    await tester.tap(find.text('Show results'));
     await tester.pumpAndSettle();
     expect(controller.state.hiddenGroupIds, isEmpty);
   });
@@ -89,39 +99,44 @@ void main() {
     final controller =
         await pump(tester, const MultiSession(groups: [alpha, beta], restored: true));
 
-    await openBubble(tester);
+    await openFilter(tester);
     await tester.tap(find.text('Alpha'));
-    await tester.pumpAndSettle();
+    await tester.pump();
     await tester.tap(find.text('Beta'));
+    await tester.pump();
+    await tester.tap(find.text('Show results'));
     await tester.pumpAndSettle();
     expect(controller.state.hiddenGroupIds, {'alpha.invalid', 'beta.invalid'});
-    expect(controller.state.shownGroups, isEmpty);
     expect(controller.state.nothingShown, isTrue);
-
-    // Close the sheet - the feed explains the empty selection.
-    await tester.tapAt(const Offset(10, 10));
-    await tester.pumpAndSettle();
     expect(find.text('No groups shown'), findsOneWidget);
-    expect(find.byIcon(Icons.public_off), findsWidgets);
+
+    // The filter sheet stays reachable - it's the way back.
+    await openFilter(tester);
+    expect(find.text('GROUPS'), findsOneWidget);
   });
 
-  testWidgets('a signed-out group appears in the sheet offering re-login, not a toggle',
+  testWidgets('a signed-out group appears locked in GROUPS (re-login, not a toggle)',
       (tester) async {
     const gammaOut = ServerAccount(
         id: 'gamma.invalid', baseUrl: 'https://gamma.invalid', serverName: 'Gamma', token: null);
     await pump(tester, const MultiSession(groups: [alpha, beta, gammaOut], restored: true));
 
-    await openBubble(tester);
+    await openFilter(tester);
     expect(find.text('Gamma'), findsOneWidget);
-    expect(find.text('Log in'), findsOneWidget); // the re-login affordance
+    expect(find.byIcon(Icons.lock_outline), findsOneWidget);
   });
 
-  testWidgets('the filter sheet opens in the merged view (no GROUPS section)', (tester) async {
-    await pump(tester, const MultiSession(groups: [alpha, beta], restored: true));
+  testWidgets('Clear resets the group scope back to All', (tester) async {
+    final controller = await pump(
+        tester,
+        const MultiSession(
+            groups: [alpha, beta], hiddenGroupIds: {'beta.invalid'}, restored: true));
 
-    await tester.tap(find.byIcon(Icons.filter_list));
+    await openFilter(tester);
+    await tester.tap(find.text('Clear'));
+    await tester.pump();
+    await tester.tap(find.text('Show results'));
     await tester.pumpAndSettle();
-    expect(find.text('GROUPS'), findsNothing);
-    expect(find.text('DATE'), findsOneWidget);
+    expect(controller.state.hiddenGroupIds, isEmpty);
   });
 }

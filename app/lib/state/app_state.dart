@@ -397,6 +397,16 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     await _persistHidden();
   }
 
+  /// Replaces the hidden set wholesale (the filter sheet applies its GROUPS selection in
+  /// one go). Unknown ids are dropped so a stale sheet can't hide ghosts.
+  Future<void> setHiddenGroups(Set<String> ids) async {
+    final known = {for (final g in state.groups) g.id};
+    final hidden = ids.where(known.contains).toSet();
+    if (setEquals(hidden, state.hiddenGroupIds)) return;
+    state = MultiSession(groups: state.groups, hiddenGroupIds: hidden, restored: state.restored);
+    await _persistHidden();
+  }
+
   /// Ensures a group is visible in the feed (used when a push tap lands you in it).
   Future<void> showGroup(String id) async {
     if (!state.hiddenGroupIds.contains(id)) return;

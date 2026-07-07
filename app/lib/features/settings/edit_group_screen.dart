@@ -6,8 +6,50 @@ import '../../theme/group_color.dart';
 import '../../theme/tokens.dart';
 import '../admin/admin_screen.dart';
 
+/// Submenu listing every group the user hosts, reached from Settings > Edit groups.
+/// Tapping a group opens its editor ([EditGroupScreen]) - no switching the feed first.
+class EditGroupsScreen extends ConsumerWidget {
+  const EditGroupsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final session = ref.watch(multiSessionProvider);
+    final admin = [
+      for (final g in session.signedIn)
+        if (g.user?.isAdmin ?? false) g
+    ];
+    return Scaffold(
+      backgroundColor: kBgMain,
+      appBar: AppBar(
+        backgroundColor: kBgMain,
+        elevation: 0,
+        title: const Text('Edit groups',
+            style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
+      ),
+      body: ListView(
+        children: [
+          for (final g in admin)
+            ListTile(
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => EditGroupScreen(groupId: g.id)),
+              ),
+              leading: Container(
+                width: 14,
+                height: 14,
+                decoration: BoxDecoration(color: g.displayColor, shape: BoxShape.circle),
+              ),
+              title: Text(g.displayName, style: const TextStyle(color: kFgPrimary, fontSize: 15)),
+              subtitle: Text(g.id, style: const TextStyle(color: kFgMuted, fontSize: 12)),
+              trailing: const Icon(Icons.chevron_right, size: 18, color: kFgMuted),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Admin editor for one group's shared settings - name, color, and members - reached from
-/// Settings > Edit group. It is scoped to [groupId] directly, so a host who admins several
+/// Settings > Edit groups. It is scoped to [groupId] directly, so a host who admins several
 /// groups edits any of them from here without switching the feed over first.
 class EditGroupScreen extends ConsumerWidget {
   const EditGroupScreen({super.key, required this.groupId});

@@ -169,8 +169,7 @@ class GlobalSearchDelegate extends SearchDelegate<void> {
       onTap: () {
         final nav = Navigator.of(context);
         close(context, null);
-        nav.push(MaterialPageRoute(
-            builder: (_) => ProfileScreen(userId: u.id, isSelf: false, groupId: _groupId)));
+        nav.push(MaterialPageRoute(builder: (_) => ProfileScreen(userId: u.id, groupId: _groupId)));
       },
     );
   }

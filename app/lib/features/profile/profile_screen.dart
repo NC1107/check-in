@@ -11,15 +11,205 @@ import '../../widgets/user_avatar.dart';
 import '../feed/post_card.dart';
 import '../settings/settings_screen.dart';
 
-/// ProfileScreen shows a person's profile and their timeline. For the signed-in user it
-/// also offers profile editing and (for admins) member/invite management. Identity is
-/// per-group: [groupId] says which connected group this profile lives on (null = the
-/// current group), and log out / delete only affect that group.
+/// The signed-in user's own profile: one identity, every group. Merges their check-ins
+/// from all signed-in groups (newest first, each card wearing its group's ring when more
+/// than one group is connected) and sums the count. Unreachable groups degrade gracefully
+/// - the rest still shows, with a notice.
+class MyProfileScreen extends ConsumerStatefulWidget {
+  const MyProfileScreen({super.key});
+
+  @override
+  ConsumerState<MyProfileScreen> createState() => _MyProfileScreenState();
+}
+
+class _MyProfileScreenState extends ConsumerState<MyProfileScreen> {
+  late Future<(User, List<Post>, List<String>)> _future = _load();
+
+  Future<(User, List<Post>, List<String>)> _load() async {
+    final session = ref.read(multiSessionProvider);
+    final groups = [
+      for (final g in session.signedIn)
+        if (g.user != null) g
+    ];
+    if (groups.isEmpty) throw StateError('No signed-in groups');
+    final pages = await Future.wait([
+      for (final g in groups)
+        ref
+            .read(contentApiProvider(g.id))
+            .userPosts(g.user!.id)
+            .then<List<Post>?>((posts) => [for (final p in posts) p.withGroup(g.id)])
+            .catchError((_) => null),
+    ]);
+    final unreachable = <String>[];
+    final loaded = <List<Post>>[];
+    for (var i = 0; i < groups.length; i++) {
+      final page = pages[i];
+      if (page == null) {
+        unreachable.add(groups[i].displayName);
+      } else {
+        loaded.add(page);
+      }
+    }
+    if (loaded.isEmpty) throw StateError('No group reachable');
+    // One human: the current group's identity fronts the merged timeline.
+    final headerUser = session.current?.user ?? groups.first.user!;
+    return (headerUser, mergeFeeds(loaded), unreachable);
+  }
+
+  void _reload() => setState(() => _future = _load());
+
+  @override
+  Widget build(BuildContext context) {
+    // Adding/removing/re-logging a group changes what "my profile" covers.
+    ref.listen(
+      multiSessionProvider.select((s) => [for (final g in s.signedIn) g.id].join(',')),
+      (_, __) => _reload(),
+    );
+    final session = ref.watch(multiSessionProvider);
+    final multi = session.signedIn.length > 1;
+    final isHost = session.signedIn.any((g) => g.user?.isAdmin ?? false);
+    return Scaffold(
+      backgroundColor: kBgMain,
+      appBar: AppBar(
+        backgroundColor: kBgMain,
+        elevation: 0,
+        title: const Text('My profile',
+            style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
+        actions: [
+          IconButton(
+            tooltip: 'Settings',
+            icon: const Icon(Icons.settings_outlined, color: kFgSecondary),
+            // Reload on return so an edited name/photo shows immediately.
+            onPressed: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const SettingsScreen()))
+                .then((_) => _reload()),
+          ),
+        ],
+      ),
+      body: FutureBuilder<(User, List<Post>, List<String>)>(
+        future: _future,
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const FeedSkeleton(topPadding: 12);
+          }
+          if (snap.hasError) {
+            return Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('Could not load profile.',
+                      textAlign: TextAlign.center, style: TextStyle(color: kFgSecondary)),
+                  const SizedBox(height: 12),
+                  TextButton(onPressed: _reload, child: const Text('Try again')),
+                ],
+              ),
+            );
+          }
+          final (user, posts, unreachable) = snap.data!;
+          return ListView(
+            children: [
+              _header(user, posts.length, isHost),
+              const Divider(color: kBorder, height: 1),
+              if (unreachable.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+                  child: Text(
+                    "Couldn't reach ${unreachable.join(', ')} — showing the rest.",
+                    style: const TextStyle(color: kFgMuted, fontSize: 12.5),
+                  ),
+                ),
+              if (posts.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(40),
+                  child:
+                      Center(child: Text('No check-ins yet.', style: TextStyle(color: kFgMuted))),
+                ),
+              ...posts.map((p) => Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(18, 6, 16, 6),
+                          child: Text(
+                            DateFormat.yMMMMd().format(p.createdAt.toLocal()),
+                            style: TextStyle(
+                                color: context.accent, fontWeight: FontWeight.w600, fontSize: 12),
+                          ),
+                        ),
+                        PostCard(
+                          key: ValueKey('${p.groupId}-${p.id}'),
+                          post: p,
+                          onDeleted: _reload,
+                          groupColor: multi
+                              ? ref.read(multiSessionProvider).byId(p.groupId)?.displayColor
+                              : null,
+                        ),
+                      ],
+                    ),
+                  )),
+              const SizedBox(height: 24),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _header(User user, int count, bool isHost) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+      child: Column(
+        children: [
+          UserAvatar(
+              name: user.name,
+              mediaId: user.profileMediaId,
+              size: 88,
+              colorSeed: user.id,
+              groupId: ref.read(multiSessionProvider).current?.id),
+          const SizedBox(height: 14),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Flexible(
+                child: Text(user.name,
+                    style: const TextStyle(
+                        color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 22)),
+              ),
+              if (isHost) ...[
+                const SizedBox(width: 8),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: context.accentLight,
+                    borderRadius: BorderRadius.circular(9999),
+                  ),
+                  child: Text('HOST',
+                      style: TextStyle(
+                          color: context.accent,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 11,
+                          letterSpacing: 0.5)),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text('$count ${count == 1 ? 'check-in' : 'check-ins'}',
+              style: const TextStyle(color: kFgMuted, fontSize: 13)),
+        ],
+      ),
+    );
+  }
+}
+
+/// ProfileScreen shows another member's profile and their timeline on one group.
+/// Identity is per-group: [groupId] says which connected group this profile lives on
+/// (null = the current group); blocking only affects that group.
 class ProfileScreen extends ConsumerStatefulWidget {
-  const ProfileScreen({super.key, required this.userId, required this.isSelf, this.groupId});
+  const ProfileScreen({super.key, required this.userId, this.groupId});
 
   final int userId;
-  final bool isSelf;
   final String? groupId;
 
   @override
@@ -34,7 +224,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   void initState() {
     super.initState();
     _future = _load();
-    if (!widget.isSelf) _loadBlockStatus();
+    _loadBlockStatus();
   }
 
   Future<(User, List<Post>)> _load() async {
@@ -89,21 +279,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           final groupCount = ref.watch(multiSessionProvider.select((s) => s.groups.length));
           final name =
               ref.watch(contentAccountProvider(widget.groupId).select((a) => a?.displayName));
-          final base = widget.isSelf ? 'My profile' : 'Profile';
-          return Text(groupCount > 1 && name != null ? '$base · $name' : base,
+          return Text(groupCount > 1 && name != null ? 'Profile · $name' : 'Profile',
               style: const TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 18));
         }),
-        actions: [
-          if (widget.isSelf)
-            IconButton(
-              tooltip: 'Settings',
-              icon: const Icon(Icons.settings_outlined, color: kFgSecondary),
-              // Reload on return so an edited name/photo shows immediately.
-              onPressed: () => Navigator.of(context)
-                  .push(MaterialPageRoute(builder: (_) => SettingsScreen(groupId: widget.groupId)))
-                  .then((_) => _reload()),
-            ),
-        ],
       ),
       body: FutureBuilder<(User, List<Post>)>(
         future: _future,
@@ -201,7 +379,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           const SizedBox(height: 4),
           Text('$count ${count == 1 ? 'check-in' : 'check-ins'}',
               style: const TextStyle(color: kFgMuted, fontSize: 13)),
-          if (!widget.isSelf) ...[
+          ...[
             // Block / Unblock for other members' profiles.
             if (_isBlocked != null) ...[
               const SizedBox(height: 18),

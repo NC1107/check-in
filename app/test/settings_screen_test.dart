@@ -34,23 +34,27 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('shows every account action for the host; group settings live in Edit group',
+  testWidgets('host: group settings live in the Edit groups submenu (list → editor)',
       (tester) async {
     await pump(tester, isAdmin: true);
 
     expect(find.text('Edit profile'), findsOneWidget);
-    expect(find.text('Appearance'), findsOneWidget);
+    // Appearance moved into Edit profile; not a top-level settings entry anymore.
+    expect(find.text('Appearance'), findsNothing);
     expect(find.text('Notifications'), findsOneWidget);
-    expect(find.text('Edit group'), findsOneWidget);
-    // Consolidated into Edit group; the local-nickname tile is for non-admins.
+    expect(find.text('Edit groups'), findsOneWidget);
+    // Consolidated into Edit groups; the local-nickname tile is for non-admins.
     expect(find.text('Members'), findsNothing);
     expect(find.text('Group color'), findsNothing);
     expect(find.text('Group name'), findsNothing);
     expect(find.text('Log out'), findsOneWidget);
     expect(find.text('Delete account'), findsOneWidget);
 
-    // Sole admin group: Edit group goes straight to the editor for that group.
-    await tester.tap(find.text('Edit group'));
+    // Edit groups → the list of hosted groups → one group's editor.
+    await tester.tap(find.text('Edit groups'));
+    await tester.pumpAndSettle();
+    expect(find.text('Alpha'), findsOneWidget);
+    await tester.tap(find.text('Alpha'));
     await tester.pumpAndSettle();
     expect(find.text('Group name'), findsOneWidget);
     expect(find.text('Group color'), findsOneWidget);
@@ -60,7 +64,7 @@ void main() {
   testWidgets('hides group management from non-hosts (nickname tile stays)', (tester) async {
     await pump(tester, isAdmin: false);
 
-    expect(find.text('Edit group'), findsNothing);
+    expect(find.text('Edit groups'), findsNothing);
     expect(find.text('Members'), findsNothing);
     expect(find.text('Group name'), findsOneWidget); // local nickname
     expect(find.text('Edit profile'), findsOneWidget);

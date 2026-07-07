@@ -6,7 +6,6 @@ import '../../notifications/push_messaging.dart';
 import '../../state/app_state.dart';
 import '../../theme/tokens.dart';
 import '../profile/edit_profile_sheet.dart';
-import 'appearance_screen.dart';
 import 'edit_group_screen.dart';
 import 'notification_settings_screen.dart';
 
@@ -108,52 +107,6 @@ class SettingsScreen extends ConsumerWidget {
         .renameGroup(account.id, v == account.serverName ? null : v);
   }
 
-  /// Opens the group editor. A host of several groups picks which one first - every
-  /// group they admin is editable from here, no switching required.
-  Future<void> _editGroup(BuildContext context, WidgetRef ref, List<ServerAccount> admin) async {
-    if (admin.length == 1) {
-      Navigator.of(context)
-          .push(MaterialPageRoute(builder: (_) => EditGroupScreen(groupId: admin.first.id)));
-      return;
-    }
-    final picked = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: kBgSurface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 18, 20, 6),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text('Edit which group?',
-                    style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 17)),
-              ),
-            ),
-            for (final g in admin)
-              ListTile(
-                leading: Container(
-                  width: 12,
-                  height: 12,
-                  decoration: BoxDecoration(color: g.displayColor, shape: BoxShape.circle),
-                ),
-                title: Text(g.displayName, style: const TextStyle(color: kFgPrimary, fontSize: 15)),
-                trailing: const Icon(Icons.chevron_right, size: 18, color: kFgMuted),
-                onTap: () => Navigator.of(context).pop(g.id),
-              ),
-            const SizedBox(height: 10),
-          ],
-        ),
-      ),
-    );
-    if (picked == null || !context.mounted) return;
-    Navigator.of(context).push(MaterialPageRoute(builder: (_) => EditGroupScreen(groupId: picked)));
-  }
-
   Future<void> _deleteAccount(BuildContext context, WidgetRef ref) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -222,17 +175,11 @@ class SettingsScreen extends ConsumerWidget {
       ),
       body: ListView(
         children: [
+          // Appearance (the accent color) lives inside Edit profile now.
           _tile(
             icon: Icons.edit_outlined,
             label: 'Edit profile',
             onTap: () => _editProfile(context, ref),
-          ),
-          _tile(
-            icon: Icons.palette_outlined,
-            label: 'Appearance',
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const AppearanceScreen()),
-            ),
           ),
           _tile(
             icon: Icons.notifications_none_rounded,
@@ -241,7 +188,7 @@ class SettingsScreen extends ConsumerWidget {
               MaterialPageRoute(builder: (_) => const NotificationSettingsScreen()),
             ),
           ),
-          // Admins edit the group itself (name/color/members) in one place; everyone
+          // Admins edit their groups (name/color/members) from one submenu; everyone
           // else can still nickname the group locally.
           if (!(user?.isAdmin ?? false))
             _tile(
@@ -252,8 +199,10 @@ class SettingsScreen extends ConsumerWidget {
           if (adminGroups.isNotEmpty)
             _tile(
               icon: Icons.tune,
-              label: 'Edit group',
-              onTap: () => _editGroup(context, ref, adminGroups),
+              label: 'Edit groups',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const EditGroupsScreen()),
+              ),
             ),
           const Divider(color: kBorder, height: 24),
           _tile(
