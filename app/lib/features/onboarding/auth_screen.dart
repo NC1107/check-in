@@ -14,6 +14,7 @@ import '../../api/api_client.dart';
 import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
+import '../../theme/accent_picker.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
 import 'invite_links.dart';
@@ -734,6 +735,12 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           ),
         ),
         const SizedBox(height: 24),
+        const FieldLabel('Accent color'),
+        const Text('Pick a color — it themes the app for you and updates live.',
+            style: TextStyle(color: _fgMuted, fontSize: 12, height: 1.4)),
+        const SizedBox(height: 14),
+        const AccentPicker(swatchSize: 50),
+        const SizedBox(height: 22),
         const FieldLabel('Full name'),
         Row(
           children: [
