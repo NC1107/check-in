@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../notifications/push_messaging.dart';
 import '../../state/app_state.dart';
+import '../../theme/group_color.dart';
 import '../../theme/tokens.dart';
 import '../admin/admin_screen.dart';
 import '../profile/edit_profile_sheet.dart';
@@ -122,6 +123,58 @@ class SettingsScreen extends ConsumerWidget {
     }
   }
 
+  /// Admin-only: set the group's color for everyone from the shared group palette. Color
+  /// is a server-owned identity cue (unlike the per-device nickname), so only hosts see
+  /// this. Picking "Automatic" clears it back to the deterministic color.
+  Future<void> _pickGroupColor(BuildContext context, WidgetRef ref) async {
+    final account = ref.read(contentAccountProvider(groupId));
+    if (account == null) return;
+    final current = account.color ?? '';
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kBgSurface,
+        title: const Text('Group color',
+            style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Shown to everyone so groups are told apart in the combined feed.',
+                style: TextStyle(color: kFgMuted, fontSize: 12.5, height: 1.4)),
+            const SizedBox(height: 18),
+            Wrap(
+              spacing: 14,
+              runSpacing: 14,
+              children: [
+                for (final g in kGroupColors)
+                  _ColorSwatch(
+                    color: g.color,
+                    selected: current == g.id,
+                    onTap: () => Navigator.pop(ctx, g.id),
+                  ),
+                _ColorSwatch(
+                  color: null,
+                  selected: current.isEmpty,
+                  onTap: () => Navigator.pop(ctx, ''),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+    if (picked == null || picked == current || !context.mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await ref.read(contentApiProvider(groupId)).setGroupColor(picked);
+      await ref.read(multiSessionProvider.notifier).applyServerColor(account.id, picked);
+    } catch (_) {
+      messenger
+          .showSnackBar(const SnackBar(content: Text('Could not update the color. Try again.')));
+    }
+  }
+
   Future<void> _deleteAccount(BuildContext context, WidgetRef ref) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -208,6 +261,12 @@ class SettingsScreen extends ConsumerWidget {
           ),
           if (user?.isAdmin ?? false)
             _tile(
+              icon: Icons.palette_outlined,
+              label: 'Group color',
+              onTap: () => _pickGroupColor(context, ref),
+            ),
+          if (user?.isAdmin ?? false)
+            _tile(
               icon: Icons.group_outlined,
               label: 'Members',
               onTap: () => Navigator.of(context).push(
@@ -243,6 +302,41 @@ class SettingsScreen extends ConsumerWidget {
       leading: Icon(icon, size: 22, color: danger ? kLike : kFgSecondary),
       title: Text(label, style: TextStyle(color: color, fontSize: 15)),
       trailing: danger ? null : const Icon(Icons.chevron_right, size: 18, color: kFgMuted),
+    );
+  }
+}
+
+/// One swatch in the admin group-color picker. A null [color] is the "Automatic" option
+/// (clears the admin color back to the deterministic one).
+class _ColorSwatch extends StatelessWidget {
+  const _ColorSwatch({required this.color, required this.selected, required this.onTap});
+
+  final Color? color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: color == null ? 'Automatic color' : 'Group color',
+      child: GestureDetector(
+        onTap: onTap,
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          width: 46,
+          height: 46,
+          decoration: BoxDecoration(
+            color: color ?? kBgMain,
+            shape: BoxShape.circle,
+            border: Border.all(color: selected ? kFgPrimary : kBorder, width: selected ? 3 : 1),
+          ),
+          child: color == null
+              ? const Icon(Icons.format_color_reset_outlined, size: 20, color: kFgMuted)
+              : (selected ? const Icon(Icons.check, size: 22, color: Colors.black) : null),
+        ),
+      ),
     );
   }
 }

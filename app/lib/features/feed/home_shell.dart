@@ -401,25 +401,30 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   Widget _targetChip(ServerAccount g) {
     final on = _targets.contains(g.id);
     final done = _posted.contains(g.id);
+    final selected = on || done;
+    // Cross-post targets are a group-identity surface, so a selected chip wears the group's
+    // own color (matching the feed rail/dot) rather than the personal accent.
+    final gc = g.displayColor;
+    final onGc = gc.computeLuminance() > 0.5 ? Colors.black : Colors.white;
     return GestureDetector(
       onTap: () => _toggleTarget(g.id),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
         decoration: BoxDecoration(
-          color: on || done ? context.accent : Colors.transparent,
-          border: Border.all(color: on || done ? context.accent : _border),
+          color: selected ? gc : Colors.transparent,
+          border: Border.all(color: selected ? gc : _border),
           borderRadius: BorderRadius.circular(9999),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(done ? Icons.check_circle : (on ? Icons.check : Icons.add),
-                size: 14, color: on || done ? context.onAccent : _fgMuted),
+                size: 14, color: selected ? onGc : _fgMuted),
             const SizedBox(width: 6),
             Text(
               g.displayName,
               style: TextStyle(
-                color: on || done ? context.onAccent : _fgSecondary,
+                color: selected ? onGc : _fgSecondary,
                 fontWeight: FontWeight.w600,
                 fontSize: 13,
               ),

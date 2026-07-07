@@ -272,6 +272,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     await ref.read(multiSessionProvider.notifier).addGroup(
           baseUrl: _connectedUrl!,
           serverName: _serverInfo?.name ?? 'Check-In',
+          color: _serverInfo?.color,
           token: auth.token,
           user: auth.user,
         );

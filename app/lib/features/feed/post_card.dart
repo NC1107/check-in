@@ -91,15 +91,17 @@ class _ReportSheet extends StatelessWidget {
 /// origin group (post.groupId), so cards from different groups work side by side in
 /// the combined All view.
 class PostCard extends ConsumerStatefulWidget {
-  const PostCard({super.key, required this.post, this.onDeleted, this.showGroupChip = false});
+  const PostCard({super.key, required this.post, this.onDeleted, this.groupColor});
 
   final Post post;
 
   /// Called after this post is deleted so the host list (feed/profile) can refresh.
   final VoidCallback? onDeleted;
 
-  /// Show which group the post came from (used in the combined All view).
-  final bool showGroupChip;
+  /// The origin group's color, set only in the merged (multi-group) feed. When non-null
+  /// the card shows a colored left rail + a dot so groups are told apart; null in a
+  /// single-group view, where no group marker appears.
+  final Color? groupColor;
 
   @override
   ConsumerState<PostCard> createState() => _PostCardState();
@@ -292,278 +294,286 @@ class _PostCardState extends ConsumerState<PostCard> {
         borderRadius: BorderRadius.circular(14),
       ),
       clipBehavior: Clip.hardEdge,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Header
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
-            child: Row(
+          // Colored left rail identifying the origin group (merged feed only).
+          if (widget.groupColor != null) Container(width: 3, color: widget.groupColor),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                UserAvatar(
-                    name: p.authorName,
-                    size: 38,
-                    mediaId: p.authorPhotoId,
-                    colorSeed: p.authorId,
-                    groupId: p.groupId),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                // Header
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+                  child: Row(
                     children: [
-                      Text(
-                        p.authorName,
-                        style: const TextStyle(
-                          color: _fgPrimary,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
+                      UserAvatar(
+                          name: p.authorName,
+                          size: 38,
+                          mediaId: p.authorPhotoId,
+                          colorSeed: p.authorId,
+                          groupId: p.groupId),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              p.authorName,
+                              style: const TextStyle(
+                                color: _fgPrimary,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                              ),
+                            ),
+                            if (p.people.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 1),
+                                child: Text(
+                                  p.peopleLabel,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: _fgMuted, fontSize: 12),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
-                      if (p.people.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 1),
+                      if (widget.groupColor != null) ...[
+                        Semantics(
+                          label: account != null ? 'Group: ${account.displayName}' : 'Group',
+                          child: Container(
+                            margin: const EdgeInsets.only(right: 8),
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              color: widget.groupColor,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: _bgSurface, width: 1),
+                            ),
+                          ),
+                        ),
+                      ],
+                      Tooltip(
+                        message: fullLocalTime(p.createdAt),
+                        child: Semantics(
+                          label: fullLocalTime(p.createdAt),
+                          excludeSemantics: true,
                           child: Text(
-                            p.peopleLabel,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                            _relativeTime(p.createdAt),
                             style: const TextStyle(color: _fgMuted, fontSize: 12),
                           ),
                         ),
+                      ),
+                      // ⋯ menu: always shown. Save photo on image posts; Report for others;
+                      // Delete only for the author.
+                      SizedBox(
+                        height: 30,
+                        width: 30,
+                        child: PopupMenuButton<String>(
+                          icon: const Icon(Icons.more_horiz, size: 20, color: _fgMuted),
+                          padding: EdgeInsets.zero,
+                          color: _bgSurface,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            side: const BorderSide(color: _border),
+                          ),
+                          onSelected: (v) {
+                            if (v == 'delete') _confirmDelete();
+                            if (v == 'save') _savePhoto(p.mediaId!);
+                            if (v == 'report') _reportPost();
+                          },
+                          itemBuilder: (_) => [
+                            if (p.kind == 'image' && p.mediaId != null)
+                              const PopupMenuItem(
+                                value: 'save',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.download_outlined, size: 19, color: _fgPrimary),
+                                    SizedBox(width: 10),
+                                    Text('Save photo', style: TextStyle(color: _fgPrimary)),
+                                  ],
+                                ),
+                              ),
+                            if (me != null && me.id != p.authorId)
+                              const PopupMenuItem(
+                                value: 'report',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.flag_outlined, size: 19, color: _fgPrimary),
+                                    SizedBox(width: 10),
+                                    Text('Report', style: TextStyle(color: _fgPrimary)),
+                                  ],
+                                ),
+                              ),
+                            if (me != null && me.id == p.authorId)
+                              const PopupMenuItem(
+                                value: 'delete',
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.delete_outline, size: 19, color: _like),
+                                    SizedBox(width: 10),
+                                    Text('Delete', style: TextStyle(color: _like)),
+                                  ],
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
                     ],
                   ),
                 ),
-                if (widget.showGroupChip && account != null) ...[
-                  Container(
-                    margin: const EdgeInsets.only(right: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    constraints: const BoxConstraints(maxWidth: 110),
-                    decoration: BoxDecoration(
-                      color: context.accentLight,
-                      borderRadius: BorderRadius.circular(9999),
-                    ),
-                    child: Text(
-                      account.displayName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          color: context.accent, fontWeight: FontWeight.w600, fontSize: 11),
+                // Location (from the photo), under the header
+                if (p.location != null && p.location!.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.place_outlined, size: 13, color: _fgMuted),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(p.location!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: _fgMuted, fontSize: 12)),
+                        ),
+                      ],
                     ),
                   ),
-                ],
-                Tooltip(
-                  message: fullLocalTime(p.createdAt),
-                  child: Semantics(
-                    label: fullLocalTime(p.createdAt),
-                    excludeSemantics: true,
+                // Caption
+                if (p.body.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
                     child: Text(
-                      _relativeTime(p.createdAt),
-                      style: const TextStyle(color: _fgMuted, fontSize: 12),
+                      p.body,
+                      style: const TextStyle(color: _fgPrimary, fontSize: 15, height: 1.5),
                     ),
+                  )
+                else
+                  const SizedBox(height: 10),
+                // Image(s)
+                if (p.kind == 'image' && p.images.isNotEmpty)
+                  AspectRatio(
+                    aspectRatio: 4 / 3,
+                    child: PostImageCarousel(mediaIds: p.images, groupId: p.groupId),
                   ),
-                ),
-                // ⋯ menu: always shown. Save photo on image posts; Report for others;
-                // Delete only for the author.
-                SizedBox(
-                  height: 30,
-                  width: 30,
-                  child: PopupMenuButton<String>(
-                    icon: const Icon(Icons.more_horiz, size: 20, color: _fgMuted),
-                    padding: EdgeInsets.zero,
-                    color: _bgSurface,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      side: const BorderSide(color: _border),
-                    ),
-                    onSelected: (v) {
-                      if (v == 'delete') _confirmDelete();
-                      if (v == 'save') _savePhoto(p.mediaId!);
-                      if (v == 'report') _reportPost();
-                    },
-                    itemBuilder: (_) => [
-                      if (p.kind == 'image' && p.mediaId != null)
-                        const PopupMenuItem(
-                          value: 'save',
-                          child: Row(
-                            children: [
-                              Icon(Icons.download_outlined, size: 19, color: _fgPrimary),
-                              SizedBox(width: 10),
-                              Text('Save photo', style: TextStyle(color: _fgPrimary)),
-                            ],
-                          ),
+                // Actions row
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+                  child: Row(
+                    children: [
+                      _action(
+                        icon: _liked ? Icons.favorite : Icons.favorite_border,
+                        iconColor: _liked ? _like : _fgSecondary,
+                        label: '$_likes',
+                        onTap: _toggleLike,
+                      ),
+                      _action(
+                        icon: Icons.chat_bubble_outline,
+                        iconColor: _fgSecondary,
+                        label: '$_comments',
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => PostDetailScreen(postId: p.id, groupId: p.groupId)),
                         ),
-                      if (me != null && me.id != p.authorId)
-                        const PopupMenuItem(
-                          value: 'report',
-                          child: Row(
-                            children: [
-                              Icon(Icons.flag_outlined, size: 19, color: _fgPrimary),
-                              SizedBox(width: 10),
-                              Text('Report', style: TextStyle(color: _fgPrimary)),
-                            ],
-                          ),
-                        ),
-                      if (me != null && me.id == p.authorId)
-                        const PopupMenuItem(
-                          value: 'delete',
-                          child: Row(
-                            children: [
-                              Icon(Icons.delete_outline, size: 19, color: _like),
-                              SizedBox(width: 10),
-                              Text('Delete', style: TextStyle(color: _like)),
-                            ],
-                          ),
-                        ),
+                      ),
                     ],
                   ),
                 ),
-              ],
-            ),
-          ),
-          // Location (from the photo), under the header
-          if (p.location != null && p.location!.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 4, 14, 0),
-              child: Row(
-                children: [
-                  const Icon(Icons.place_outlined, size: 13, color: _fgMuted),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(p.location!,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: _fgMuted, fontSize: 12)),
-                  ),
-                ],
-              ),
-            ),
-          // Caption
-          if (p.body.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
-              child: Text(
-                p.body,
-                style: const TextStyle(color: _fgPrimary, fontSize: 15, height: 1.5),
-              ),
-            )
-          else
-            const SizedBox(height: 10),
-          // Image(s)
-          if (p.kind == 'image' && p.images.isNotEmpty)
-            AspectRatio(
-              aspectRatio: 4 / 3,
-              child: PostImageCarousel(mediaIds: p.images, groupId: p.groupId),
-            ),
-          // Actions row
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
-            child: Row(
-              children: [
-                _action(
-                  icon: _liked ? Icons.favorite : Icons.favorite_border,
-                  iconColor: _liked ? _like : _fgSecondary,
-                  label: '$_likes',
-                  onTap: _toggleLike,
-                ),
-                _action(
-                  icon: Icons.chat_bubble_outline,
-                  iconColor: _fgSecondary,
-                  label: '$_comments',
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                        builder: (_) => PostDetailScreen(postId: p.id, groupId: p.groupId)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Recent comments preview (inline, so you don't have to open the post)
-          if (p.commentsPreview.isNotEmpty || _added.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (_comments > p.commentsPreview.length + _added.length)
-                    GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => PostDetailScreen(postId: p.id, groupId: p.groupId),
-                      )),
-                      child: Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: Text('View all $_comments comments',
-                            style: const TextStyle(color: _fgMuted, fontSize: 13)),
-                      ),
-                    ),
-                  ...[...p.commentsPreview, ..._added].map((c) => Padding(
-                        padding: const EdgeInsets.only(bottom: 3),
-                        child: RichText(
-                          text: TextSpan(children: [
-                            TextSpan(
-                                text: '${c.authorName} ',
-                                style: const TextStyle(
-                                    color: _fgPrimary, fontWeight: FontWeight.w600, fontSize: 13)),
-                            TextSpan(
-                                text: c.body,
-                                style: const TextStyle(
-                                    color: _fgSecondary, fontSize: 13, height: 1.3)),
-                          ]),
-                        ),
-                      )),
-                ],
-              ),
-            ),
-          // Quick comment input
-          Container(
-            decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: _border)),
-            ),
-            padding: const EdgeInsets.fromLTRB(14, 9, 14, 11),
-            child: Row(
-              children: [
-                if (me != null)
-                  UserAvatar(
-                      name: me.name,
-                      size: 26,
-                      mediaId: me.profileMediaId,
-                      colorSeed: me.id,
-                      groupId: p.groupId),
-                const SizedBox(width: 9),
-                Expanded(
-                  child: TextField(
-                    controller: _commentCtrl,
-                    onSubmitted: (_) => _addComment(),
-                    style: const TextStyle(color: _fgPrimary, fontSize: 13),
-                    decoration: const InputDecoration(
-                      hintText: 'Add a comment…',
-                      hintStyle: TextStyle(color: _fgMuted),
-                      border: InputBorder.none,
-                      isDense: true,
-                      contentPadding: EdgeInsets.zero,
+                // Recent comments preview (inline, so you don't have to open the post)
+                if (p.commentsPreview.isNotEmpty || _added.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (_comments > p.commentsPreview.length + _added.length)
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                              builder: (_) => PostDetailScreen(postId: p.id, groupId: p.groupId),
+                            )),
+                            child: Padding(
+                              padding: const EdgeInsets.only(bottom: 4),
+                              child: Text('View all $_comments comments',
+                                  style: const TextStyle(color: _fgMuted, fontSize: 13)),
+                            ),
+                          ),
+                        ...[...p.commentsPreview, ..._added].map((c) => Padding(
+                              padding: const EdgeInsets.only(bottom: 3),
+                              child: RichText(
+                                text: TextSpan(children: [
+                                  TextSpan(
+                                      text: '${c.authorName} ',
+                                      style: const TextStyle(
+                                          color: _fgPrimary,
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 13)),
+                                  TextSpan(
+                                      text: c.body,
+                                      style: const TextStyle(
+                                          color: _fgSecondary, fontSize: 13, height: 1.3)),
+                                ]),
+                              ),
+                            )),
+                      ],
                     ),
                   ),
-                ),
-                ValueListenableBuilder<TextEditingValue>(
-                  valueListenable: _commentCtrl,
-                  builder: (_, val, __) {
-                    final canPost = val.text.trim().isNotEmpty;
-                    return TextButton(
-                      onPressed: canPost ? _addComment : null,
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: Text(
-                        'Post',
-                        style: TextStyle(
-                          color: canPost ? context.accent : _fgMuted,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
+                // Quick comment input
+                Container(
+                  decoration: const BoxDecoration(
+                    border: Border(top: BorderSide(color: _border)),
+                  ),
+                  padding: const EdgeInsets.fromLTRB(14, 9, 14, 11),
+                  child: Row(
+                    children: [
+                      if (me != null)
+                        UserAvatar(
+                            name: me.name,
+                            size: 26,
+                            mediaId: me.profileMediaId,
+                            colorSeed: me.id,
+                            groupId: p.groupId),
+                      const SizedBox(width: 9),
+                      Expanded(
+                        child: TextField(
+                          controller: _commentCtrl,
+                          onSubmitted: (_) => _addComment(),
+                          style: const TextStyle(color: _fgPrimary, fontSize: 13),
+                          decoration: const InputDecoration(
+                            hintText: 'Add a comment…',
+                            hintStyle: TextStyle(color: _fgMuted),
+                            border: InputBorder.none,
+                            isDense: true,
+                            contentPadding: EdgeInsets.zero,
+                          ),
                         ),
                       ),
-                    );
-                  },
+                      ValueListenableBuilder<TextEditingValue>(
+                        valueListenable: _commentCtrl,
+                        builder: (_, val, __) {
+                          final canPost = val.text.trim().isNotEmpty;
+                          return TextButton(
+                            onPressed: canPost ? _addComment : null,
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: Text(
+                              'Post',
+                              style: TextStyle(
+                                color: canPost ? context.accent : _fgMuted,
+                                fontWeight: FontWeight.w700,
+                                fontSize: 13,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),

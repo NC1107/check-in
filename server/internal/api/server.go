@@ -124,7 +124,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/api/admin/users/{id}/reset-code", s.handleAdminIssueResetCode)
 			r.Get("/api/admin/reports", s.handleAdminListReports)
 			r.Delete("/api/admin/reports/{id}", s.handleAdminDismissReport)
-			r.Patch("/api/admin/server", s.handleRenameServer)
+			r.Patch("/api/admin/server", s.handleUpdateServer)
 		})
 	})
 

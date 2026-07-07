@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:ui' show Color;
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -9,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api/api_client.dart';
 import '../api/models.dart';
 import '../theme/accent.dart';
+import '../theme/group_color.dart';
 
 /// One connected group: a Check-In server plus this device's account on it. Because
 /// every group is a physically separate server, identity (user id, photo, token) is
@@ -19,6 +21,7 @@ class ServerAccount {
     required this.baseUrl,
     required this.serverName,
     this.nickname,
+    this.color,
     this.token,
     this.user,
   });
@@ -33,6 +36,11 @@ class ServerAccount {
   /// however they like without touching the server (whose own name keeps refreshing
   /// into [serverName] underneath).
   final String? nickname;
+
+  /// The group's admin-set palette color id (shared by every member), refreshed from
+  /// server-info. Empty/null falls back to a deterministic color in [displayColor].
+  final String? color;
+
   final String? token;
 
   /// The signed-in user on this server. Fetched lazily after restore, so it can be
@@ -47,10 +55,16 @@ class ServerAccount {
     return (n == null || n.isEmpty) ? serverName : n;
   }
 
+  /// The group's color in the merged feed: the admin-set palette color, else a
+  /// deterministic color from the group id so groups are still told apart.
+  Color get displayColor => groupColorById(color) ?? groupColorFor(id);
+
   ServerAccount copyWith({
     String? serverName,
     String? nickname,
     bool clearNickname = false,
+    String? color,
+    bool clearColor = false,
     String? token,
     User? user,
     bool clearAuth = false,
@@ -60,6 +74,7 @@ class ServerAccount {
       baseUrl: baseUrl,
       serverName: serverName ?? this.serverName,
       nickname: clearNickname ? null : (nickname ?? this.nickname),
+      color: clearColor ? null : (color ?? this.color),
       token: clearAuth ? null : (token ?? this.token),
       user: clearAuth ? null : (user ?? this.user),
     );
@@ -179,7 +194,7 @@ class MultiSessionController extends StateNotifier<MultiSession> {
         if (legacyToken != null) {
           await _secure.write(key: _tokenKey(id), value: legacyToken);
         }
-        entries = [(id: id, baseUrl: legacyUrl, name: 'Check-In', nickname: null)];
+        entries = [(id: id, baseUrl: legacyUrl, name: 'Check-In', nickname: null, color: null)];
         await prefs.setString(_kGroups, _encodeGroups(entries));
         await prefs.remove(_kLegacyBaseUrl);
         await _secure.delete(key: _kLegacyToken);
@@ -190,7 +205,12 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     for (final e in entries) {
       final token = await _secure.read(key: _tokenKey(e.id));
       accounts.add(ServerAccount(
-          id: e.id, baseUrl: e.baseUrl, serverName: e.name, nickname: e.nickname, token: token));
+          id: e.id,
+          baseUrl: e.baseUrl,
+          serverName: e.name,
+          nickname: e.nickname,
+          color: e.color,
+          token: token));
     }
     final ids = {for (final g in accounts) g.id};
     var hidden = <String>{};
@@ -235,12 +255,20 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     }
     try {
       final info = await client.serverInfo();
-      if (info.name.isNotEmpty && info.name != g.serverName) {
-        _update(g.id, (a) => a.copyWith(serverName: info.name));
+      final nameChanged = info.name.isNotEmpty && info.name != g.serverName;
+      final colorChanged = info.color != (g.color ?? '');
+      if (nameChanged || colorChanged) {
+        _update(
+            g.id,
+            (a) => a.copyWith(
+                  serverName: nameChanged ? info.name : null,
+                  color: info.color,
+                  clearColor: info.color.isEmpty,
+                ));
         await _persistGroups();
       }
     } catch (_) {
-      // Name refresh is cosmetic; ignore failures.
+      // Name/color refresh is cosmetic; ignore failures.
     }
   }
 
@@ -261,7 +289,13 @@ class MultiSessionController extends StateNotifier<MultiSession> {
       _kGroups,
       _encodeGroups([
         for (final g in state.groups)
-          (id: g.id, baseUrl: g.baseUrl, name: g.serverName, nickname: g.nickname)
+          (
+            id: g.id,
+            baseUrl: g.baseUrl,
+            name: g.serverName,
+            nickname: g.nickname,
+            color: g.color,
+          )
       ]),
     );
   }
@@ -278,11 +312,12 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     required String serverName,
     required String token,
     required User user,
+    String? color,
   }) async {
     final id = groupIdFor(baseUrl);
     await _secure.write(key: _tokenKey(id), value: token);
-    final account =
-        ServerAccount(id: id, baseUrl: baseUrl, serverName: serverName, token: token, user: user);
+    final account = ServerAccount(
+        id: id, baseUrl: baseUrl, serverName: serverName, color: color, token: token, user: user);
     final others = [
       for (final g in state.groups)
         if (g.id != id) g
@@ -338,6 +373,13 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     await _persistGroups();
   }
 
+  /// Records a new server-side color after an admin picks one, so it shows immediately
+  /// without waiting for the next hydrate. An empty id clears back to the automatic color.
+  Future<void> applyServerColor(String id, String colorId) async {
+    _update(id, (g) => g.copyWith(color: colorId, clearColor: colorId.isEmpty));
+    await _persistGroups();
+  }
+
   /// Shows every group again (clears the hidden set): the combined All view.
   Future<void> showAllGroups() async {
     if (state.hiddenGroupIds.isEmpty) return;
@@ -373,8 +415,8 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     _update(groupId, (g) => g.copyWith(user: user));
   }
 
-  static List<({String id, String baseUrl, String name, String? nickname})> _decodeGroups(
-      String? raw) {
+  static List<({String id, String baseUrl, String name, String? nickname, String? color})>
+      _decodeGroups(String? raw) {
     if (raw == null || raw.isEmpty) return const [];
     try {
       final list = jsonDecode(raw) as List;
@@ -385,6 +427,7 @@ class MultiSessionController extends StateNotifier<MultiSession> {
             baseUrl: e['baseUrl'] as String,
             name: e['name'] as String? ?? 'Check-In',
             nickname: e['nickname'] as String?,
+            color: e['color'] as String?,
           )
       ];
     } catch (_) {
@@ -393,7 +436,7 @@ class MultiSessionController extends StateNotifier<MultiSession> {
   }
 
   static String _encodeGroups(
-      List<({String id, String baseUrl, String name, String? nickname})> entries) {
+      List<({String id, String baseUrl, String name, String? nickname, String? color})> entries) {
     return jsonEncode([
       for (final e in entries)
         {
@@ -401,6 +444,7 @@ class MultiSessionController extends StateNotifier<MultiSession> {
           'baseUrl': e.baseUrl,
           'name': e.name,
           if (e.nickname != null) 'nickname': e.nickname,
+          if (e.color != null && e.color!.isNotEmpty) 'color': e.color,
         }
     ]);
   }

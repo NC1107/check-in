@@ -358,7 +358,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       _PostItem(:final post) => PostCard(
           key: ValueKey('${post.groupId}-${post.id}'),
           post: post,
-          showGroupChip: allView,
+          // Merged view only: tint the card by its origin group so groups are told apart.
+          groupColor:
+              allView ? ref.read(multiSessionProvider).byId(post.groupId)?.displayColor : null,
         ),
     };
   }
@@ -751,7 +753,7 @@ class _GroupMenu extends ConsumerWidget {
                     if (g.isSignedIn)
                       _menuRow(
                         context,
-                        dot: true,
+                        dotColor: g.displayColor,
                         label: g.displayName,
                         selected: !session.hiddenGroupIds.contains(g.id),
                         onTap: () => notifier.toggleGroup(g.id),
@@ -786,7 +788,7 @@ class _GroupMenu extends ConsumerWidget {
     required String label,
     required VoidCallback onTap,
     IconData? leadingIcon,
-    bool dot = false,
+    Color? dotColor,
     bool selected = false,
     bool muted = false,
     String? trailing,
@@ -799,13 +801,12 @@ class _GroupMenu extends ConsumerWidget {
           children: [
             SizedBox(
               width: 22,
-              child: dot
+              child: dotColor != null
                   ? Center(
                       child: Container(
                         width: 10,
                         height: 10,
-                        decoration:
-                            const BoxDecoration(color: _fgSecondary, shape: BoxShape.circle),
+                        decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
                       ),
                     )
                   : Icon(leadingIcon, size: 20, color: muted ? _fgMuted : _fgSecondary),
