@@ -50,4 +50,28 @@ void main() {
     await pumpCard(tester, groupColor: null);
     expect(find.bySemanticsLabel('Group: Alpha'), findsNothing);
   });
+
+  testWidgets('renders inside a ListView (regression: stretched rail Row blanked every card)',
+      (tester) async {
+    // The feed/profile put cards in a ListView, where item height is unbounded. The old
+    // rail layout (Row + CrossAxisAlignment.stretch) forced an infinite height there and
+    // every card rendered blank in release. Pump in a real list to lock the fix in.
+    final controller =
+        MultiSessionController.seeded(MultiSession(groups: [account], restored: true));
+    await tester.pumpWidget(ProviderScope(
+      overrides: [multiSessionProvider.overrideWith((ref) => controller)],
+      child: MaterialApp(
+        home: Scaffold(
+          body: ListView(children: [
+            PostCard(post: post, groupColor: groupColorById('coral')),
+            PostCard(post: post),
+          ]),
+        ),
+      ),
+    ));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+    expect(find.text('Ada'), findsNWidgets(2));
+    expect(find.text('hello'), findsNWidgets(2));
+  });
 }
