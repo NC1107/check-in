@@ -517,6 +517,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     final pushed = Navigator.of(context).canPop();
     final canGoBack = _step == _Step.profile || (_step == _Step.entry && (_loginMode || pushed));
     final pIndex = _step == _Step.profile ? 2 : 1;
+    // A first host has a further step after profile (invite), so show one more dot once we
+    // know that - otherwise "2 of 2" on the profile step wrongly reads as the finish line.
+    final steps = _isFirstAdmin ? 3 : 2;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 20, 4),
       child: Row(
@@ -529,9 +532,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             ),
             const SizedBox(width: 12),
           ],
-          _ProgressDot(active: pIndex >= 1),
-          const SizedBox(width: 7),
-          _ProgressDot(active: pIndex >= 2),
+          for (var i = 1; i <= steps; i++) ...[
+            if (i > 1) const SizedBox(width: 7),
+            _ProgressDot(active: pIndex >= i),
+          ],
         ],
       ),
     );
