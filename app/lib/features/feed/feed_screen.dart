@@ -4,9 +4,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/models.dart';
 import '../../state/app_state.dart';
+import '../../state/person_directory.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/skeletons.dart';
+import '../../widgets/user_avatar.dart';
 import '../onboarding/auth_screen.dart';
 import 'global_search_delegate.dart';
 import 'post_card.dart';
@@ -120,9 +122,16 @@ class FeedScreen extends ConsumerStatefulWidget {
   ConsumerState<FeedScreen> createState() => _FeedScreenState();
 }
 
-/// People are per-server, so a person in the filter is keyed by (group, user id) - two
-/// servers can both have a user 7.
-String _personKey(String? groupId, int id) => '${groupId ?? ''}~$id';
+/// What the People filter knows about one (merged) person: the stable key, the freshest
+/// display name, a profile photo (media ids are per-server, so the photo carries its
+/// group), and the colors of the groups they belong to.
+typedef _FilterPerson = ({
+  String key,
+  String name,
+  int? mediaId,
+  String? mediaGroupId,
+  List<Color> dots,
+});
 
 class _FeedScreenState extends ConsumerState<FeedScreen> {
   final _scrollCtrl = ScrollController();
@@ -131,10 +140,19 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
 
   // Filter state.
   List<Post> _allPosts = [];
-  final Set<String> _people = {}; // selected person keys (_personKey)
+  final Set<String> _people = {}; // selected person keys (PersonDirectory.keyFor)
   bool _includeTagged = true; // also match posts the selected people are tagged in
   String? _datePreset;
   String? _location; // server-side place filter (mirrors feedLocationProvider)
+
+  // The phone-based cross-group identity join, refreshed from each group's member list
+  // when the filter opens. Empty until then - with no selected people it is never
+  // consulted, and selections are always made after it loads.
+  PersonDirectory _directory = const PersonDirectory.empty();
+
+  // Person key -> a profile photo from the member lists (for people who only appear as
+  // tags, or whose posts carry no photo).
+  Map<String, ({int? mediaId, String groupId})> _photoByKey = const {};
 
   // Pagination: posts loaded past the provider's first page, plus loading flags. Reset
   // whenever a fresh first page arrives (pull-to-refresh, compose, location change).
@@ -255,32 +273,89 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     return posts
         .where((p) =>
             _people.isEmpty ||
-            _people.contains(_personKey(p.groupId, p.authorId)) ||
-            (_includeTagged && p.people.any((t) => _people.contains(_personKey(p.groupId, t.id)))))
+            _people.contains(_directory.keyFor(p.groupId, p.authorId)) ||
+            (_includeTagged &&
+                p.people.any((t) => _people.contains(_directory.keyFor(p.groupId, t.id)))))
         .where((p) => _withinPreset(p.createdAt))
         .toList();
   }
 
   /// People present in the loaded feed — authors plus anyone tagged in a post — for the
-  /// filter sheet, so you can filter by someone who only appears in photos. Keys carry
-  /// the origin group, so the merged view combines every shown group's people.
-  List<({String key, String name})> _authors() {
+  /// filter sheet, so you can filter by someone who only appears in photos. Keys come
+  /// from the directory, so the same human in several groups collapses to one entry
+  /// (freshest name/photo wins - the feed is newest-first); their group memberships
+  /// render as color dots when more than one group is signed in.
+  List<_FilterPerson> _authors() {
+    final session = ref.read(multiSessionProvider);
+    final multi = session.signedIn.length > 1;
+    List<Color> dotsFor(String key) {
+      if (!multi) return const [];
+      return [
+        for (final gid in _directory.groupsFor(key))
+          if (session.byId(gid) != null) session.byId(gid)!.displayColor
+      ];
+    }
+
     final seen = <String>{};
-    final out = <({String key, String name})>[];
+    final out = <_FilterPerson>[];
+    void add(String key, String name, int? mediaId, String? mediaGroupId) {
+      if (!seen.add(key)) return;
+      // Posts may not carry a photo (tags never do); the member lists usually can.
+      final fallback = _photoByKey[key];
+      out.add((
+        key: key,
+        name: name,
+        mediaId: mediaId ?? fallback?.mediaId,
+        mediaGroupId: mediaId != null ? mediaGroupId : fallback?.groupId,
+        dots: dotsFor(key),
+      ));
+    }
+
     for (final p in _allPosts) {
-      final authorKey = _personKey(p.groupId, p.authorId);
-      if (seen.add(authorKey)) out.add((key: authorKey, name: p.authorName));
+      add(_directory.keyFor(p.groupId, p.authorId), p.authorName, p.authorPhotoId, p.groupId);
       for (final person in p.people) {
-        final key = _personKey(p.groupId, person.id);
-        if (seen.add(key)) out.add((key: key, name: person.name));
+        add(_directory.keyFor(p.groupId, person.id), person.name, null, null);
       }
     }
     out.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     return out;
   }
 
+  /// Refreshes the cross-group identity join from each signed-in group's member list.
+  /// Unreachable groups contribute nothing - their people stay per-group.
+  Future<void> _loadDirectory() async {
+    final session = ref.read(multiSessionProvider);
+    final groups = session.signedIn;
+    final lists = await Future.wait([
+      for (final g in groups)
+        ref.read(groupMembersProvider(g.id).future).catchError((_) => <User>[]),
+    ]);
+    final byGroup = <String, List<User>>{};
+    for (var i = 0; i < groups.length; i++) {
+      if (lists[i].isNotEmpty) byGroup[groups[i].id] = lists[i];
+    }
+    final directory = PersonDirectory.fromMemberLists(byGroup);
+    final photos = <String, ({int? mediaId, String groupId})>{};
+    byGroup.forEach((groupId, members) {
+      for (final u in members) {
+        final key = directory.keyFor(groupId, u.id);
+        // First photo wins; a later group only fills a still-missing one.
+        if (photos[key]?.mediaId == null && u.profileMediaId != null) {
+          photos[key] = (mediaId: u.profileMediaId, groupId: groupId);
+        }
+      }
+    });
+    if (!mounted) return;
+    setState(() {
+      _directory = directory;
+      _photoByKey = photos;
+    });
+  }
+
   Future<void> _openFilter() async {
     final session = ref.read(multiSessionProvider);
+    // The identity join first, so the sheet opens with people already merged.
+    await _loadDirectory();
     // Places are per-server: merge every shown group's list, summing counts for the same
     // label. A group that can't be reached simply contributes nothing.
     final counts = <String, int>{};
@@ -700,7 +775,7 @@ class _FilterSheet extends StatefulWidget {
   final VoidCallback onAddGroup;
   final void Function(ServerAccount) onRelogin;
 
-  final List<({String key, String name})> authors;
+  final List<_FilterPerson> authors;
   final Set<String> selectedPeople;
   final bool includeTagged;
   final String? datePreset;
@@ -718,17 +793,6 @@ class _FilterSheetState extends State<_FilterSheet> {
   late String? _date = widget.datePreset;
   late String? _location = widget.selectedLocation;
   String _personQuery = '';
-
-  static const _palette = [
-    Color(0xFF5557E0),
-    Color(0xFF13AF9D),
-    Color(0xFFDD1C85),
-    Color(0xFFE9960A),
-    Color(0xFF8458E9),
-    Color(0xFF22C55E),
-    Color(0xFFEF4444),
-    Color(0xFF0EA5E9),
-  ];
 
   List<ServerAccount> get _signedIn => [
         for (final g in widget.groups)
@@ -1022,9 +1086,8 @@ class _FilterSheetState extends State<_FilterSheet> {
     );
   }
 
-  Widget _personChip(({String key, String name}) a) {
+  Widget _personChip(_FilterPerson a) {
     final on = _people.contains(a.key);
-    final color = _palette[a.key.hashCode.abs() % _palette.length];
     return Semantics(
       button: true,
       selected: on,
@@ -1041,14 +1104,14 @@ class _FilterSheetState extends State<_FilterSheet> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 24,
-                height: 24,
-                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-                alignment: Alignment.center,
-                child: Text(a.name.isNotEmpty ? a.name[0].toUpperCase() : '?',
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w700, fontSize: 11)),
+              // The real profile photo (media ids are per-server: fetched from the group
+              // the photo lives on); falls back to the initial when there is none.
+              UserAvatar(
+                name: a.name,
+                size: 24,
+                mediaId: a.mediaId,
+                colorSeed: a.key.hashCode,
+                groupId: a.mediaGroupId,
               ),
               const SizedBox(width: 7),
               Text(a.name,
@@ -1056,6 +1119,15 @@ class _FilterSheetState extends State<_FilterSheet> {
                       color: on ? context.onAccent : _fgSecondary,
                       fontWeight: FontWeight.w600,
                       fontSize: 13)),
+              // One dot per group this person belongs to (merged identities only).
+              if (a.dots.isNotEmpty) const SizedBox(width: 6),
+              for (final c in a.dots)
+                Container(
+                  width: 7,
+                  height: 7,
+                  margin: const EdgeInsets.only(left: 3),
+                  decoration: BoxDecoration(color: c, shape: BoxShape.circle),
+                ),
             ],
           ),
         ),

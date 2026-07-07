@@ -607,6 +607,13 @@ final locationsProvider =
   return ref.watch(apiForGroupProvider(groupId)).locations();
 });
 
+/// One group's member list (used to join the same person across groups by phone in the
+/// People filter, and for their profile photos there). An empty query returns every
+/// active member, phone included - the same data the tag-people picker already reads.
+final groupMembersProvider = FutureProvider.autoDispose.family<List<User>, String>((ref, groupId) {
+  return ref.watch(apiForGroupProvider(groupId)).searchUsers('');
+});
+
 const _kTermsAccepted = 'terms_accepted';
 
 /// Tracks whether the user has accepted the in-app terms of service. Checked before
