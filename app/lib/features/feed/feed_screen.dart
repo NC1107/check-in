@@ -124,12 +124,14 @@ class FeedScreen extends ConsumerStatefulWidget {
 
 /// What the People filter knows about one (merged) person: the stable key, the freshest
 /// display name, a profile photo (media ids are per-server, so the photo carries its
-/// group), and the colors of the groups they belong to.
+/// group), the ids of the groups they belong to (so the sheet can scope People to the
+/// pending group selection), and those groups' colors.
 typedef _FilterPerson = ({
   String key,
   String name,
   int? mediaId,
   String? mediaGroupId,
+  Set<String> groups,
   List<Color> dots,
 });
 
@@ -307,6 +309,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         name: name,
         mediaId: mediaId ?? fallback?.mediaId,
         mediaGroupId: mediaId != null ? mediaGroupId : fallback?.groupId,
+        groups: _directory.groupsFor(key),
         dots: dotsFor(key),
       ));
     }
@@ -799,16 +802,35 @@ class _FilterSheetState extends State<_FilterSheet> {
           if (g.isSignedIn) g
       ];
 
-  void _apply() => Navigator.of(context).pop((
-        hidden: _hidden,
-        people: _people,
-        includeTagged: _includeTagged,
-        date: _date,
-        location: _location,
-      ));
+  /// People scoped to the pending group selection: only members of at least one
+  /// still-selected group. Unknown memberships (empty set) stay visible - scoping is a
+  /// convenience, never a trap.
+  List<_FilterPerson> get _visiblePeople => [
+        for (final a in widget.authors)
+          if (a.groups.isEmpty || a.groups.any((g) => !_hidden.contains(g))) a
+      ];
+
+  void _apply() {
+    // Drop selected people we KNOW are scoped out by the group selection, so a hidden
+    // group can't keep filtering the feed through an invisible person chip.
+    final byKey = {for (final a in widget.authors) a.key: a};
+    _people.removeWhere((k) {
+      final a = byKey[k];
+      return a != null && a.groups.isNotEmpty && a.groups.every(_hidden.contains);
+    });
+    Navigator.of(context).pop((
+      hidden: _hidden,
+      people: _people,
+      includeTagged: _includeTagged,
+      date: _date,
+      location: _location,
+    ));
+  }
 
   @override
   Widget build(BuildContext context) {
+    // Reacts live to the pending group pills: deselect a group and its people vanish.
+    final people = _visiblePeople;
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 10, 18, 22),
       // Scrolls so the sheet can never overflow a compact screen (the EULA lesson).
@@ -866,7 +888,15 @@ class _FilterSheetState extends State<_FilterSheet> {
                 _groupPill(
                   label: 'All',
                   on: _hidden.isEmpty,
-                  onTap: () => setState(_hidden.clear),
+                  // A real toggle: everything on, or - when already all on - everything
+                  // off (the feed then shows its "no groups shown" state).
+                  onTap: () => setState(() {
+                    if (_hidden.isEmpty) {
+                      _hidden.addAll([for (final g in _signedIn) g.id]);
+                    } else {
+                      _hidden.clear();
+                    }
+                  }),
                 ),
               for (final g in widget.groups)
                 if (g.isSignedIn)
@@ -900,7 +930,7 @@ class _FilterSheetState extends State<_FilterSheet> {
             ],
           ),
           const SizedBox(height: 22),
-          if (widget.authors.isNotEmpty) ...[
+          if (people.isNotEmpty) ...[
             const Text('PEOPLE',
                 style: TextStyle(
                     color: _fgMuted,
@@ -908,7 +938,7 @@ class _FilterSheetState extends State<_FilterSheet> {
                     fontSize: 12,
                     letterSpacing: 0.4)),
             const SizedBox(height: 10),
-            if (widget.authors.length > 5) ...[
+            if (people.length > 5) ...[
               TextField(
                 onChanged: (v) => setState(() => _personQuery = v.trim().toLowerCase()),
                 style: const TextStyle(color: _fgPrimary, fontSize: 14),
@@ -935,7 +965,7 @@ class _FilterSheetState extends State<_FilterSheet> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                for (final a in widget.authors.where(
+                for (final a in people.where(
                     (a) => _personQuery.isEmpty || a.name.toLowerCase().contains(_personQuery)))
                   _personChip(a),
               ],
