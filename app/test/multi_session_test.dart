@@ -229,4 +229,23 @@ void main() {
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getString('groups_json'), contains('Weekend Warriors'));
   });
+
+  test('applyServerColor sets/clears the group color and persists it', () async {
+    SharedPreferences.setMockInitialValues({
+      'groups_json': jsonEncode([
+        {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha'},
+      ]),
+    });
+    final controller = await restoredController();
+    final prefs = await SharedPreferences.getInstance();
+
+    await controller.applyServerColor('a.invalid', 'coral');
+    expect(controller.state.byId('a.invalid')!.color, 'coral');
+    expect(prefs.getString('groups_json'), contains('coral'));
+
+    // Empty clears it back to the automatic color and drops it from storage.
+    await controller.applyServerColor('a.invalid', '');
+    expect(controller.state.byId('a.invalid')!.color, isNull);
+    expect(prefs.getString('groups_json'), isNot(contains('coral')));
+  });
 }

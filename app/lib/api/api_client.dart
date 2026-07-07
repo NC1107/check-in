@@ -328,6 +328,11 @@ class ApiClient {
   /// renameServer changes this group's display name for everyone (admin only).
   Future<void> renameServer(String name) => _dio.patch('/api/admin/server', data: {'name': name});
 
+  /// setGroupColor changes this group's palette color for everyone (admin only). An empty
+  /// id clears it back to the automatic color.
+  Future<void> setGroupColor(String colorId) =>
+      _dio.patch('/api/admin/server', data: {'color': colorId});
+
   // ---- reports ----
 
   Future<void> reportPost(int postId, String reason) =>

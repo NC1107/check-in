@@ -1,10 +1,14 @@
 // Plain data models mirroring the server's JSON responses.
 
 class ServerInfo {
-  ServerInfo({required this.name, required this.initialized, this.publicUrl});
+  ServerInfo({required this.name, required this.initialized, this.color = '', this.publicUrl});
 
   final String name;
   final bool initialized;
+
+  /// The group's admin-set palette color id (empty when none is chosen). Members render
+  /// it so the merged feed tells groups apart.
+  final String color;
 
   /// The server's canonical public base URL, when it advertises one (multi-group
   /// installs). Used to match push payloads back to a connected group.
@@ -13,6 +17,7 @@ class ServerInfo {
   factory ServerInfo.fromJson(Map<String, dynamic> j) => ServerInfo(
         name: j['name'] as String? ?? 'Check-In',
         initialized: j['initialized'] as bool? ?? false,
+        color: j['color'] as String? ?? '',
         publicUrl: j['publicUrl'] as String?,
       );
 }

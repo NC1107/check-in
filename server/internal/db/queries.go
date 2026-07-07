@@ -66,6 +66,21 @@ func (d *DB) SetServerName(ctx context.Context, name string) error {
 	return err
 }
 
+// GetServerColor returns the group's admin-set palette color id, or "" if none is set
+// (clients then fall back to a deterministic color derived from the group id).
+func (d *DB) GetServerColor(ctx context.Context) (string, error) {
+	var color string
+	err := d.Pool.QueryRow(ctx, `SELECT color FROM server_config WHERE id = 1`).Scan(&color)
+	return color, err
+}
+
+// SetServerColor updates the group's palette color id. An empty string clears it back to
+// the client-side automatic color.
+func (d *DB) SetServerColor(ctx context.Context, color string) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE server_config SET color = $1 WHERE id = 1`, color)
+	return err
+}
+
 // SeedServerName copies the configured CHECKIN_SERVER_NAME into the database exactly
 // once, while the stored name is still the schema default. This migrates existing
 // env-configured installs to the DB-backed name without clobbering a name an admin has

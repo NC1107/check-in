@@ -39,6 +39,7 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":        s.serverName(r.Context()),
+		"color":       s.serverColor(r.Context()),
 		"initialized": initialized,
 		"publicUrl":   s.cfg.PublicURL,
 	})
@@ -54,6 +55,15 @@ func (s *Server) serverName(ctx context.Context) string {
 	return name
 }
 
+// serverColor is the group's admin-set palette color id, or "" when none is set.
+func (s *Server) serverColor(ctx context.Context) string {
+	color, err := s.db.GetServerColor(ctx)
+	if err != nil {
+		return ""
+	}
+	return color
+}
+
 // validServerName trims and bounds a proposed group name (1–40 runes), returning the
 // cleaned value and whether it's acceptable.
 func validServerName(raw string) (string, bool) {
@@ -64,25 +74,68 @@ func validServerName(raw string) (string, bool) {
 	return name, true
 }
 
-// handleRenameServer lets an admin rename the group for everyone (stored server-side).
-func (s *Server) handleRenameServer(w http.ResponseWriter, r *http.Request) {
+// groupColorIDs is the fixed palette of admin-selectable group colors. The client renders
+// the same ids (theme/group_color.dart); the two must stay in sync.
+var groupColorIDs = map[string]bool{
+	"coral": true, "gold": true, "lime": true, "cyan": true,
+	"indigo": true, "magenta": true, "orange": true, "steel": true,
+}
+
+// validGroupColor accepts an empty string (clear, back to the automatic color) or a known
+// palette id, returning the cleaned value and whether it's acceptable.
+func validGroupColor(raw string) (string, bool) {
+	c := strings.TrimSpace(raw)
+	if c == "" {
+		return "", true
+	}
+	if groupColorIDs[c] {
+		return c, true
+	}
+	return "", false
+}
+
+// handleUpdateServer lets an admin change the group's name and/or color for everyone
+// (stored server-side). Both fields are optional; whichever is present is validated and
+// applied. Responds with the current name and color.
+func (s *Server) handleUpdateServer(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name string `json:"name"`
+		Name  *string `json:"name"`
+		Color *string `json:"color"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	name, ok := validServerName(req.Name)
-	if !ok {
-		writeErr(w, http.StatusBadRequest, "name must be 1–40 characters")
+	if req.Name == nil && req.Color == nil {
+		writeErr(w, http.StatusBadRequest, "nothing to update")
 		return
 	}
-	if err := s.db.SetServerName(r.Context(), name); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
-		return
+	if req.Name != nil {
+		name, ok := validServerName(*req.Name)
+		if !ok {
+			writeErr(w, http.StatusBadRequest, "name must be 1–40 characters")
+			return
+		}
+		if err := s.db.SetServerName(r.Context(), name); err != nil {
+			writeErr(w, http.StatusInternalServerError, "server error")
+			return
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": name})
+	if req.Color != nil {
+		color, ok := validGroupColor(*req.Color)
+		if !ok {
+			writeErr(w, http.StatusBadRequest, "invalid color")
+			return
+		}
+		if err := s.db.SetServerColor(r.Context(), color); err != nil {
+			writeErr(w, http.StatusInternalServerError, "server error")
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":  s.serverName(r.Context()),
+		"color": s.serverColor(r.Context()),
+	})
 }
 
 type checkPhoneReq struct {

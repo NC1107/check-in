@@ -26,6 +26,30 @@ func TestValidServerName(t *testing.T) {
 	}
 }
 
+func TestValidGroupColor(t *testing.T) {
+	cases := []struct {
+		name   string
+		raw    string
+		want   string
+		wantOK bool
+	}{
+		{"known id", "coral", "coral", true},
+		{"another known id", "indigo", "indigo", true},
+		{"trims whitespace", "  cyan  ", "cyan", true},
+		{"empty clears", "", "", true},
+		{"whitespace clears", "   ", "", true},
+		{"unknown id", "chartreuse", "", false},
+		{"personal accent id is not a group color", "green", "", false},
+	}
+	for _, c := range cases {
+		got, ok := validGroupColor(c.raw)
+		if ok != c.wantOK || (ok && got != c.want) {
+			t.Errorf("%s: validGroupColor(%q) = (%q, %v), want (%q, %v)",
+				c.name, c.raw, got, ok, c.want, c.wantOK)
+		}
+	}
+}
+
 func stringOf(r rune, n int) string {
 	b := make([]rune, n)
 	for i := range b {
