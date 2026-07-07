@@ -220,7 +220,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     final session = ref.read(multiSessionProvider);
     final account = session.soleShown;
     if (account == null) {
-      _allViewHint('Search works within one group — show just one group from the bubble first.');
+      _allViewHint('Search works within one group — pick a single group in Filters first.');
       return;
     }
     showSearch<void>(
@@ -280,15 +280,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 
   Future<void> _openFilter() async {
-    final groups = ref.read(multiSessionProvider).shownGroups;
-    if (groups.isEmpty) {
-      _allViewHint('No groups shown — pick groups from the globe first.');
-      return;
-    }
+    final session = ref.read(multiSessionProvider);
     // Places are per-server: merge every shown group's list, summing counts for the same
     // label. A group that can't be reached simply contributes nothing.
     final counts = <String, int>{};
-    for (final g in groups) {
+    for (final g in session.shownGroups) {
       try {
         final locs = await ref.read(locationsProvider(g.id).future);
         for (final l in locs) {
@@ -300,7 +296,13 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       ..sort((a, b) => b.count.compareTo(a.count));
     if (!mounted) return;
     final result = await showModalBottomSheet<
-        ({Set<String> people, bool includeTagged, String? date, String? location})>(
+        ({
+          Set<String> hidden,
+          Set<String> people,
+          bool includeTagged,
+          String? date,
+          String? location
+        })>(
       context: context,
       isScrollControlled: true,
       backgroundColor: _bgSurface,
@@ -308,6 +310,15 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
       builder: (_) => _FilterSheet(
+        groups: session.groups,
+        hiddenGroupIds: session.hiddenGroupIds,
+        onAddGroup: () => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const AuthScreen()),
+        ),
+        // Session expired there — run the (additive) login flow again.
+        onRelogin: (g) => Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => AuthScreen(initialServer: g.baseUrl)),
+        ),
         authors: _authors(),
         selectedPeople: _people,
         includeTagged: _includeTagged,
@@ -326,7 +337,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       _datePreset = result.date;
       _location = result.location;
     });
-    // Location filters server-side, so update the provider to refetch the feed.
+    // Group visibility and location both refetch the feed via their providers.
+    ref.read(multiSessionProvider.notifier).setHiddenGroups(result.hidden);
     ref.read(feedLocationProvider.notifier).state = _location;
   }
 
@@ -434,7 +446,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                           return _emptyState(
                             icon: Icons.public_off,
                             title: 'No groups shown',
-                            subtitle: 'Tap the globe to choose which groups appear.',
+                            subtitle: 'Choose which groups appear in Filters.',
                           );
                         }
                         final shown = s.shownGroups;
@@ -495,7 +507,6 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                         onSearch: _openSearch,
                         onFilter: _openFilter,
                         filterActive: _hasFilter,
-                        leading: const _GroupBubble(),
                       ),
                       if (_hasFilter) _activeChips(),
                     ],
@@ -586,26 +597,17 @@ class _SearchBar extends StatelessWidget {
     required this.onSearch,
     required this.onFilter,
     required this.filterActive,
-    this.leading,
   });
 
   final VoidCallback onSearch;
   final VoidCallback onFilter;
   final bool filterActive;
 
-  /// Optional control to the left of the search pill (the group bubble).
-  final Widget? leading;
-
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
-      child: Row(
-        children: [
-          if (leading != null) leading!,
-          Expanded(child: _pill(context)),
-        ],
-      ),
+      child: _pill(context),
     );
   }
 
@@ -674,216 +676,16 @@ class _SearchBar extends StatelessWidget {
   }
 }
 
-/// A round trigger to the left of the search bar that opens the group menu. Hidden when
-/// only one group is connected (nothing to toggle). A globe when every group is shown;
-/// accent-filled with the shown count when a subset is.
-class _GroupBubble extends ConsumerStatefulWidget {
-  const _GroupBubble();
-
-  @override
-  ConsumerState<_GroupBubble> createState() => _GroupBubbleState();
-}
-
-class _GroupBubbleState extends ConsumerState<_GroupBubble> {
-  void _openSheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: _bgSurface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
-      ),
-      builder: (_) => _GroupSheet(
-        onAddGroup: () {
-          Navigator.of(context).pop();
-          Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AuthScreen()));
-        },
-        onRelogin: (g) {
-          Navigator.of(context).pop();
-          Navigator.of(context)
-              .push(MaterialPageRoute(builder: (_) => AuthScreen(initialServer: g.baseUrl)));
-        },
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final session = ref.watch(multiSessionProvider);
-    if (session.signedIn.length <= 1) return const SizedBox.shrink();
-    final showingAll = session.showingAll;
-    final nothingShown = session.nothingShown;
-    // Neutral when everything is shown; accent when a subset is (a filter is in effect);
-    // "off" globe when every group is toggled off.
-    final highlighted = !showingAll && !nothingShown;
-    return Padding(
-      padding: const EdgeInsets.only(right: 10),
-      child: Semantics(
-        button: true,
-        label: 'Groups',
-        child: GestureDetector(
-          onTap: _openSheet,
-          behavior: HitTestBehavior.opaque,
-          child: Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: highlighted ? context.accent : _bgSurface,
-              shape: BoxShape.circle,
-              border: Border.all(color: highlighted ? context.accent : _border),
-              boxShadow: [
-                BoxShadow(
-                    color: Colors.black.withAlpha(76), blurRadius: 26, offset: const Offset(0, 10)),
-              ],
-            ),
-            child: Icon(
-              nothingShown ? Icons.public_off : Icons.public,
-              size: 22,
-              color: highlighted ? context.onAccent : _fgSecondary,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Bottom sheet (matching the filter sheet) with the group visibility toggles: an
-/// "All groups" row plus one live-toggle row per group (signed-out groups offer re-login),
-/// and an "Add group" action. Toggles mutate [multiSessionProvider] and this widget
-/// rebuilds in place, so the sheet stays open while the feed updates behind it.
-class _GroupSheet extends ConsumerWidget {
-  const _GroupSheet({required this.onAddGroup, required this.onRelogin});
-
-  final VoidCallback onAddGroup;
-  final void Function(ServerAccount group) onRelogin;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final session = ref.watch(multiSessionProvider);
-    final notifier = ref.read(multiSessionProvider.notifier);
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 10, 18, 22),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Center(
-              child: Container(
-                width: 38,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 14),
-                decoration:
-                    BoxDecoration(color: _border, borderRadius: BorderRadius.circular(9999)),
-              ),
-            ),
-            const Padding(
-              padding: EdgeInsets.only(bottom: 6),
-              child: Text('Groups',
-                  style: TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
-            ),
-            _menuRow(
-              context,
-              leadingIcon: Icons.public,
-              label: 'All groups',
-              selected: session.showingAll,
-              onTap: () {
-                HapticFeedback.selectionClick();
-                notifier.showAllGroups();
-              },
-            ),
-            const Divider(height: 1, color: _border),
-            for (final g in session.groups)
-              if (g.isSignedIn)
-                _menuRow(
-                  context,
-                  dotColor: g.displayColor,
-                  label: g.displayName,
-                  selected: !session.hiddenGroupIds.contains(g.id),
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    notifier.toggleGroup(g.id);
-                  },
-                )
-              else
-                _menuRow(
-                  context,
-                  leadingIcon: Icons.lock_outline,
-                  label: g.displayName,
-                  trailing: 'Log in',
-                  muted: true,
-                  onTap: () => onRelogin(g),
-                ),
-            const Divider(height: 1, color: _border),
-            _menuRow(
-              context,
-              leadingIcon: Icons.add,
-              label: 'Add group',
-              onTap: onAddGroup,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _menuRow(
-    BuildContext context, {
-    required String label,
-    required VoidCallback onTap,
-    IconData? leadingIcon,
-    Color? dotColor,
-    bool selected = false,
-    bool muted = false,
-    String? trailing,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 22,
-              child: dotColor != null
-                  ? Center(
-                      child: Container(
-                        width: 10,
-                        height: 10,
-                        decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
-                      ),
-                    )
-                  : Icon(leadingIcon, size: 20, color: muted ? _fgMuted : _fgSecondary),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                label,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: muted ? _fgMuted : _fgPrimary,
-                  fontSize: 14.5,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            if (trailing != null)
-              Text(trailing,
-                  style:
-                      TextStyle(color: context.accent, fontSize: 13, fontWeight: FontWeight.w600))
-            else if (selected)
-              Icon(Icons.check, size: 19, color: context.accent),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Bottom sheet to filter the feed by person and date. Mutates the passed-in [selectedPeople]
-/// set and reports the chosen date preset back via the result/closure.
+/// Bottom sheet to filter the feed: which groups show, plus person/date/place. Group
+/// visibility applies with the rest on "Show results"; every group may be toggled off
+/// (the feed then shows a "no groups shown" state). No group chip appears under the
+/// search bar for any selection.
 class _FilterSheet extends StatefulWidget {
   const _FilterSheet({
+    required this.groups,
+    required this.hiddenGroupIds,
+    required this.onAddGroup,
+    required this.onRelogin,
     required this.authors,
     required this.selectedPeople,
     required this.includeTagged,
@@ -891,6 +693,12 @@ class _FilterSheet extends StatefulWidget {
     required this.locations,
     required this.selectedLocation,
   });
+
+  /// Every connected group (signed-out ones offer re-login).
+  final List<ServerAccount> groups;
+  final Set<String> hiddenGroupIds;
+  final VoidCallback onAddGroup;
+  final void Function(ServerAccount) onRelogin;
 
   final List<({String key, String name})> authors;
   final Set<String> selectedPeople;
@@ -904,6 +712,7 @@ class _FilterSheet extends StatefulWidget {
 }
 
 class _FilterSheetState extends State<_FilterSheet> {
+  late final Set<String> _hidden = {...widget.hiddenGroupIds};
   late final Set<String> _people = {...widget.selectedPeople};
   late bool _includeTagged = widget.includeTagged;
   late String? _date = widget.datePreset;
@@ -921,7 +730,13 @@ class _FilterSheetState extends State<_FilterSheet> {
     Color(0xFF0EA5E9),
   ];
 
+  List<ServerAccount> get _signedIn => [
+        for (final g in widget.groups)
+          if (g.isSignedIn) g
+      ];
+
   void _apply() => Navigator.of(context).pop((
+        hidden: _hidden,
         people: _people,
         includeTagged: _includeTagged,
         date: _date,
@@ -975,6 +790,52 @@ class _FilterSheetState extends State<_FilterSheet> {
             ],
           ),
           const SizedBox(height: 18),
+          const Text('GROUPS',
+              style: TextStyle(
+                  color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 12, letterSpacing: 0.4)),
+          const SizedBox(height: 11),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              if (_signedIn.length > 1)
+                _groupPill(
+                  label: 'All',
+                  on: _hidden.isEmpty,
+                  onTap: () => setState(_hidden.clear),
+                ),
+              for (final g in widget.groups)
+                if (g.isSignedIn)
+                  _groupPill(
+                    label: g.displayName,
+                    dot: g.displayColor,
+                    on: !_hidden.contains(g.id),
+                    onTap: () => setState(() {
+                      if (!_hidden.remove(g.id)) _hidden.add(g.id);
+                    }),
+                  )
+                else
+                  _groupPill(
+                    label: g.displayName,
+                    locked: true,
+                    on: false,
+                    onTap: () {
+                      // Session expired there — run the (additive) login flow again.
+                      Navigator.of(context).pop();
+                      widget.onRelogin(g);
+                    },
+                  ),
+              _groupPill(
+                label: '+ Add group',
+                on: false,
+                onTap: () {
+                  Navigator.of(context).pop();
+                  widget.onAddGroup();
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 22),
           if (widget.authors.isNotEmpty) ...[
             const Text('PEOPLE',
                 style: TextStyle(
@@ -1073,6 +934,8 @@ class _FilterSheetState extends State<_FilterSheet> {
               Expanded(
                 child: OutlinedButton(
                   onPressed: () => setState(() {
+                    // Clearing everything includes the group scope: back to All.
+                    _hidden.clear();
                     _people.clear();
                     _date = null;
                     _location = null;
@@ -1104,6 +967,58 @@ class _FilterSheetState extends State<_FilterSheet> {
           ),
         ],
       )),
+    );
+  }
+
+  /// One group toggle pill: a checkmark when shown, the group's identity dot, a lock for
+  /// signed-out groups (tap = re-login).
+  Widget _groupPill({
+    required String label,
+    required bool on,
+    required VoidCallback onTap,
+    Color? dot,
+    bool locked = false,
+  }) {
+    return Semantics(
+      button: true,
+      selected: on,
+      label: label,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+          decoration: BoxDecoration(
+            color: on ? context.accent : Colors.transparent,
+            border: Border.all(color: on ? context.accent : _border),
+            borderRadius: BorderRadius.circular(9999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (locked) ...[
+                const Icon(Icons.lock_outline, size: 13, color: _fgMuted),
+                const SizedBox(width: 5),
+              ] else if (dot != null) ...[
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+                ),
+                const SizedBox(width: 6),
+              ],
+              if (on) ...[
+                Icon(Icons.check, size: 14, color: context.onAccent),
+                const SizedBox(width: 4),
+              ],
+              Text(label,
+                  style: TextStyle(
+                      color: on ? context.onAccent : _fgSecondary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

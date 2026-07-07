@@ -10,6 +10,7 @@ import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
 import '../../widgets/auth_image.dart';
+import '../settings/appearance_screen.dart';
 
 /// Bottom sheet to edit the signed-in user's display name and photo on one group
 /// ([groupId], null = the current group — identity is per-server). Pops the updated
@@ -180,6 +181,24 @@ class _EditProfileSheetState extends ConsumerState<EditProfileSheet> {
           const SizedBox(height: 6),
           const Text('This is the name shown on your check-ins and comments.',
               style: TextStyle(color: kFgMuted, fontSize: 12, height: 1.4)),
+          const SizedBox(height: 14),
+          // The app-wide accent color is part of "how my app looks", so it lives with
+          // the profile rather than as a top-level settings entry.
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const AppearanceScreen()),
+            ),
+            leading: Container(
+              width: 26,
+              height: 26,
+              decoration: BoxDecoration(color: context.accent, shape: BoxShape.circle),
+            ),
+            title: const Text('Appearance', style: TextStyle(color: kFgPrimary, fontSize: 15)),
+            subtitle: const Text('Accent color for buttons and highlights',
+                style: TextStyle(color: kFgMuted, fontSize: 12)),
+            trailing: const Icon(Icons.chevron_right, size: 18, color: kFgMuted),
+          ),
           if (_error != null) ...[
             const SizedBox(height: 10),
             Text(_error!, style: const TextStyle(color: kLike, fontSize: 13)),

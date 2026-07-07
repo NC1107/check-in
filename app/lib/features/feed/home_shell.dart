@@ -117,7 +117,8 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     // so it isn't a bottom-nav destination.
     final pages = <Widget>[
       const FeedScreen(),
-      if (me != null) ProfileScreen(userId: me.id, isSelf: true, groupId: account?.id),
+      // One profile for the one human: merged across every signed-in group.
+      if (me != null) const MyProfileScreen(),
     ];
 
     return Scaffold(
