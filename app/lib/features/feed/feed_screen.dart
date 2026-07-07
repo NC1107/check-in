@@ -930,7 +930,10 @@ class _FilterSheetState extends State<_FilterSheet> {
             ],
           ),
           const SizedBox(height: 22),
-          if (people.isNotEmpty) ...[
+          // The section stays put as long as anyone exists at all - scoping it empty
+          // swaps in a hint instead of collapsing the whole block, and the size change
+          // animates so the sheet never jumps.
+          if (widget.authors.isNotEmpty) ...[
             const Text('PEOPLE',
                 style: TextStyle(
                     color: _fgMuted,
@@ -938,59 +941,79 @@ class _FilterSheetState extends State<_FilterSheet> {
                     fontSize: 12,
                     letterSpacing: 0.4)),
             const SizedBox(height: 10),
-            if (people.length > 5) ...[
-              TextField(
-                onChanged: (v) => setState(() => _personQuery = v.trim().toLowerCase()),
-                style: const TextStyle(color: _fgPrimary, fontSize: 14),
-                cursorColor: context.accent,
-                decoration: InputDecoration(
-                  isDense: true,
-                  prefixIcon: const Icon(Icons.search, size: 18, color: _fgMuted),
-                  hintText: 'Search people',
-                  hintStyle: const TextStyle(color: _fgMuted, fontSize: 14),
-                  filled: true,
-                  fillColor: _bgMain,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                  enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: const BorderSide(color: _border)),
-                  focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(10),
-                      borderSide: BorderSide(color: context.accent)),
-                ),
-              ),
-              const SizedBox(height: 11),
-            ],
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final a in people.where(
-                    (a) => _personQuery.isEmpty || a.name.toLowerCase().contains(_personQuery)))
-                  _personChip(a),
-              ],
+            AnimatedSize(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOutCubic,
+              alignment: Alignment.topLeft,
+              child: people.isEmpty
+                  ? const SizedBox(
+                      width: double.infinity,
+                      child: Padding(
+                        padding: EdgeInsets.only(top: 2, bottom: 4),
+                        child: Text('Select a group to filter by people.',
+                            style: TextStyle(color: _fgMuted, fontSize: 13)),
+                      ),
+                    )
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (people.length > 5) ...[
+                          TextField(
+                            onChanged: (v) => setState(() => _personQuery = v.trim().toLowerCase()),
+                            style: const TextStyle(color: _fgPrimary, fontSize: 14),
+                            cursorColor: context.accent,
+                            decoration: InputDecoration(
+                              isDense: true,
+                              prefixIcon: const Icon(Icons.search, size: 18, color: _fgMuted),
+                              hintText: 'Search people',
+                              hintStyle: const TextStyle(color: _fgMuted, fontSize: 14),
+                              filled: true,
+                              fillColor: _bgMain,
+                              contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                              enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: const BorderSide(color: _border)),
+                              focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                  borderSide: BorderSide(color: context.accent)),
+                            ),
+                          ),
+                          const SizedBox(height: 11),
+                        ],
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            for (final a in people.where((a) =>
+                                _personQuery.isEmpty ||
+                                a.name.toLowerCase().contains(_personQuery)))
+                              _personChip(a),
+                          ],
+                        ),
+                        if (_people.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 6),
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTap: () => setState(() => _includeTagged = !_includeTagged),
+                              child: Row(
+                                children: [
+                                  const Expanded(
+                                    child: Text("Also show posts they're tagged in",
+                                        style: TextStyle(color: _fgSecondary, fontSize: 13.5)),
+                                  ),
+                                  Switch.adaptive(
+                                    value: _includeTagged,
+                                    onChanged: (v) => setState(() => _includeTagged = v),
+                                    activeThumbColor: context.accent,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
             ),
-            if (_people.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => setState(() => _includeTagged = !_includeTagged),
-                  child: Row(
-                    children: [
-                      const Expanded(
-                        child: Text("Also show posts they're tagged in",
-                            style: TextStyle(color: _fgSecondary, fontSize: 13.5)),
-                      ),
-                      Switch.adaptive(
-                        value: _includeTagged,
-                        onChanged: (v) => setState(() => _includeTagged = v),
-                        activeThumbColor: context.accent,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
             const SizedBox(height: 22),
           ],
           const Text('DATE',

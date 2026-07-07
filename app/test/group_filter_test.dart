@@ -250,6 +250,18 @@ void main() {
     // Nick is still a member of Beta, so he stays.
     expect(find.descendant(of: sheet, matching: find.text('Nick')), findsOneWidget);
 
+    // Deselecting the last group keeps the section (with a hint) instead of collapsing
+    // the sheet - no layout jump.
+    await tester.tap(find.descendant(of: sheet, matching: find.text('Beta')));
+    await tester.pump();
+    expect(find.text('PEOPLE'), findsOneWidget);
+    expect(find.text('Select a group to filter by people.'), findsOneWidget);
+    expect(find.descendant(of: sheet, matching: find.text('Nick')), findsNothing);
+    // Bring Alpha back for the apply step below.
+    await tester.tap(find.descendant(of: sheet, matching: find.text('Beta')));
+    await tester.pump();
+    expect(find.text('Select a group to filter by people.'), findsNothing);
+
     // Applying prunes the now-invisible Ada selection: only the group scope filters.
     await tester.tap(find.text('Show results'));
     await tester.pumpAndSettle();
