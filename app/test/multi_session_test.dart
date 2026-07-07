@@ -127,7 +127,7 @@ void main() {
     expect(controller.state.hiddenGroupIds, isEmpty);
   });
 
-  test('toggleGroup hides/shows a group and persists; the last shown group is protected', () async {
+  test('toggleGroup hides/shows a group and persists; hiding every group is allowed', () async {
     SharedPreferences.setMockInitialValues({
       'groups_json': jsonEncode([
         {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha'},
@@ -144,14 +144,15 @@ void main() {
     expect(controller.state.shownGroups.map((g) => g.id), ['a.invalid']);
     expect(prefs.getString('hidden_group_ids'), jsonEncode(['b.invalid']));
 
-    // Hiding the last shown group is refused (an empty feed helps no one).
+    // The last shown group can be hidden too - the feed shows an explicit empty state.
     await controller.toggleGroup('a.invalid');
-    expect(controller.state.hiddenGroupIds, {'b.invalid'});
+    expect(controller.state.hiddenGroupIds, {'a.invalid', 'b.invalid'});
+    expect(controller.state.shownGroups, isEmpty);
+    expect(controller.state.nothingShown, isTrue);
+    // Screens that need "a group" (profile/settings) still get one.
+    expect(controller.state.current?.id, 'a.invalid');
 
-    // Re-showing, then All resets.
-    await controller.toggleGroup('b.invalid');
-    expect(controller.state.hiddenGroupIds, isEmpty);
-    await controller.toggleGroup('a.invalid');
+    // All resets.
     await controller.showAllGroups();
     expect(controller.state.hiddenGroupIds, isEmpty);
     expect(prefs.getString('hidden_group_ids'), jsonEncode(<String>[]));

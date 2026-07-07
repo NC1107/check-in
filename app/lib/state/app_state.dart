@@ -115,15 +115,16 @@ class MultiSession {
     return null;
   }
 
-  /// Signed-in groups currently visible in the feed: all minus the hidden ones. Never
-  /// empty while any group is signed in (the last shown group can't be hidden).
-  List<ServerAccount> get shownGroups {
-    final shown = [
-      for (final g in signedIn)
-        if (!hiddenGroupIds.contains(g.id)) g
-    ];
-    return shown.isNotEmpty ? shown : signedIn;
-  }
+  /// Signed-in groups currently visible in the feed: all minus the hidden ones. May be
+  /// empty - the user can toggle every group off; the feed then shows a "no groups shown"
+  /// state instead of fighting the selection.
+  List<ServerAccount> get shownGroups => [
+        for (final g in signedIn)
+          if (!hiddenGroupIds.contains(g.id)) g
+      ];
+
+  /// Every group is toggled off (only meaningful when signed in somewhere).
+  bool get nothingShown => signedIn.isNotEmpty && shownGroups.isEmpty;
 
   /// The single group in focus when exactly one is shown; null when zero or many.
   ServerAccount? get soleShown => shownGroups.length == 1 ? shownGroups.first : null;
@@ -387,17 +388,11 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     await _persistHidden();
   }
 
-  /// Toggles a group's visibility in the feed. Hiding is refused when it would hide the
-  /// last shown group (an empty feed) - callers surface that as a no-op.
+  /// Toggles a group's visibility in the feed. Hiding every group is allowed - the feed
+  /// shows an explicit "no groups shown" state rather than blocking the toggle.
   Future<void> toggleGroup(String id) async {
     final hidden = {...state.hiddenGroupIds};
-    if (hidden.contains(id)) {
-      hidden.remove(id);
-    } else {
-      final anotherStaysShown = state.signedIn.any((g) => g.id != id && !hidden.contains(g.id));
-      if (!anotherStaysShown) return;
-      hidden.add(id);
-    }
+    if (!hidden.remove(id)) hidden.add(id);
     state = MultiSession(groups: state.groups, hiddenGroupIds: hidden, restored: state.restored);
     await _persistHidden();
   }
@@ -565,19 +560,20 @@ List<Post> mergeFeeds(Iterable<List<Post>> pages) {
 final feedProvider = FutureProvider.autoDispose<FeedResult>((ref) async {
   final session = ref.watch(multiSessionProvider);
   final groups = session.shownGroups;
+  final location = ref.watch(feedLocationProvider);
   if (groups.isEmpty) return const FeedResult(posts: []);
   if (groups.length == 1) {
     final acct = groups.first;
-    final location = ref.watch(feedLocationProvider);
     final posts = await ref.watch(apiForGroupProvider(acct.id)).feed(location: location);
     return FeedResult(posts: [for (final p in posts) p.withGroup(acct.id)]);
   }
 
+  // The place filter applies per group; groups without that place just contribute nothing.
   final pages = await Future.wait([
     for (final g in groups)
       ref
           .watch(apiForGroupProvider(g.id))
-          .feed()
+          .feed(location: location)
           .then<List<Post>?>((posts) => [for (final p in posts) p.withGroup(g.id)])
           .catchError((_) => null),
   ]);
@@ -594,9 +590,11 @@ final feedProvider = FutureProvider.autoDispose<FeedResult>((ref) async {
   return FeedResult(posts: mergeFeeds(loaded), unreachable: unreachable);
 });
 
-/// Distinct place labels across all check-ins (most-used first), for the location filter.
-final locationsProvider = FutureProvider.autoDispose<List<({String location, int count})>>((ref) {
-  return ref.watch(apiProvider).locations();
+/// Distinct place labels for one group's check-ins (most-used first). The place filter
+/// merges these across every shown group.
+final locationsProvider =
+    FutureProvider.autoDispose.family<List<({String location, int count})>, String>((ref, groupId) {
+  return ref.watch(apiForGroupProvider(groupId)).locations();
 });
 
 const _kTermsAccepted = 'terms_accepted';

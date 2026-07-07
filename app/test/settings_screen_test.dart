@@ -34,21 +34,35 @@ void main() {
     await tester.pumpAndSettle();
   }
 
-  testWidgets('shows every account action for the host', (tester) async {
+  testWidgets('shows every account action for the host; group settings live in Edit group',
+      (tester) async {
     await pump(tester, isAdmin: true);
 
     expect(find.text('Edit profile'), findsOneWidget);
     expect(find.text('Appearance'), findsOneWidget);
     expect(find.text('Notifications'), findsOneWidget);
-    expect(find.text('Members'), findsOneWidget);
+    expect(find.text('Edit group'), findsOneWidget);
+    // Consolidated into Edit group; the local-nickname tile is for non-admins.
+    expect(find.text('Members'), findsNothing);
+    expect(find.text('Group color'), findsNothing);
+    expect(find.text('Group name'), findsNothing);
     expect(find.text('Log out'), findsOneWidget);
     expect(find.text('Delete account'), findsOneWidget);
+
+    // Sole admin group: Edit group goes straight to the editor for that group.
+    await tester.tap(find.text('Edit group'));
+    await tester.pumpAndSettle();
+    expect(find.text('Group name'), findsOneWidget);
+    expect(find.text('Group color'), findsOneWidget);
+    expect(find.text('Members'), findsOneWidget);
   });
 
-  testWidgets('hides member management from non-hosts', (tester) async {
+  testWidgets('hides group management from non-hosts (nickname tile stays)', (tester) async {
     await pump(tester, isAdmin: false);
 
+    expect(find.text('Edit group'), findsNothing);
     expect(find.text('Members'), findsNothing);
+    expect(find.text('Group name'), findsOneWidget); // local nickname
     expect(find.text('Edit profile'), findsOneWidget);
     expect(find.text('Delete account'), findsOneWidget);
   });
