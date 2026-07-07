@@ -75,7 +75,7 @@ final List<AccentPalette> kAccentPresets = [
 AccentPalette accentById(String? id) =>
     kAccentPresets.firstWhere((p) => p.id == id, orElse: () => kAccentPresets.first);
 
-/// `context.accent` and friends — resolve the live accent from the theme.
+/// `context.accent` and friends - resolve the live accent from the theme.
 extension AccentContext on BuildContext {
   AccentPalette get accentPalette =>
       Theme.of(this).extension<AccentPalette>() ?? kAccentPresets.first;

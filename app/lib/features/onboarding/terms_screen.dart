@@ -7,7 +7,7 @@ import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
 
 /// Shown once before the auth screen. The user must accept the terms before they
-/// can sign up or log in (Apple Guideline 1.2 — EULA required for UGC apps).
+/// can sign up or log in (Apple Guideline 1.2 - EULA required for UGC apps).
 class TermsScreen extends ConsumerWidget {
   const TermsScreen({super.key});
 
@@ -52,8 +52,8 @@ class TermsScreen extends ConsumerWidget {
                       _Section(
                         icon: Icons.flag_outlined,
                         title: 'Report what should not be here',
-                        body: 'Use the report button on any post to flag content that '
-                            'violates these rules. The server admin reviews all reports '
+                        body: 'Use the report button on any check-in to flag content that '
+                            'violates these rules. The host reviews all reports '
                             'and acts within 24 hours.',
                       ),
                       SizedBox(height: 20),
@@ -61,15 +61,15 @@ class TermsScreen extends ConsumerWidget {
                         icon: Icons.person_off_outlined,
                         title: 'Block abusive members',
                         body: 'You can block any member from their profile. '
-                            'Blocked members’ posts stop appearing in your feed. '
-                            'The server admin is notified and will review the situation.',
+                            "Blocked members' posts stop appearing in your feed. "
+                            'The host is notified and will review the situation.',
                       ),
                       SizedBox(height: 20),
                       _Section(
                         icon: Icons.admin_panel_settings_outlined,
                         title: 'Zero tolerance',
                         body: 'This network has zero tolerance for abuse. '
-                            'The server admin can remove any post or member at any time. '
+                            'The host can remove any check-in or member at any time. '
                             'Anyone found to have posted objectionable content will be removed.',
                       ),
                     ],

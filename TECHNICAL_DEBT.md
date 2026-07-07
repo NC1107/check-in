@@ -9,7 +9,41 @@ per-IP auth rate limiting with idle eviction, server-side image re-encode that s
 EXIF/GPS, and a sensible secure-headers/CSP baseline. The items below are the gaps found.
 
 ## Summary
-**Fixed in 2026-06-25 pass: 6 · Resolved since: 3 · Remaining (documented): 6** — Critical: 0 · High: 0 · Medium: 2 · Low: 4
+**Fixed in 2026-06-25 pass: 6 · Resolved since: 3 · Remaining (documented): 6** - Critical: 0 · High: 0 · Medium: 2 · Low: 4
+
+---
+
+## Fixed 2026-07-07 (pre-Apple-review copy + consistency audit)
+
+Inline multi-domain review (Apple readiness, Go backend, Flutter correctness, copy/UX)
+ahead of a fresh App Review submission. Backend + client state logic verified clean:
+routes gated correctly (`handleUpdateServer` under `requireAdmin`), account deletion is
+transactional and complete with every `REFERENCES users(id)` set `ON DELETE CASCADE` (no
+FK-violation risk on the Apple-critical 5.1.1(v) path), block filtering threaded through
+feed/search/comments/detail, phone-merge (`PersonDirectory`) and feed merge race-safe.
+Terms screen scrolls (Guideline 4), report/block/delete all reachable. Fixes applied:
+
+- **[copy] Em-dashes in user-facing strings** - 12 user-visible strings used "—" against the
+  house style ("-"): `feed_screen.dart`, `home_shell.dart`, `profile_screen.dart`,
+  `contacts_picker_screen.dart`, `auth_screen.dart`, `admin_screen.dart`,
+  `notification_settings_screen.dart`, `birthday_notifier.dart`. Plus two server validation
+  errors surfaced in-app used en-dashes (`"1–40"/"1–100"`, `auth_handlers.go`). All normalized;
+  55 comment em/en-dashes across 19 Dart files also normalized to keep the rule blanket.
+- **[copy/consistency] Role term "admin" vs "host"** - the app uses "host" everywhere (badge,
+  reset-password, onboarding) but moderation + terms copy said "the admin"/"the server admin".
+  Repointed to "the host" in `post_card.dart` (report sheet + snackbar) and `terms_screen.dart`
+  (3 sections), so the person a user is told will act on reports matches the role they've seen.
+- **[copy/consistency] "server" leaking into social copy** - `NSContactsUsageDescription` said
+  "invite to your server" → "your group"; terms said "the server admin" (above).
+- **[apple] Misleading permission string** - `NSUserNotificationUsageDescription` promised
+  "notifications for new messages" though the app has no messaging → "new check-ins and activity"
+  (a reviewer reads this; it must match shipped features).
+- **[copy] Smart quotes** - 3 strings used curly `'`/`'` while the rest use straight `'`
+  (`admin_screen.dart`, `terms_screen.dart`, `auth_screen.dart`); normalized.
+
+`flutter analyze` clean, `flutter test` green (74). Client changes ship via the release build;
+the two Go string edits deploy via CI + watchtower. Open product-voice calls (onboarding
+"server"-noun in the connect/setup flow; "post" vs "check-in" in moderation UI) tracked below.
 
 ---
 

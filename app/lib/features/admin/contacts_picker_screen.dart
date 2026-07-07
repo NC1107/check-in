@@ -75,7 +75,7 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
     }
   }
 
-  /// Triggered by the user tapping "Allow access to contacts" — this is the only place
+  /// Triggered by the user tapping "Allow access to contacts" - this is the only place
   /// the system permission dialog is requested.
   Future<void> _requestThenLoad() async {
     setState(() => _phase = _Phase.loading);
@@ -95,7 +95,7 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
       _loadContacts();
     } else if (mounted) {
       setState(() {
-        // Once permanently denied/restricted, request() won't prompt again — the user
+        // Once permanently denied/restricted, request() won't prompt again - the user
         // has to enable it from system Settings.
         _permanentlyBlocked =
             status == PermissionStatus.permanentlyDenied || status == PermissionStatus.restricted;
@@ -216,7 +216,7 @@ class _ContactsPickerScreenState extends State<ContactsPickerScreen> {
           const SizedBox(height: 10),
           const Text(
             'Check-In is invite-only. Grant access to your contacts so you can pick who '
-            'can join — their phone number becomes their invite. Nothing is uploaded until '
+            'can join - their phone number becomes their invite. Nothing is uploaded until '
             'you choose who to add, and you can change it anytime.',
             textAlign: TextAlign.center,
             style: TextStyle(color: _fgSecondary, fontSize: 14, height: 1.5),

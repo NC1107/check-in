@@ -89,15 +89,15 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   @override
   void initState() {
     super.initState();
-    // Pre-fill from the invite link / switcher entry, or — at the root, when signed out
-    // everywhere — the last server used, so logging back in doesn't mean retyping it.
+    // Pre-fill from the invite link / switcher entry, or - at the root, when signed out
+    // everywhere - the last server used, so logging back in doesn't mean retyping it.
     final pendingInvite = ref.read(pendingInviteServerProvider);
     final saved = widget.initialServer ??
         pendingInvite ??
         (Navigator.of(context).canPop() ? null : ref.read(multiSessionProvider).current?.baseUrl);
     if (saved != null && saved.isNotEmpty) _server.text = saved;
     if (pendingInvite != null) {
-      // Consumed — don't re-prefill the next auth screen with a stale invite.
+      // Consumed - don't re-prefill the next auth screen with a stale invite.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         ref.read(pendingInviteServerProvider.notifier).state = null;
       });
@@ -172,9 +172,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   'Already have one? Ask whoever set it up for the server address, and have them add your number.'),
               const SizedBox(height: 12),
               _introPoint(Icons.rocket_launch_outlined,
-                  'Nobody has one yet? You can host your own in a few minutes — the guide on GitHub walks you through it.'),
+                  'Nobody has one yet? You can host your own in a few minutes - the guide on GitHub walks you through it.'),
               const SizedBox(height: 22),
-              PrimaryButton(label: 'How to set up a server', enabled: true, onTap: _openSetupGuide),
+              PrimaryButton(label: 'How to start a group', enabled: true, onTap: _openSetupGuide),
               const SizedBox(height: 6),
               Center(
                 child: TextButton(
@@ -265,8 +265,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   ApiClient get _client => ApiClient(baseUrl: _connectedUrl ?? '');
 
   /// Terminal step for every path (login, signup, password reset): append the group to
-  /// the connected list, make it active, and — when this screen was pushed from the
-  /// switcher — pop back to the shell. The root instance is swapped out automatically
+  /// the connected list, make it active, and - when this screen was pushed from the
+  /// switcher - pop back to the shell. The root instance is swapped out automatically
   /// once a session exists.
   Future<void> _finish(AuthResult auth) async {
     await ref.read(multiSessionProvider.notifier).addGroup(
@@ -353,7 +353,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     });
     try {
       final api = _client;
-      // Sign up first — this is unauthenticated and returns the token. We can't upload the
+      // Sign up first - this is unauthenticated and returns the token. We can't upload the
       // photo beforehand because media upload requires auth (chicken-and-egg).
       var res = await api.signup(
         phone: _fullPhone,
@@ -409,7 +409,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     } catch (_) {
       if (!mounted) return;
       setState(
-          () => _error = "Couldn't add those right now — you can invite from the Admin tab later.");
+          () => _error = "Couldn't add those right now - you can invite from the Admin tab later.");
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -512,8 +512,8 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   Widget _header() {
     // The back arrow appears where there's somewhere to go back to: the profile step
-    // (→ entry), the login sub-state (→ neutral entry), or — for the pushed add-group
-    // flow — the neutral entry itself (→ back to the app).
+    // (→ entry), the login sub-state (→ neutral entry), or - for the pushed add-group
+    // flow - the neutral entry itself (→ back to the app).
     final pushed = Navigator.of(context).canPop();
     final canGoBack = _step == _Step.profile || (_step == _Step.entry && (_loginMode || pushed));
     final pIndex = _step == _Step.profile ? 2 : 1;
@@ -592,7 +592,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                 minimumSize: Size.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
-              child: Text("Don't have a server? Set one up",
+              child: Text("Not in a group yet? Start one",
                   style:
                       TextStyle(color: context.accent, fontSize: 13, fontWeight: FontWeight.w600)),
             ),
@@ -677,7 +677,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    "This group has no host yet — you'll become its host and admin.",
+                    "This group has no host yet - you'll become its host.",
                     style: TextStyle(color: context.accent, fontSize: 13, height: 1.4),
                   ),
                 ),
@@ -741,7 +741,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         ),
         const SizedBox(height: 24),
         const FieldLabel('Accent color'),
-        const Text('Pick a color — it themes the app for you and updates live.',
+        const Text('Pick a color - it themes the app for you and updates live.',
             style: TextStyle(color: _fgMuted, fontSize: 12, height: 1.4)),
         const SizedBox(height: 14),
         const AccentPicker(swatchSize: 50),
@@ -770,7 +770,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         const FieldLabel('Display name'),
         AppTextField(
           controller: _displayName,
-          hint: 'Optional — defaults to your full name',
+          hint: 'Optional - defaults to your full name',
         ),
         const SizedBox(height: 6),
         const Text("This is what your circle sees. Leave blank to use your full name.",
@@ -865,7 +865,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             style: TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 22)),
         const SizedBox(height: 8),
         const Text(
-          'Check-In is invite-only, and you’re the host. Add the people who can join — their '
+          "Check-In is invite-only, and you're the host. Add the people who can join - their "
           'phone number becomes their invite. You can always do this later from the Admin tab.',
           style: TextStyle(color: _fgSecondary, fontSize: 14, height: 1.5),
         ),
@@ -893,7 +893,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   Widget _doneStep() {
     final sub = _isFirstAdmin
-        ? 'Your server is live and ready. Invite your circle from the Admin tab, then start checking in.'
+        ? 'Your group is live and ready. Invite your circle from the Admin tab, then start checking in.'
         : 'Welcome to the circle. Time to check in.';
     return Padding(
       padding: const EdgeInsets.fromLTRB(32, 0, 32, 40),

@@ -114,7 +114,7 @@ class _MyProfileScreenState extends ConsumerState<MyProfileScreen> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
                   child: Text(
-                    "Couldn't reach ${unreachable.join(', ')} — showing the rest.",
+                    "Couldn't reach ${unreachable.join(', ')} - showing the rest.",
                     style: const TextStyle(color: kFgMuted, fontSize: 12.5),
                   ),
                 ),
@@ -254,7 +254,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         await api.blockUser(widget.userId);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('User blocked. Their posts will no longer appear in your feed.')));
+              content: Text('User blocked. Their check-ins will no longer appear in your feed.')));
         }
       }
       if (mounted) setState(() => _isBlocked = !currently);

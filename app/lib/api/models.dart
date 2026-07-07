@@ -90,7 +90,7 @@ class Post {
   /// Members tagged as appearing in the post (id for filtering, name for display).
   final List<({int id, String name})> people;
 
-  /// Which connected group (server) this post came from. Never sent by the server —
+  /// Which connected group (server) this post came from. Never sent by the server -
   /// the client stamps it when fetching, so likes/comments/images on this post can be
   /// routed back to the right server in the multi-group views.
   final String? groupId;

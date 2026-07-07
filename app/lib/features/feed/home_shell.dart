@@ -51,8 +51,8 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   }
 
   /// (Re-)registers this device with EVERY signed-in group: push token on each server
-  /// and birthday reminders across all of them. Idempotent — the server upserts device
-  /// tokens — so it's safe to re-run whenever the set of groups changes.
+  /// and birthday reminders across all of them. Idempotent - the server upserts device
+  /// tokens - so it's safe to re-run whenever the set of groups changes.
   void _registerServices() {
     final session = ref.read(multiSessionProvider);
     if (session.signedIn.isEmpty) return;
@@ -65,7 +65,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
   /// A push payload carries the origin server's public URL (see the Go side's
   /// pushData); match it to a connected group, make that group active, and open the
-  /// post there — post ids are only unique per server.
+  /// post there - post ids are only unique per server.
   void _onPushTap(Map<String, dynamic> data) {
     final postId = int.tryParse('${data['postId']}');
     if (postId == null) return;
@@ -246,7 +246,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   final Set<String> _targets = {};
   final Set<String> _posted = {};
   // A picked photo is compressed once and the JPEG bytes reused for every target group
-  // (each group still gets its own upload — media is per-server).
+  // (each group still gets its own upload - media is per-server).
   final Map<String, List<int>> _compressedCache = {};
 
   @override
@@ -268,7 +268,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     HapticFeedback.selectionClick();
     setState(() {
       if (!_targets.remove(groupId)) _targets.add(groupId);
-      // People tags are per-server user ids — they only make sense for a single target
+      // People tags are per-server user ids - they only make sense for a single target
       // group, so drop them as soon as the selection isn't exactly one group.
       if (_targets.length != 1) _tagged.clear();
       _error = null;
@@ -396,7 +396,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     );
   }
 
-  /// Opens the member picker, seeding it with the current selection. Excludes the author —
+  /// Opens the member picker, seeding it with the current selection. Excludes the author -
   /// the post is implicitly theirs. Members (and their ids) belong to the single target
   /// group, so tagging is only available when exactly one group is selected.
   Future<void> _pickPeople() async {
@@ -537,7 +537,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
       _busy = false;
       _error = _posted.isEmpty
           ? (failMsg ?? "Couldn't share to $failedNames. Check your connection and retry.")
-          : "Posted to $postedNames. Couldn't reach $failedNames — tap Retry to try again.";
+          : "Posted to $postedNames. Couldn't reach $failedNames - tap Retry to try again.";
     });
   }
 
@@ -560,7 +560,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
       }
       if (bytes != null) return api.uploadImageBytes(bytes);
     } catch (_) {
-      // Unsupported source/platform — fall through and let the server try the original.
+      // Unsupported source/platform - fall through and let the server try the original.
     }
     return api.uploadImage(x.path);
   }
@@ -675,7 +675,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
               ),
             ),
           const SizedBox(height: 14),
-          // Image previews — a removable thumbnail strip.
+          // Image previews - a removable thumbnail strip.
           if (_images.isNotEmpty)
             SizedBox(
               height: 100,
@@ -745,7 +745,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
               ],
             ),
           ),
-          // Tag people — who's in this post (drives the feed's "include posts they're in").
+          // Tag people - who's in this post (drives the feed's "include posts they're in").
           // Member ids are per-server, so tagging needs exactly one target group.
           if (session.signedIn.length > 1 && _targets.length != 1)
             const Padding(

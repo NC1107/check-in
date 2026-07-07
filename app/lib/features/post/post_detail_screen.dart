@@ -118,7 +118,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       final added =
           await ref.read(contentApiProvider(widget.groupId)).addComment(widget.postId, text);
       _comment.clear();
-      // Append in place — no re-fetch, so the post and existing comments don't flash.
+      // Append in place - no re-fetch, so the post and existing comments don't flash.
       if (mounted) setState(() => _comments = [..._comments, added]);
     } catch (_) {
       if (mounted) {
@@ -138,7 +138,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       appBar: AppBar(
         backgroundColor: kBgMain,
         elevation: 0,
-        toolbarHeight: 44, // iOS-native nav height — trims the bulky default 56
+        toolbarHeight: 44, // iOS-native nav height - trims the bulky default 56
         titleSpacing: 0,
         title: const Text('Post',
             style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 17)),
@@ -158,7 +158,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Text('Could not load post.',
+                          const Text('Could not load check-in.',
                               textAlign: TextAlign.center, style: TextStyle(color: kFgSecondary)),
                           const SizedBox(height: 12),
                           TextButton(

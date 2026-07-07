@@ -67,6 +67,6 @@ void main() {
 
   test('reminder title carries the group name only when one is given', () {
     expect(birthdayReminderTitle('Alice', null), "It's Alice's birthday! 🎂");
-    expect(birthdayReminderTitle('Alice', 'Alpha Crew'), "It's Alice's birthday! 🎂 — Alpha Crew");
+    expect(birthdayReminderTitle('Alice', 'Alpha Crew'), "It's Alice's birthday! 🎂 - Alpha Crew");
   });
 }

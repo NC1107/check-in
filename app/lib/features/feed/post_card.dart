@@ -62,7 +62,7 @@ class _ReportSheet extends StatelessWidget {
           padding: EdgeInsets.fromLTRB(20, 18, 20, 6),
           child: Align(
             alignment: Alignment.centerLeft,
-            child: Text('Report this post',
+            child: Text('Report this check-in',
                 style: TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 17)),
           ),
         ),
@@ -70,7 +70,7 @@ class _ReportSheet extends StatelessWidget {
           padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
           child: Align(
             alignment: Alignment.centerLeft,
-            child: Text('The admin will review your report within 24 hours.',
+            child: Text('The host will review your report within 24 hours.',
                 style: TextStyle(color: _fgMuted, fontSize: 13)),
           ),
         ),
@@ -161,7 +161,7 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
     if (reason == null || !mounted) return;
     try {
       await ref.read(contentApiProvider(widget.post.groupId)).reportPost(widget.post.id, reason);
-      if (mounted) _snack('Report sent. The admin will review it.');
+      if (mounted) _snack('Report sent. The host will review it.');
     } catch (_) {
       if (mounted) _snack('Could not send report. Try again.');
     }
@@ -173,7 +173,7 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
       builder: (ctx) => AlertDialog(
         backgroundColor: _bgSurface,
         title: const Text('Delete this check-in?', style: TextStyle(color: _fgPrimary)),
-        content: const Text('This permanently removes the post for everyone.',
+        content: const Text('This permanently removes the check-in for everyone.',
             style: TextStyle(color: _fgSecondary)),
         actions: [
           TextButton(
@@ -197,7 +197,7 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Could not delete the post')));
+            .showSnackBar(const SnackBar(content: Text('Could not delete the check-in')));
       }
     }
   }
@@ -419,7 +419,7 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                   width: 44,
                   child: PopupMenuButton<String>(
                     icon: const Icon(Icons.more_horiz, size: 20, color: _fgMuted),
-                    tooltip: 'Post options',
+                    tooltip: 'Check-in options',
                     padding: EdgeInsets.zero,
                     color: _bgSurface,
                     shape: RoundedRectangleBorder(

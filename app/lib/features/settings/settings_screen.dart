@@ -12,7 +12,7 @@ import 'notification_settings_screen.dart';
 /// SettingsScreen gathers the account actions behind the profile's gear icon: edit
 /// profile, appearance, notifications, member management (hosts), log out, and delete
 /// account. Everything account-shaped is scoped to one group ([groupId], null = the
-/// current group) — identity is per-server.
+/// current group) - identity is per-server.
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key, this.groupId});
 

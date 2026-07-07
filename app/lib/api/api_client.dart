@@ -302,7 +302,7 @@ class ApiClient {
     return r.data as Map<String, dynamic>;
   }
 
-  /// adminListAllowed returns the invite list (allowlist) — every number that may sign
+  /// adminListAllowed returns the invite list (allowlist) - every number that may sign
   /// up, plus whether it has already joined.
   Future<List<Invite>> adminListAllowed() async {
     final r = await _dio.get('/api/admin/allowed');
