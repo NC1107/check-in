@@ -6,6 +6,7 @@ import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/skeletons.dart';
 import '../../widgets/user_avatar.dart';
 import '../feed/post_card.dart';
 import '../settings/settings_screen.dart';
@@ -108,7 +109,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         future: _future,
         builder: (context, snap) {
           if (snap.connectionState == ConnectionState.waiting) {
-            return Center(child: CircularProgressIndicator(color: context.accent));
+            return const FeedSkeleton(topPadding: 12);
           }
           if (snap.hasError) {
             return Center(

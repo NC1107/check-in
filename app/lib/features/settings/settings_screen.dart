@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../notifications/push_messaging.dart';
@@ -201,6 +202,7 @@ class SettingsScreen extends ConsumerWidget {
       ),
     );
     if (confirmed != true || !context.mounted) return;
+    HapticFeedback.mediumImpact();
     final nav = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
     try {

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geocoding/geocoding.dart';
@@ -195,7 +196,12 @@ class _NavItem extends StatelessWidget {
         selected: selected,
         label: label,
         child: InkResponse(
-          onTap: onTap,
+          onTap: onTap == null
+              ? null
+              : () {
+                  HapticFeedback.selectionClick();
+                  onTap!();
+                },
           radius: 42,
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -263,6 +269,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
 
   void _toggleTarget(String groupId) {
     if (_posted.contains(groupId)) return; // already posted there (retry state)
+    HapticFeedback.selectionClick();
     setState(() {
       if (!_targets.remove(groupId)) _targets.add(groupId);
       // People tags are per-server user ids — they only make sense for a single target
@@ -521,6 +528,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     }
     if (!mounted) return;
     if (failed.isEmpty) {
+      HapticFeedback.lightImpact();
       Navigator.of(context).pop(true);
       return;
     }
