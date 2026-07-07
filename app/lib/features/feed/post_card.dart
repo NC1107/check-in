@@ -1,4 +1,7 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
 import 'package:intl/intl.dart';
@@ -107,7 +110,7 @@ class PostCard extends ConsumerStatefulWidget {
   ConsumerState<PostCard> createState() => _PostCardState();
 }
 
-class _PostCardState extends ConsumerState<PostCard> {
+class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMixin {
   late bool _liked = widget.post.likedByViewer;
   late int _likes = widget.post.likeCount;
   late int _comments = widget.post.commentCount;
@@ -116,6 +119,13 @@ class _PostCardState extends ConsumerState<PostCard> {
   // Comments added inline on this card since it was built, shown immediately so the
   // typed text doesn't appear to vanish (the post's own preview is immutable).
   final List<CommentPreview> _added = [];
+
+  // A quick pop on the heart when a like lands, and a bigger burst over the photo on a
+  // double-tap-to-like.
+  late final AnimationController _likePop =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 260));
+  late final AnimationController _burst =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 520));
 
   // If this State gets re-bound to a different post (e.g. the list shifts when a new
   // post is prepended), resync the like/comment state so counts don't bleed between
@@ -134,6 +144,8 @@ class _PostCardState extends ConsumerState<PostCard> {
   @override
   void dispose() {
     _commentCtrl.dispose();
+    _likePop.dispose();
+    _burst.dispose();
     super.dispose();
   }
 
@@ -177,6 +189,7 @@ class _PostCardState extends ConsumerState<PostCard> {
       ),
     );
     if (ok != true) return;
+    HapticFeedback.mediumImpact();
     try {
       await ref.read(contentApiProvider(widget.post.groupId)).deletePost(widget.post.id);
       ref.invalidate(feedProvider); // drop it from the feed immediately
@@ -206,11 +219,13 @@ class _PostCardState extends ConsumerState<PostCard> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 
   Future<void> _toggleLike() async {
+    HapticFeedback.lightImpact();
     final api = ref.read(contentApiProvider(widget.post.groupId));
     setState(() {
       _liked = !_liked;
       _likes += _liked ? 1 : -1;
     });
+    if (_liked) _likePop.forward(from: 0);
     try {
       _liked ? await api.like(widget.post.id) : await api.unlike(widget.post.id);
     } catch (_) {
@@ -219,6 +234,16 @@ class _PostCardState extends ConsumerState<PostCard> {
         _likes += _liked ? 1 : -1;
       });
     }
+  }
+
+  /// Double-tapping the photo likes it (never unlikes) and plays the heart burst.
+  void _doubleTapLike() {
+    if (!_liked) {
+      _toggleLike();
+    } else {
+      HapticFeedback.lightImpact();
+    }
+    _burst.forward(from: 0);
   }
 
   Future<void> _addComment() async {
@@ -255,7 +280,19 @@ class _PostCardState extends ConsumerState<PostCard> {
     required String label,
     required String semantic,
     required VoidCallback onTap,
+    Listenable? bump,
   }) {
+    Widget iconWidget = Icon(icon, size: 22, color: iconColor);
+    if (bump != null) {
+      iconWidget = AnimatedBuilder(
+        animation: bump,
+        builder: (_, child) {
+          final t = (bump as Animation<double>).value;
+          return Transform.scale(scale: 1 + 0.35 * math.sin(math.pi * t), child: child);
+        },
+        child: iconWidget,
+      );
+    }
     return Semantics(
       button: true,
       label: semantic,
@@ -274,7 +311,7 @@ class _PostCardState extends ConsumerState<PostCard> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(icon, size: 22, color: iconColor),
+                iconWidget,
                 const SizedBox(width: 6),
                 Text(label,
                     style: const TextStyle(
@@ -462,9 +499,18 @@ class _PostCardState extends ConsumerState<PostCard> {
                   const SizedBox(height: 10),
                 // Image(s)
                 if (p.kind == 'image' && p.images.isNotEmpty)
-                  AspectRatio(
-                    aspectRatio: 4 / 3,
-                    child: PostImageCarousel(mediaIds: p.images, groupId: p.groupId),
+                  GestureDetector(
+                    onDoubleTap: _doubleTapLike,
+                    child: AspectRatio(
+                      aspectRatio: 4 / 3,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          PostImageCarousel(mediaIds: p.images, groupId: p.groupId),
+                          Center(child: _HeartBurst(_burst)),
+                        ],
+                      ),
+                    ),
                   ),
                 // Actions row
                 Padding(
@@ -476,6 +522,7 @@ class _PostCardState extends ConsumerState<PostCard> {
                         iconColor: _liked ? _like : _fgSecondary,
                         label: '$_likes',
                         semantic: _liked ? 'Unlike' : 'Like',
+                        bump: _likePop,
                         onTap: _toggleLike,
                       ),
                       _action(
@@ -589,6 +636,39 @@ class _PostCardState extends ConsumerState<PostCard> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The big white heart that pops over a photo on double-tap-to-like: scales up with an
+/// overshoot, holds, then fades. Invisible at rest (controller value 0).
+class _HeartBurst extends StatelessWidget {
+  const _HeartBurst(this.controller);
+
+  final Animation<double> controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (_, __) {
+        final t = controller.value;
+        if (t == 0) return const SizedBox.shrink();
+        final scale = 0.5 + 0.9 * Curves.easeOutBack.transform(t.clamp(0.0, 1.0));
+        final opacity = t < 0.55 ? 1.0 : (1 - (t - 0.55) / 0.45).clamp(0.0, 1.0);
+        return Opacity(
+          opacity: opacity,
+          child: Transform.scale(
+            scale: scale,
+            child: Icon(
+              Icons.favorite,
+              color: Colors.white.withValues(alpha: 0.92),
+              size: 92,
+              shadows: const [Shadow(color: Colors.black54, blurRadius: 18)],
+            ),
+          ),
+        );
+      },
     );
   }
 }

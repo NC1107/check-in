@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/skeletons.dart';
 import '../onboarding/auth_screen.dart';
 import 'global_search_delegate.dart';
 import 'post_card.dart';
@@ -172,6 +174,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 
   Future<void> _refresh() async {
+    HapticFeedback.lightImpact();
     ref.invalidate(feedProvider);
     await ref.read(feedProvider.future);
   }
@@ -299,6 +302,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       ),
     );
     if (result == null || !mounted) return;
+    HapticFeedback.selectionClick();
     setState(() {
       _people
         ..clear()
@@ -389,7 +393,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
               color: context.accent,
               backgroundColor: _bgSurface,
               child: ref.watch(feedProvider).when(
-                    loading: () => Center(child: CircularProgressIndicator(color: context.accent)),
+                    loading: () => const FeedSkeleton(),
                     error: (e, _) => ListView(children: [
                       const SizedBox(height: 140),
                       Center(
@@ -767,7 +771,10 @@ class _GroupMenu extends ConsumerWidget {
                     leadingIcon: Icons.public,
                     label: 'All groups',
                     selected: session.showingAll,
-                    onTap: () => notifier.showAllGroups(),
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      notifier.showAllGroups();
+                    },
                   ),
                   const Divider(height: 1, color: _border),
                   for (final g in session.groups)
@@ -777,7 +784,10 @@ class _GroupMenu extends ConsumerWidget {
                         dotColor: g.displayColor,
                         label: g.displayName,
                         selected: !session.hiddenGroupIds.contains(g.id),
-                        onTap: () => notifier.toggleGroup(g.id),
+                        onTap: () {
+                          HapticFeedback.selectionClick();
+                          notifier.toggleGroup(g.id);
+                        },
                       )
                     else
                       _menuRow(
