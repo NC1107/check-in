@@ -73,8 +73,7 @@ void main() {
     expect(secureStore['token_one.invalid'], 'legacy-tok');
   });
 
-  test('restores a multi-group list with per-group tokens; nothing hidden by default',
-      () async {
+  test('restores a multi-group list with per-group tokens; nothing hidden by default', () async {
     SharedPreferences.setMockInitialValues({
       'groups_json': jsonEncode([
         {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha'},
@@ -94,8 +93,7 @@ void main() {
     expect(s.signedIn.map((g) => g.id), ['a.invalid']);
   });
 
-  test('migrates active_group_id: a specific group hides the others, then drops the key',
-      () async {
+  test('migrates active_group_id: a specific group hides the others, then drops the key', () async {
     SharedPreferences.setMockInitialValues({
       'groups_json': jsonEncode([
         {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha'},
@@ -129,8 +127,7 @@ void main() {
     expect(controller.state.hiddenGroupIds, isEmpty);
   });
 
-  test('toggleGroup hides/shows a group and persists; the last shown group is protected',
-      () async {
+  test('toggleGroup hides/shows a group and persists; the last shown group is protected', () async {
     SharedPreferences.setMockInitialValues({
       'groups_json': jsonEncode([
         {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha'},
@@ -160,8 +157,7 @@ void main() {
     expect(prefs.getString('hidden_group_ids'), jsonEncode(<String>[]));
   });
 
-  test('signOutGroup drops only that group; removeGroup drops the entry and un-hides it',
-      () async {
+  test('signOutGroup drops only that group; removeGroup drops the entry and un-hides it', () async {
     SharedPreferences.setMockInitialValues({
       'groups_json': jsonEncode([
         {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha'},

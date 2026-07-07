@@ -105,8 +105,7 @@ void main() {
       (tester) async {
     const gammaOut = ServerAccount(
         id: 'gamma.invalid', baseUrl: 'https://gamma.invalid', serverName: 'Gamma', token: null);
-    await pump(
-        tester, const MultiSession(groups: [alpha, beta, gammaOut], restored: true));
+    await pump(tester, const MultiSession(groups: [alpha, beta, gammaOut], restored: true));
 
     // Two groups are signed in, so the bubble shows and the menu is reachable.
     await openBubble(tester);

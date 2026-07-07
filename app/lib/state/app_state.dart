@@ -202,7 +202,10 @@ class MultiSessionController extends StateNotifier<MultiSession> {
       // only that one" → hide the others; '' / absent meant All → hide nothing.
       final oldActive = prefs.getString(_kActiveGroup);
       if (oldActive != null && oldActive.isNotEmpty && ids.contains(oldActive)) {
-        hidden = {for (final id in ids) if (id != oldActive) id};
+        hidden = {
+          for (final id in ids)
+            if (id != oldActive) id
+        };
       }
       await prefs.setString(_kHiddenGroups, _encodeHidden(hidden));
       await prefs.remove(_kActiveGroup);
@@ -349,8 +352,7 @@ class MultiSessionController extends StateNotifier<MultiSession> {
     if (hidden.contains(id)) {
       hidden.remove(id);
     } else {
-      final anotherStaysShown =
-          state.signedIn.any((g) => g.id != id && !hidden.contains(g.id));
+      final anotherStaysShown = state.signedIn.any((g) => g.id != id && !hidden.contains(g.id));
       if (!anotherStaysShown) return;
       hidden.add(id);
     }

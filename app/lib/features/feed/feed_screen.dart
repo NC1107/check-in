@@ -824,8 +824,8 @@ class _GroupMenu extends ConsumerWidget {
             ),
             if (trailing != null)
               Text(trailing,
-                  style: TextStyle(
-                      color: context.accent, fontSize: 13, fontWeight: FontWeight.w600))
+                  style:
+                      TextStyle(color: context.accent, fontSize: 13, fontWeight: FontWeight.w600))
             else if (selected)
               Icon(Icons.check, size: 19, color: context.accent),
           ],
@@ -919,100 +919,97 @@ class _FilterSheetState extends State<_FilterSheet> {
           ),
           const SizedBox(height: 18),
           if (widget.authors.isNotEmpty) ...[
-              const Text('PEOPLE',
-                  style: TextStyle(
-                      color: _fgMuted,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 12,
-                      letterSpacing: 0.4)),
-              const SizedBox(height: 10),
-              if (widget.authors.length > 5) ...[
-                TextField(
-                  onChanged: (v) => setState(() => _personQuery = v.trim().toLowerCase()),
-                  style: const TextStyle(color: _fgPrimary, fontSize: 14),
-                  cursorColor: context.accent,
-                  decoration: InputDecoration(
-                    isDense: true,
-                    prefixIcon: const Icon(Icons.search, size: 18, color: _fgMuted),
-                    hintText: 'Search people',
-                    hintStyle: const TextStyle(color: _fgMuted, fontSize: 14),
-                    filled: true,
-                    fillColor: _bgMain,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                    enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: const BorderSide(color: _border)),
-                    focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(10),
-                        borderSide: BorderSide(color: context.accent)),
-                  ),
+            const Text('PEOPLE',
+                style: TextStyle(
+                    color: _fgMuted,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                    letterSpacing: 0.4)),
+            const SizedBox(height: 10),
+            if (widget.authors.length > 5) ...[
+              TextField(
+                onChanged: (v) => setState(() => _personQuery = v.trim().toLowerCase()),
+                style: const TextStyle(color: _fgPrimary, fontSize: 14),
+                cursorColor: context.accent,
+                decoration: InputDecoration(
+                  isDense: true,
+                  prefixIcon: const Icon(Icons.search, size: 18, color: _fgMuted),
+                  hintText: 'Search people',
+                  hintStyle: const TextStyle(color: _fgMuted, fontSize: 14),
+                  filled: true,
+                  fillColor: _bgMain,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: _border)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide(color: context.accent)),
                 ),
-                const SizedBox(height: 11),
-              ],
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final a in widget.authors.where(
-                      (a) => _personQuery.isEmpty || a.name.toLowerCase().contains(_personQuery)))
-                    _personChip(a),
-                ],
               ),
-              if (_people.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => setState(() => _includeTagged = !_includeTagged),
-                    child: Row(
-                      children: [
-                        const Expanded(
-                          child: Text("Also show posts they're tagged in",
-                              style: TextStyle(color: _fgSecondary, fontSize: 13.5)),
-                        ),
-                        Switch.adaptive(
-                          value: _includeTagged,
-                          onChanged: (v) => setState(() => _includeTagged = v),
-                          activeThumbColor: context.accent,
-                        ),
-                      ],
-                    ),
+              const SizedBox(height: 11),
+            ],
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final a in widget.authors.where(
+                    (a) => _personQuery.isEmpty || a.name.toLowerCase().contains(_personQuery)))
+                  _personChip(a),
+              ],
+            ),
+            if (_people.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => setState(() => _includeTagged = !_includeTagged),
+                  child: Row(
+                    children: [
+                      const Expanded(
+                        child: Text("Also show posts they're tagged in",
+                            style: TextStyle(color: _fgSecondary, fontSize: 13.5)),
+                      ),
+                      Switch.adaptive(
+                        value: _includeTagged,
+                        onChanged: (v) => setState(() => _includeTagged = v),
+                        activeThumbColor: context.accent,
+                      ),
+                    ],
                   ),
                 ),
-              const SizedBox(height: 22),
-            ],
-            const Text('DATE',
+              ),
+            const SizedBox(height: 22),
+          ],
+          const Text('DATE',
+              style: TextStyle(
+                  color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 12, letterSpacing: 0.4)),
+          const SizedBox(height: 11),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [for (final d in _datePresets) _datePill(d)],
+          ),
+          if (widget.locations.isNotEmpty) ...[
+            const SizedBox(height: 22),
+            const Text('PLACES',
                 style: TextStyle(
                     color: _fgMuted,
                     fontWeight: FontWeight.w600,
                     fontSize: 12,
                     letterSpacing: 0.4)),
             const SizedBox(height: 11),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [for (final d in _datePresets) _datePill(d)],
-            ),
-            if (widget.locations.isNotEmpty) ...[
-              const SizedBox(height: 22),
-              const Text('PLACES',
-                  style: TextStyle(
-                      color: _fgMuted,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 12,
-                      letterSpacing: 0.4)),
-              const SizedBox(height: 11),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 180),
-                child: SingleChildScrollView(
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [for (final l in widget.locations) _placePill(l)],
-                  ),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 180),
+              child: SingleChildScrollView(
+                child: Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [for (final l in widget.locations) _placePill(l)],
                 ),
               ),
-            ],
+            ),
+          ],
           const SizedBox(height: 26),
           Row(
             children: [
