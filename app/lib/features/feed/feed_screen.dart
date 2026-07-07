@@ -495,24 +495,29 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 
   Widget _filterChip(String label, VoidCallback onRemove) {
-    return GestureDetector(
-      onTap: onRemove,
-      behavior: HitTestBehavior.opaque,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(11, 5, 9, 5),
-        decoration: BoxDecoration(
-          color: context.accentLight,
-          border: Border.all(color: context.accent),
-          borderRadius: BorderRadius.circular(9999),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(label,
-                style: TextStyle(color: context.accent, fontWeight: FontWeight.w600, fontSize: 12)),
-            const SizedBox(width: 5),
-            Icon(Icons.close, size: 15, color: context.accent),
-          ],
+    return Semantics(
+      button: true,
+      label: 'Remove $label filter',
+      child: GestureDetector(
+        onTap: onRemove,
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(11, 5, 9, 5),
+          decoration: BoxDecoration(
+            color: context.accentLight,
+            border: Border.all(color: context.accent),
+            borderRadius: BorderRadius.circular(9999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(label,
+                  style:
+                      TextStyle(color: context.accent, fontWeight: FontWeight.w600, fontSize: 12)),
+              const SizedBox(width: 5),
+              Icon(Icons.close, size: 15, color: context.accent),
+            ],
+          ),
         ),
       ),
     );
@@ -567,25 +572,41 @@ class _SearchBar extends StatelessWidget {
           const Icon(Icons.search, size: 19, color: _fgMuted),
           const SizedBox(width: 9),
           Expanded(
-            child: GestureDetector(
-              onTap: onSearch,
-              behavior: HitTestBehavior.opaque,
-              child: const Text('Search check-ins & people',
-                  style: TextStyle(color: _fgMuted, fontSize: 14)),
+            child: Semantics(
+              button: true,
+              label: 'Search check-ins and people',
+              child: GestureDetector(
+                onTap: onSearch,
+                behavior: HitTestBehavior.opaque,
+                child: const Text('Search check-ins & people',
+                    style: TextStyle(color: _fgMuted, fontSize: 14)),
+              ),
             ),
           ),
           if (showFilter)
-            GestureDetector(
-              onTap: onFilter,
-              child: Container(
-                width: 30,
-                height: 30,
-                decoration: BoxDecoration(
-                  color: filterActive ? context.accent : _bgSurfaceHover,
-                  borderRadius: BorderRadius.circular(8),
+            Semantics(
+              button: true,
+              label: 'Filters',
+              child: GestureDetector(
+                onTap: onFilter,
+                behavior: HitTestBehavior.opaque,
+                // 44px hit area around the 30px visual chip.
+                child: SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: Center(
+                    child: Container(
+                      width: 30,
+                      height: 30,
+                      decoration: BoxDecoration(
+                        color: filterActive ? context.accent : _bgSurfaceHover,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(Icons.filter_list,
+                          size: 19, color: filterActive ? context.onAccent : _fgSecondary),
+                    ),
+                  ),
                 ),
-                child: Icon(Icons.filter_list,
-                    size: 19, color: filterActive ? context.onAccent : _fgSecondary),
               ),
             )
           else
@@ -907,13 +928,25 @@ class _FilterSheetState extends State<_FilterSheet> {
             children: [
               const Text('Filter',
                   style: TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
-              GestureDetector(
-                onTap: () => Navigator.of(context).pop(),
-                child: Container(
-                  width: 30,
-                  height: 30,
-                  decoration: const BoxDecoration(color: _bgSurfaceHover, shape: BoxShape.circle),
-                  child: const Icon(Icons.close, size: 18, color: _fgSecondary),
+              Semantics(
+                button: true,
+                label: 'Close',
+                child: GestureDetector(
+                  onTap: () => Navigator.of(context).pop(),
+                  behavior: HitTestBehavior.opaque,
+                  child: SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: Center(
+                      child: Container(
+                        width: 30,
+                        height: 30,
+                        decoration:
+                            const BoxDecoration(color: _bgSurfaceHover, shape: BoxShape.circle),
+                        child: const Icon(Icons.close, size: 18, color: _fgSecondary),
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -1054,34 +1087,39 @@ class _FilterSheetState extends State<_FilterSheet> {
   Widget _personChip(({int id, String name}) a) {
     final on = _people.contains(a.id);
     final color = _palette[a.id.abs() % _palette.length];
-    return GestureDetector(
-      onTap: () => setState(() => on ? _people.remove(a.id) : _people.add(a.id)),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(5, 5, 13, 5),
-        decoration: BoxDecoration(
-          color: on ? context.accent : Colors.transparent,
-          border: Border.all(color: on ? context.accent : _border),
-          borderRadius: BorderRadius.circular(9999),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 24,
-              height: 24,
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-              alignment: Alignment.center,
-              child: Text(a.name.isNotEmpty ? a.name[0].toUpperCase() : '?',
-                  style: const TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.w700, fontSize: 11)),
-            ),
-            const SizedBox(width: 7),
-            Text(a.name,
-                style: TextStyle(
-                    color: on ? context.onAccent : _fgSecondary,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13)),
-          ],
+    return Semantics(
+      button: true,
+      selected: on,
+      label: a.name,
+      child: GestureDetector(
+        onTap: () => setState(() => on ? _people.remove(a.id) : _people.add(a.id)),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(5, 5, 13, 5),
+          decoration: BoxDecoration(
+            color: on ? context.accent : Colors.transparent,
+            border: Border.all(color: on ? context.accent : _border),
+            borderRadius: BorderRadius.circular(9999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 24,
+                height: 24,
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                alignment: Alignment.center,
+                child: Text(a.name.isNotEmpty ? a.name[0].toUpperCase() : '?',
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.w700, fontSize: 11)),
+              ),
+              const SizedBox(width: 7),
+              Text(a.name,
+                  style: TextStyle(
+                      color: on ? context.onAccent : _fgSecondary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13)),
+            ],
+          ),
         ),
       ),
     );
@@ -1089,46 +1127,56 @@ class _FilterSheetState extends State<_FilterSheet> {
 
   Widget _datePill(String label) {
     final on = _date == label;
-    return GestureDetector(
-      onTap: () => setState(() => _date = on ? null : label),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
-        decoration: BoxDecoration(
-          color: on ? context.accent : Colors.transparent,
-          border: Border.all(color: on ? context.accent : _border),
-          borderRadius: BorderRadius.circular(9999),
+    return Semantics(
+      button: true,
+      selected: on,
+      label: label,
+      child: GestureDetector(
+        onTap: () => setState(() => _date = on ? null : label),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
+          decoration: BoxDecoration(
+            color: on ? context.accent : Colors.transparent,
+            border: Border.all(color: on ? context.accent : _border),
+            borderRadius: BorderRadius.circular(9999),
+          ),
+          child: Text(label,
+              style: TextStyle(
+                  color: on ? context.onAccent : _fgSecondary,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13)),
         ),
-        child: Text(label,
-            style: TextStyle(
-                color: on ? context.onAccent : _fgSecondary,
-                fontWeight: FontWeight.w600,
-                fontSize: 13)),
       ),
     );
   }
 
   Widget _placePill(({String location, int count}) l) {
     final on = _location == l.location;
-    return GestureDetector(
-      onTap: () => setState(() => _location = on ? null : l.location),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(11, 8, 13, 8),
-        decoration: BoxDecoration(
-          color: on ? context.accent : Colors.transparent,
-          border: Border.all(color: on ? context.accent : _border),
-          borderRadius: BorderRadius.circular(9999),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.place_outlined, size: 14, color: on ? context.onAccent : _fgMuted),
-            const SizedBox(width: 5),
-            Text(l.location,
-                style: TextStyle(
-                    color: on ? context.onAccent : _fgSecondary,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13)),
-          ],
+    return Semantics(
+      button: true,
+      selected: on,
+      label: l.location,
+      child: GestureDetector(
+        onTap: () => setState(() => _location = on ? null : l.location),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(11, 8, 13, 8),
+          decoration: BoxDecoration(
+            color: on ? context.accent : Colors.transparent,
+            border: Border.all(color: on ? context.accent : _border),
+            borderRadius: BorderRadius.circular(9999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.place_outlined, size: 14, color: on ? context.onAccent : _fgMuted),
+              const SizedBox(width: 5),
+              Text(l.location,
+                  style: TextStyle(
+                      color: on ? context.onAccent : _fgSecondary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13)),
+            ],
+          ),
         ),
       ),
     );
