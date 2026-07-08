@@ -61,3 +61,40 @@ func TestNormalizePhone(t *testing.T) {
 		t.Errorf("NormalizePhone with empty defaultCC = %q, want %q", got, "5551234567")
 	}
 }
+
+func TestNormalizePassword(t *testing.T) {
+	// Surrounding whitespace and newlines (common copy-paste artifacts) are trimmed,
+	// but interior characters, case, and internal spaces are preserved exactly.
+	cases := map[string]string{
+		"checkinreview":     "checkinreview",
+		" checkinreview":    "checkinreview",
+		"checkinreview ":    "checkinreview",
+		"  checkinreview  ": "checkinreview",
+		"checkinreview\n":   "checkinreview",
+		"\tcheckinreview\t": "checkinreview",
+		"Checkinreview":     "Checkinreview", // case is preserved
+		"pass word":         "pass word",     // interior space preserved
+		"   ":               "",              // whitespace-only collapses to empty
+	}
+	for in, want := range cases {
+		if got := NormalizePassword(in); got != want {
+			t.Errorf("NormalizePassword(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	// End to end: a hash of the clean password verifies whatever surrounding whitespace
+	// a reviewer pastes, because both sides normalize the same way.
+	hash, err := HashPassword(NormalizePassword("checkinreview"))
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+	for _, typed := range []string{"checkinreview", " checkinreview ", "checkinreview\n"} {
+		if !VerifyPassword(NormalizePassword(typed), hash) {
+			t.Errorf("normalized %q should verify against the clean hash", typed)
+		}
+	}
+	// A genuinely different password (case change) must still fail.
+	if VerifyPassword(NormalizePassword("Checkinreview"), hash) {
+		t.Error("a case-changed password must not verify (trimming is not case-folding)")
+	}
+}

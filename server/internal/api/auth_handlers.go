@@ -222,7 +222,8 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	}
 	phone := auth.NormalizePhone(req.Phone, s.cfg.DefaultCountryCode)
 	name := req.displayName()
-	if phone == "" || name == "" || len(req.Password) < 8 {
+	password := auth.NormalizePassword(req.Password)
+	if phone == "" || name == "" || len(password) < 8 {
 		writeErr(w, http.StatusBadRequest, "phone, name and an 8+ char password are required")
 		return
 	}
@@ -266,7 +267,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	hash, err := auth.HashPassword(req.Password)
+	hash, err := auth.HashPassword(password)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
@@ -304,17 +305,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	phone := auth.NormalizePhone(req.Phone, s.cfg.DefaultCountryCode)
+	password := auth.NormalizePassword(req.Password)
 	user, hash, err := s.db.GetUserByPhone(r.Context(), phone)
 	if err != nil {
 		// Unknown phone: still run a password verification against a fixed dummy hash so
 		// the response time matches the "wrong password" path. Otherwise the timing
 		// difference would reveal whether a number is a member (an enumeration oracle in
 		// an invite-only app).
-		auth.VerifyPassword(req.Password, dummyPasswordHash)
+		auth.VerifyPassword(password, dummyPasswordHash)
 		writeErr(w, http.StatusUnauthorized, "incorrect phone or password")
 		return
 	}
-	if !auth.VerifyPassword(req.Password, hash) {
+	if !auth.VerifyPassword(password, hash) {
 		writeErr(w, http.StatusUnauthorized, "incorrect phone or password")
 		return
 	}
@@ -339,7 +341,8 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if len(req.NewPassword) < 8 {
+	newPassword := auth.NormalizePassword(req.NewPassword)
+	if len(newPassword) < 8 {
 		writeErr(w, http.StatusBadRequest, "password must be at least 8 characters")
 		return
 	}
@@ -357,7 +360,7 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid or expired reset code")
 		return
 	}
-	newHash, err := auth.HashPassword(req.NewPassword)
+	newHash, err := auth.HashPassword(newPassword)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
