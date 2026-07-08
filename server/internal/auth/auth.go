@@ -110,6 +110,15 @@ func NormalizeResetCode(code string) string {
 	return b.String()
 }
 
+// NormalizePassword trims surrounding whitespace from a password. Leading or trailing
+// spaces and newlines are never intentional and are a common copy-paste artifact (a
+// credential copied with a trailing space or newline). Applying this symmetrically at
+// signup, login, and reset means a stray whitespace character can't cause a spurious
+// authentication failure, mirroring how NormalizePhone canonicalizes the phone.
+func NormalizePassword(password string) string {
+	return strings.TrimSpace(password)
+}
+
 // NormalizePhone reduces a phone number to a canonical, digits-only comparable form for
 // allowlist matching. All formatting (spaces, dashes, parentheses, '+') is stripped, and
 // a default country code is applied to bare national numbers so the same person matches
