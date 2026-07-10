@@ -128,8 +128,8 @@ class _PhotoCropScreenState extends State<PhotoCropScreen> {
                       if (mounted) _centerOnce(side);
                     });
                   }
-                  final cover = coverSize(
-                      _image!.width.toDouble(), _image!.height.toDouble(), side);
+                  final cover =
+                      coverSize(_image!.width.toDouble(), _image!.height.toDouble(), side);
                   return SizedBox(
                     width: side,
                     height: side,
