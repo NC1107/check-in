@@ -160,12 +160,14 @@ class Post {
 
 /// A lightweight comment (author + body) shown inline as a preview on feed cards.
 class CommentPreview {
-  CommentPreview({required this.authorName, required this.body});
+  CommentPreview({required this.authorId, required this.authorName, required this.body});
 
+  final int authorId;
   final String authorName;
   final String body;
 
   factory CommentPreview.fromJson(Map<String, dynamic> j) => CommentPreview(
+        authorId: (j['authorId'] as num?)?.toInt() ?? 0,
         authorName: j['authorName'] as String? ?? '',
         body: j['body'] as String? ?? '',
       );
@@ -174,6 +176,7 @@ class CommentPreview {
 class Comment {
   Comment({
     required this.id,
+    required this.authorId,
     required this.authorName,
     required this.body,
     required this.createdAt,
@@ -181,6 +184,7 @@ class Comment {
   });
 
   final int id;
+  final int authorId;
   final String authorName;
   final String body;
   final DateTime createdAt;
@@ -188,6 +192,7 @@ class Comment {
 
   factory Comment.fromJson(Map<String, dynamic> j) => Comment(
         id: j['id'] as int,
+        authorId: (j['userId'] as num?)?.toInt() ?? 0,
         authorName: j['authorName'] as String? ?? '',
         body: j['body'] as String? ?? '',
         createdAt: DateTime.parse(j['createdAt'] as String),

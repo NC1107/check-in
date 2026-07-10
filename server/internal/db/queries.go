@@ -13,8 +13,8 @@ import (
 // commentPreviewExpr is a SELECT-list fragment returning the 2 most recent comments on
 // post p as a JSON array (oldest-of-the-two first), for inline feed previews.
 const commentPreviewExpr = `, COALESCE((
-		SELECT json_agg(json_build_object('authorName', t.name, 'body', t.body) ORDER BY t.created_at)
-		FROM (SELECT u2.name, c.body, c.created_at FROM comments c JOIN users u2 ON u2.id = c.user_id
+		SELECT json_agg(json_build_object('authorId', t.user_id, 'authorName', t.name, 'body', t.body) ORDER BY t.created_at)
+		FROM (SELECT c.user_id, u2.name, c.body, c.created_at FROM comments c JOIN users u2 ON u2.id = c.user_id
 		      WHERE c.post_id = p.id
 		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)
 		      ORDER BY c.created_at DESC LIMIT 2) t), '[]'::json)`

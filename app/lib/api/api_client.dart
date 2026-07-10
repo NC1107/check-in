@@ -287,9 +287,15 @@ class ApiClient {
   /// transcode) and returns the new media id. Used so the server never has to decode a
   /// full-resolution photo or an iPhone HEIC it can't read.
   Future<int> uploadImageBytes(List<int> bytes, {String filename = 'upload.jpg'}) async {
+    final ext = filename.split('.').last.toLowerCase();
+    final contentType = switch (ext) {
+      'png' => MediaType('image', 'png'),
+      'gif' => MediaType('image', 'gif'),
+      'webp' => MediaType('image', 'webp'),
+      _ => MediaType('image', 'jpeg'),
+    };
     final form = FormData.fromMap({
-      'file': MultipartFile.fromBytes(bytes,
-          filename: filename, contentType: MediaType('image', 'jpeg')),
+      'file': MultipartFile.fromBytes(bytes, filename: filename, contentType: contentType),
     });
     final r = await _dio.post('/api/media', data: form);
     return (r.data as Map<String, dynamic>)['id'] as int;

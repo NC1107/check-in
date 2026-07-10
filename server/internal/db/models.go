@@ -59,6 +59,7 @@ type TaggedPerson struct {
 
 // CommentPreview is a lightweight comment (author + body) for inline feed previews.
 type CommentPreview struct {
+	AuthorID   int64  `json:"authorId"`
 	AuthorName string `json:"authorName"`
 	Body       string `json:"body"`
 }

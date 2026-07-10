@@ -13,6 +13,7 @@ import '../../theme/tokens.dart';
 import '../../widgets/post_image_carousel.dart';
 import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
+import '../profile/profile_screen.dart';
 
 // Report reasons shown in the bottom sheet.
 const _reportReasons = [
@@ -258,7 +259,8 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
       if (mounted) {
         setState(() {
           _comments++;
-          _added.add(CommentPreview(authorName: comment.authorName, body: comment.body));
+          _added.add(CommentPreview(
+              authorId: comment.authorId, authorName: comment.authorName, body: comment.body));
         });
       }
     } catch (_) {
@@ -270,6 +272,14 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
     } finally {
       if (mounted) setState(() => _postingComment = false);
     }
+  }
+
+  /// Opens a member's profile in the post's own group (no-op for a missing id).
+  void _openProfile(int userId) {
+    if (userId <= 0) return;
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => ProfileScreen(userId: userId, groupId: widget.post.groupId),
+    ));
   }
 
   /// One tappable feed action (like / comment) with a Material ripple so presses give
@@ -347,45 +357,52 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
             child: Row(
               children: [
                 // In the merged view the avatar wears a thin ring in the origin
-                // group's color - the group marker for the whole card.
-                if (widget.groupColor != null)
-                  Semantics(
-                    label: account != null ? 'Group: ${account.displayName}' : 'Group',
-                    // The avatar is decorative here (the author's name sits beside it);
-                    // announce only the group the ring encodes.
-                    excludeSemantics: true,
-                    child: Container(
-                      padding: const EdgeInsets.all(2),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(color: widget.groupColor!, width: 2),
-                      ),
-                      child: UserAvatar(
+                // group's color - the group marker for the whole card. Tapping the
+                // avatar opens the author's profile.
+                GestureDetector(
+                  onTap: () => _openProfile(p.authorId),
+                  child: widget.groupColor != null
+                      ? Semantics(
+                          label: account != null ? 'Group: ${account.displayName}' : 'Group',
+                          // The avatar is decorative here (the author's name sits beside it);
+                          // announce only the group the ring encodes.
+                          excludeSemantics: true,
+                          child: Container(
+                            padding: const EdgeInsets.all(2),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(color: widget.groupColor!, width: 2),
+                            ),
+                            child: UserAvatar(
+                                name: p.authorName,
+                                size: 34,
+                                mediaId: p.authorPhotoId,
+                                colorSeed: p.authorId,
+                                groupId: p.groupId),
+                          ),
+                        )
+                      : UserAvatar(
                           name: p.authorName,
-                          size: 34,
+                          size: 38,
                           mediaId: p.authorPhotoId,
                           colorSeed: p.authorId,
                           groupId: p.groupId),
-                    ),
-                  )
-                else
-                  UserAvatar(
-                      name: p.authorName,
-                      size: 38,
-                      mediaId: p.authorPhotoId,
-                      colorSeed: p.authorId,
-                      groupId: p.groupId),
+                ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        p.authorName,
-                        style: const TextStyle(
-                          color: _fgPrimary,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
+                      GestureDetector(
+                        onTap: () => _openProfile(p.authorId),
+                        behavior: HitTestBehavior.opaque,
+                        child: Text(
+                          p.authorName,
+                          style: const TextStyle(
+                            color: _fgPrimary,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
                         ),
                       ),
                       if (p.people.isNotEmpty)
@@ -561,12 +578,20 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                     ),
                   ...[...p.commentsPreview, ..._added].map((c) => Padding(
                         padding: const EdgeInsets.only(bottom: 3),
-                        child: RichText(
-                          text: TextSpan(children: [
-                            TextSpan(
-                                text: '${c.authorName} ',
-                                style: const TextStyle(
-                                    color: _fgPrimary, fontWeight: FontWeight.w600, fontSize: 13)),
+                        child: Text.rich(
+                          TextSpan(children: [
+                            WidgetSpan(
+                              alignment: PlaceholderAlignment.baseline,
+                              baseline: TextBaseline.alphabetic,
+                              child: GestureDetector(
+                                onTap: () => _openProfile(c.authorId),
+                                child: Text('${c.authorName} ',
+                                    style: const TextStyle(
+                                        color: _fgPrimary,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 13)),
+                              ),
+                            ),
                             TextSpan(
                                 text: c.body,
                                 style: const TextStyle(
