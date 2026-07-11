@@ -7,7 +7,9 @@ import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/photo_viewer.dart';
 import '../../widgets/post_image_carousel.dart';
+import '../../widgets/tagged_people_line.dart';
 import '../../widgets/user_avatar.dart';
 import '../profile/profile_screen.dart';
 
@@ -204,8 +206,12 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                           borderRadius: BorderRadius.circular(14),
                           child: AspectRatio(
                             aspectRatio: 4 / 3,
-                            child:
-                                PostImageCarousel(mediaIds: post.images, groupId: widget.groupId),
+                            child: PostImageCarousel(
+                              mediaIds: post.images,
+                              groupId: widget.groupId,
+                              onImageTap: (mediaId) => PhotoViewerScreen.open(context,
+                                  mediaId: mediaId, groupId: widget.groupId),
+                            ),
                           ),
                         ),
                       ),
@@ -331,10 +337,11 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                 if (post.people.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 1),
-                    child: Text(post.peopleLabel,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: kFgMuted, fontSize: 12.5)),
+                    child: TaggedPeopleLine(
+                      people: post.people,
+                      groupId: widget.groupId,
+                      style: const TextStyle(color: kFgMuted, fontSize: 12.5),
+                    ),
                   ),
                 const SizedBox(height: 2),
                 Tooltip(

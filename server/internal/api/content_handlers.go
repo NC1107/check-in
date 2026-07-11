@@ -257,9 +257,15 @@ func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "post not found")
 		return
 	}
-	if err := s.db.LikePost(r.Context(), id, userFrom(r).ID); err != nil {
+	me := userFrom(r)
+	inserted, err := s.db.LikePost(r.Context(), id, me.ID)
+	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
+	}
+	// Only push on a genuinely new like, so re-liking an already-liked post is silent.
+	if inserted {
+		go s.notifyLike(me.Name, id, me.ID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

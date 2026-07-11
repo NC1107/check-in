@@ -121,20 +121,33 @@ class ApiClient {
       _dio.delete('/api/me/devices', data: {'token': token});
 
   /// notificationPrefs returns the per-account push opt-outs.
-  Future<({bool posts, bool replies})> notificationPrefs() async {
+  Future<({bool posts, bool replies, bool likes})> notificationPrefs() async {
     final r = await _dio.get('/api/me/notifications');
     final j = r.data as Map<String, dynamic>;
-    return (posts: j['posts'] as bool? ?? true, replies: j['replies'] as bool? ?? true);
+    return (
+      posts: j['posts'] as bool? ?? true,
+      replies: j['replies'] as bool? ?? true,
+      likes: j['likes'] as bool? ?? true,
+    );
   }
 
   /// updateNotificationPrefs toggles the opt-outs. Omitted fields keep their value.
-  Future<({bool posts, bool replies})> updateNotificationPrefs({bool? posts, bool? replies}) async {
+  Future<({bool posts, bool replies, bool likes})> updateNotificationPrefs({
+    bool? posts,
+    bool? replies,
+    bool? likes,
+  }) async {
     final r = await _dio.patch('/api/me/notifications', data: {
       if (posts != null) 'posts': posts,
       if (replies != null) 'replies': replies,
+      if (likes != null) 'likes': likes,
     });
     final j = r.data as Map<String, dynamic>;
-    return (posts: j['posts'] as bool? ?? true, replies: j['replies'] as bool? ?? true);
+    return (
+      posts: j['posts'] as bool? ?? true,
+      replies: j['replies'] as bool? ?? true,
+      likes: j['likes'] as bool? ?? true,
+    );
   }
 
   /// setProfilePhoto attaches an already-uploaded media item as the current user's

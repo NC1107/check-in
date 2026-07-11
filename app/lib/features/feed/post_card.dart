@@ -10,7 +10,9 @@ import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/photo_viewer.dart';
 import '../../widgets/post_image_carousel.dart';
+import '../../widgets/tagged_people_line.dart';
 import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
 import '../profile/profile_screen.dart';
@@ -408,10 +410,9 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                       if (p.people.isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.only(top: 1),
-                          child: Text(
-                            p.peopleLabel,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                          child: TaggedPeopleLine(
+                            people: p.people,
+                            groupId: p.groupId,
                             style: const TextStyle(color: _fgMuted, fontSize: 12),
                           ),
                         ),
@@ -519,17 +520,20 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
           // Image(s) - the carousel sizes itself (single images keep their own
           // clamped aspect ratio); the heart burst overlays it.
           if (p.kind == 'image' && p.images.isNotEmpty)
-            GestureDetector(
-              onDoubleTap: _doubleTapLike,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  PostImageCarousel(mediaIds: p.images, groupId: p.groupId),
-                  Positioned.fill(
-                    child: IgnorePointer(child: Center(child: _HeartBurst(_burst))),
-                  ),
-                ],
-              ),
+            Stack(
+              alignment: Alignment.center,
+              children: [
+                PostImageCarousel(
+                  mediaIds: p.images,
+                  groupId: p.groupId,
+                  onDoubleTap: _doubleTapLike,
+                  onImageTap: (mediaId) =>
+                      PhotoViewerScreen.open(context, mediaId: mediaId, groupId: p.groupId),
+                ),
+                Positioned.fill(
+                  child: IgnorePointer(child: Center(child: _HeartBurst(_burst))),
+                ),
+              ],
             ),
           // Actions row
           Padding(
