@@ -109,4 +109,22 @@ void main() {
     expect(pending.used, isFalse);
     expect(pending.createdAt, isNull);
   });
+
+  test('User.birthdayLabel shows month and day (never the year), or empty when absent', () {
+    final withBday = User.fromJson({
+      'id': 1,
+      'name': 'Nick',
+      'phone': '+15550001111',
+      'isAdmin': false,
+      'birthday': '1998-03-14T00:00:00Z',
+    });
+    expect(withBday.birthdayLabel, 'March 14');
+
+    // A UTC-midnight date on Jan 1 must not slip to Dec 31 via a timezone shift.
+    final newYear = User.fromJson({'id': 2, 'name': 'Ada', 'birthday': '2000-01-01T00:00:00Z'});
+    expect(newYear.birthdayLabel, 'January 1');
+
+    final noBday = User.fromJson({'id': 3, 'name': 'Bo'});
+    expect(noBday.birthdayLabel, '');
+  });
 }

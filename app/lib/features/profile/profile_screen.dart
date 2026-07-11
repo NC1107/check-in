@@ -205,11 +205,18 @@ class _MyProfileScreenState extends ConsumerState<MyProfileScreen> {
           const SizedBox(height: 4),
           Text('$count ${count == 1 ? 'check-in' : 'check-ins'}',
               style: const TextStyle(color: kFgMuted, fontSize: 13)),
+          if (user.birthdayLabel.isNotEmpty) _birthdayLine(user.birthdayLabel),
         ],
       ),
     );
   }
 }
+
+/// A small centred "🎂 March 14" line for a profile header.
+Widget _birthdayLine(String label) => Padding(
+      padding: const EdgeInsets.only(top: 5),
+      child: Text('🎂 $label', style: const TextStyle(color: kFgMuted, fontSize: 13)),
+    );
 
 /// ProfileScreen shows another member's profile and their timeline on one group.
 /// Identity is per-group: [groupId] says which connected group this profile lives on
@@ -393,6 +400,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           const SizedBox(height: 4),
           Text('$count ${count == 1 ? 'check-in' : 'check-ins'}',
               style: const TextStyle(color: kFgMuted, fontSize: 13)),
+          if (user.birthdayLabel.isNotEmpty) _birthdayLine(user.birthdayLabel),
           ...[
             // Block / Unblock for other members' profiles.
             if (_isBlocked != null) ...[
