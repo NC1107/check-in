@@ -79,8 +79,13 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     if (t == null || !t.isSignedIn || !mounted) return;
     // Make sure the tapped group is visible in the feed when you return to it.
     ref.read(multiSessionProvider.notifier).showGroup(t.id);
+    // A comment notification should land on the thread, not the top of the post.
+    final focusComments = data['type'] == 'comment';
     Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => PostDetailScreen(postId: postId, groupId: t.id)),
+      MaterialPageRoute(
+        builder: (_) =>
+            PostDetailScreen(postId: postId, groupId: t.id, focusComments: focusComments),
+      ),
     );
   }
 
@@ -154,7 +159,10 @@ class _HomeShellState extends ConsumerState<HomeShell> {
                 activeIcon: Icons.home_rounded,
                 label: 'Feed',
                 selected: _index == 0,
-                onTap: () => setState(() => _index = 0),
+                // Re-tapping Feed while already on it scrolls the feed back to the top.
+                onTap: () => _index == 0
+                    ? ref.read(feedScrollToTopProvider.notifier).state++
+                    : setState(() => _index = 0),
               ),
               const SizedBox(width: 64), // FAB notch
               _NavItem(

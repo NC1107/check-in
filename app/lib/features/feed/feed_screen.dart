@@ -13,6 +13,11 @@ import '../onboarding/auth_screen.dart';
 import 'global_search_delegate.dart';
 import 'post_card.dart';
 
+/// Bumped when the user taps the Home tab while already on the feed; the feed listens and
+/// animates back to the top. (Tapping the iOS status bar scrolls to top natively, since the
+/// feed list is the primary scroll view.)
+final feedScrollToTopProvider = StateProvider<int>((ref) => 0);
+
 // Theme tokens (centralized in theme/tokens.dart).
 const _bgMain = kBgMain;
 const _bgSurface = kBgSurface;
@@ -174,6 +179,12 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   void dispose() {
     _scrollCtrl.dispose();
     super.dispose();
+  }
+
+  void _scrollToTop() {
+    if (!_scrollCtrl.hasClients) return;
+    _scrollCtrl.animateTo(0,
+        duration: const Duration(milliseconds: 400), curve: Curves.easeOutCubic);
   }
 
   // Hide the top bar only when actively scrolling down; show it at the very top or as
@@ -482,6 +493,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         _reachedEnd = false;
       }
     });
+    // Home-tab re-tap (from the bottom nav) scrolls the feed back to the top.
+    ref.listen(feedScrollToTopProvider, (_, __) => _scrollToTop());
     final session = ref.watch(multiSessionProvider);
     final allView = session.isAllView;
     return Scaffold(
@@ -489,83 +502,88 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       body: SafeArea(
         child: Stack(
           children: [
-            RefreshIndicator(
-              onRefresh: _refresh,
-              color: context.accent,
-              backgroundColor: _bgSurface,
-              child: ref.watch(feedProvider).when(
-                    loading: () => const FeedSkeleton(),
-                    error: (e, _) => ListView(children: [
-                      const SizedBox(height: 120),
-                      Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.cloud_off_outlined, size: 42, color: _fgMuted),
-                            const SizedBox(height: 12),
-                            const Text('Could not load the feed.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(color: _fgSecondary, fontSize: 15)),
-                            const SizedBox(height: 10),
-                            TextButton(onPressed: _refresh, child: const Text('Try again')),
-                          ],
+            PrimaryScrollController(
+              controller: _scrollCtrl,
+              child: RefreshIndicator(
+                onRefresh: _refresh,
+                color: context.accent,
+                backgroundColor: _bgSurface,
+                child: ref.watch(feedProvider).when(
+                      loading: () => const FeedSkeleton(),
+                      error: (e, _) => ListView(primary: false, children: [
+                        const SizedBox(height: 120),
+                        Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.cloud_off_outlined, size: 42, color: _fgMuted),
+                              const SizedBox(height: 12),
+                              const Text('Could not load the feed.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: _fgSecondary, fontSize: 15)),
+                              const SizedBox(height: 10),
+                              TextButton(onPressed: _refresh, child: const Text('Try again')),
+                            ],
+                          ),
                         ),
-                      ),
-                    ]),
-                    data: (result) {
-                      _allPosts = [...result.posts, ..._morePosts];
-                      final posts = _applyFilter(_allPosts);
-                      if (_allPosts.isEmpty) {
-                        final s = ref.read(multiSessionProvider);
-                        if (s.nothingShown) {
-                          // Every group is toggled off - say so instead of "no check-ins".
+                      ]),
+                      data: (result) {
+                        _allPosts = [...result.posts, ..._morePosts];
+                        final posts = _applyFilter(_allPosts);
+                        if (_allPosts.isEmpty) {
+                          final s = ref.read(multiSessionProvider);
+                          if (s.nothingShown) {
+                            // Every group is toggled off - say so instead of "no check-ins".
+                            return _emptyState(
+                              icon: Icons.public_off,
+                              title: 'No groups shown',
+                              subtitle: 'Choose which groups appear in Filters.',
+                            );
+                          }
+                          final shown = s.shownGroups;
+                          final where = shown.length > 1
+                              ? ' in ${[for (final g in shown) g.displayName].join(', ')}'
+                              : '';
                           return _emptyState(
-                            icon: Icons.public_off,
-                            title: 'No groups shown',
-                            subtitle: 'Choose which groups appear in Filters.',
+                            icon: Icons.photo_camera_outlined,
+                            title: 'No check-ins yet$where',
+                            subtitle: 'Tap + to share an update.',
                           );
                         }
-                        final shown = s.shownGroups;
-                        final where = shown.length > 1
-                            ? ' in ${[for (final g in shown) g.displayName].join(', ')}'
-                            : '';
-                        return _emptyState(
-                          icon: Icons.photo_camera_outlined,
-                          title: 'No check-ins yet$where',
-                          subtitle: 'Tap + to share an update.',
+                        final items =
+                            _buildItems(posts, [for (final g in result.unreachable) g.displayName]);
+                        // Trailing spinner row while the next page loads.
+                        final showSpinner = _loadingMore && posts.isNotEmpty;
+                        return ListView.builder(
+                          // Primary so the pagination controller attaches here and iOS
+                          // status-bar taps scroll it to the top.
+                          primary: true,
+                          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                          padding: EdgeInsets.only(top: _hasFilter ? 116 : 72, bottom: 24),
+                          itemCount: posts.isEmpty ? 1 : items.length + (showSpinner ? 1 : 0),
+                          itemBuilder: (_, i) {
+                            if (posts.isEmpty) {
+                              return const Padding(
+                                padding: EdgeInsets.only(top: 60),
+                                child: Center(
+                                  child: Text('No check-ins match your filters.',
+                                      style: TextStyle(color: _fgMuted)),
+                                ),
+                              );
+                            }
+                            if (i >= items.length) {
+                              return Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 20),
+                                child:
+                                    Center(child: CircularProgressIndicator(color: context.accent)),
+                              );
+                            }
+                            return _buildItem(items[i], allView: allView);
+                          },
                         );
-                      }
-                      final items =
-                          _buildItems(posts, [for (final g in result.unreachable) g.displayName]);
-                      // Trailing spinner row while the next page loads.
-                      final showSpinner = _loadingMore && posts.isNotEmpty;
-                      return ListView.builder(
-                        controller: _scrollCtrl,
-                        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                        padding: EdgeInsets.only(top: _hasFilter ? 116 : 72, bottom: 24),
-                        itemCount: posts.isEmpty ? 1 : items.length + (showSpinner ? 1 : 0),
-                        itemBuilder: (_, i) {
-                          if (posts.isEmpty) {
-                            return const Padding(
-                              padding: EdgeInsets.only(top: 60),
-                              child: Center(
-                                child: Text('No check-ins match your filters.',
-                                    style: TextStyle(color: _fgMuted)),
-                              ),
-                            );
-                          }
-                          if (i >= items.length) {
-                            return Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 20),
-                              child:
-                                  Center(child: CircularProgressIndicator(color: context.accent)),
-                            );
-                          }
-                          return _buildItem(items[i], allView: allView);
-                        },
-                      );
-                    },
-                  ),
+                      },
+                    ),
+              ),
             ),
             // Floating search bar + active filter chips - slide away on scroll down.
             AnimatedSlide(
@@ -597,7 +615,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 
   Widget _emptyState({required IconData icon, required String title, required String subtitle}) {
-    return ListView(children: [
+    return ListView(primary: false, children: [
       const SizedBox(height: 150),
       Center(
         child: Column(
