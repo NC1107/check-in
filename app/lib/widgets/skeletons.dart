@@ -33,6 +33,7 @@ class _FeedSkeletonState extends State<FeedSkeleton> with SingleTickerProviderSt
       builder: (_, __) {
         final o = 0.35 + 0.35 * _pulse.value; // 0.35 → 0.70
         return ListView(
+          primary: false,
           padding: EdgeInsets.only(top: widget.topPadding, bottom: 24),
           physics: const NeverScrollableScrollPhysics(),
           children: [for (var i = 0; i < widget.count; i++) _card(o)],

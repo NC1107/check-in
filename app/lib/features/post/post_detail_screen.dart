@@ -29,10 +29,19 @@ String _fullLocalTime(DateTime dt) => DateFormat('MMM d, y · h:mm a').format(dt
 /// [groupId] is the connected group the post lives on (null = the current group);
 /// every call from this screen goes to that server.
 class PostDetailScreen extends ConsumerStatefulWidget {
-  const PostDetailScreen({super.key, required this.postId, this.groupId});
+  const PostDetailScreen({
+    super.key,
+    required this.postId,
+    this.groupId,
+    this.focusComments = false,
+  });
 
   final int postId;
   final String? groupId;
+
+  /// When true (e.g. opened from a "commented on your check-in" notification), the view
+  /// scrolls straight to the comment thread once it loads instead of landing on the post.
+  final bool focusComments;
 
   @override
   ConsumerState<PostDetailScreen> createState() => _PostDetailScreenState();
@@ -40,6 +49,8 @@ class PostDetailScreen extends ConsumerStatefulWidget {
 
 class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   final _comment = TextEditingController();
+  final _scroll = ScrollController();
+  final _commentsKey = GlobalKey();
   // Loaded post + thread held in state so sending a comment appends to the list in place
   // instead of re-fetching the whole screen (which blanked to a spinner and flashed).
   Post? _post;
@@ -47,6 +58,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   bool _loading = true;
   Object? _error;
   bool _sending = false;
+  bool _didFocusComments = false;
   bool? _likeOverride; // null = use the post's server value
 
   Future<void> _savePhoto(int mediaId) async {
@@ -85,7 +97,22 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   @override
   void dispose() {
     _comment.dispose();
+    _scroll.dispose();
     super.dispose();
+  }
+
+  /// After the thread loads from a comment notification, bring the comments into view so the
+  /// user lands on the reply rather than the top of the post. Runs once.
+  void _maybeFocusComments() {
+    if (!widget.focusComments || _didFocusComments) return;
+    _didFocusComments = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _commentsKey.currentContext;
+      if (ctx != null) {
+        Scrollable.ensureVisible(ctx,
+            duration: const Duration(milliseconds: 350), curve: Curves.easeOut);
+      }
+    });
   }
 
   Future<void> _load() async {
@@ -103,6 +130,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
         _comments = comments;
         _loading = false;
       });
+      _maybeFocusComments();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -176,6 +204,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                 final post = _post!;
                 final comments = _comments;
                 return ListView(
+                  controller: _scroll,
                   padding: const EdgeInsets.only(bottom: 12),
                   children: [
                     _postHeader(post),
@@ -219,6 +248,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                     _actions(post, comments.length),
                     const SizedBox(height: 8),
                     Padding(
+                      key: _commentsKey,
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
                       child: Text(
                         comments.isEmpty
