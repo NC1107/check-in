@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +11,7 @@ import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
 import '../../widgets/auth_image.dart';
 import '../settings/appearance_screen.dart';
+import 'photo_crop_screen.dart';
 
 /// Bottom sheet to edit the signed-in user's display name and photo on one group
 /// ([groupId], null = the current group - identity is per-server). Pops the updated
@@ -29,7 +30,7 @@ class _EditProfileSheetState extends ConsumerState<EditProfileSheet> {
   late final _name = TextEditingController(text: widget.user.name);
   late final _firstName = TextEditingController(text: widget.user.firstName);
   late final _lastName = TextEditingController(text: widget.user.lastName);
-  XFile? _photo;
+  Uint8List? _photoBytes;
   bool _busy = false;
   String? _error;
 
@@ -43,7 +44,11 @@ class _EditProfileSheetState extends ConsumerState<EditProfileSheet> {
 
   Future<void> _pickPhoto() async {
     final x = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 85);
-    if (x != null && mounted) setState(() => _photo = x);
+    if (x == null || !mounted) return;
+    final bytes = await x.readAsBytes();
+    if (!mounted) return;
+    final cropped = await PhotoCropScreen.crop(context, bytes);
+    if (cropped != null && mounted) setState(() => _photoBytes = cropped);
   }
 
   Future<void> _save() async {
@@ -67,8 +72,8 @@ class _EditProfileSheetState extends ConsumerState<EditProfileSheet> {
       if (nameChanged) {
         updated = await api.updateProfile(name: name, firstName: first, lastName: last);
       }
-      if (_photo != null) {
-        final mediaId = await api.uploadImage(_photo!.path);
+      if (_photoBytes != null) {
+        final mediaId = await api.uploadImageBytes(_photoBytes!, filename: 'profile.png');
         updated = await api.setProfilePhoto(mediaId);
       }
       if (mounted) Navigator.of(context).pop(updated);
@@ -111,8 +116,8 @@ class _EditProfileSheetState extends ConsumerState<EditProfileSheet> {
                       child: SizedBox(
                         width: 96,
                         height: 96,
-                        child: _photo != null
-                            ? Image.file(File(_photo!.path), fit: BoxFit.cover)
+                        child: _photoBytes != null
+                            ? Image.memory(_photoBytes!, fit: BoxFit.cover)
                             : (widget.user.profileMediaId != null
                                 ? AuthImage(
                                     mediaId: widget.user.profileMediaId!, groupId: widget.groupId)

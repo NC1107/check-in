@@ -69,4 +69,20 @@ void main() {
     expect(birthdayReminderTitle('Alice', null), "It's Alice's birthday! 🎂");
     expect(birthdayReminderTitle('Alice', 'Alpha Crew'), "It's Alice's birthday! 🎂 - Alpha Crew");
   });
+
+  test('early reminder title reads naturally and carries the group only when given', () {
+    expect(birthdayEarlyReminderTitle('Alice', 1, null), "Alice's birthday is tomorrow 🎂");
+    expect(birthdayEarlyReminderTitle('Alice', 7, null), "Alice's birthday is in 7 days 🎂");
+    expect(birthdayEarlyReminderTitle('Alice', 3, 'Alpha Crew'),
+        "Alice's birthday is in 3 days 🎂 - Alpha Crew");
+  });
+
+  test('the early reminder gets a distinct, stable id from the day-of reminder', () {
+    final dayOf = birthdayNotificationId('alpha', 7);
+    final early = birthdayNotificationId('alpha', 7, early: true);
+    expect(early, isNot(dayOf));
+    expect(early, birthdayNotificationId('alpha', 7, early: true)); // stable
+    expect(dayOf, greaterThanOrEqualTo(0)); // 31-bit positive
+    expect(early, greaterThanOrEqualTo(0));
+  });
 }

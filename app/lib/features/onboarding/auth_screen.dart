@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:dio/dio.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -17,6 +15,7 @@ import '../../theme/accent.dart';
 import '../../theme/accent_picker.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
+import '../profile/photo_crop_screen.dart';
 import 'invite_links.dart';
 import 'phone_field.dart';
 import 'reset_password_screen.dart';
@@ -71,7 +70,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   final _displayName = TextEditingController();
   final _password = TextEditingController();
   DateTime? _birthday;
-  XFile? _photo;
+  Uint8List? _photoBytes;
 
   bool _busy = false;
   String? _error; // general / login error, shown at the bottom
@@ -365,10 +364,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       );
       // Now that we have a token, upload the photo and attach it. Best-effort: the account
       // already exists, so a photo failure shouldn't block finishing signup.
-      if (_photo != null) {
+      if (_photoBytes != null) {
         try {
           final authed = ApiClient(baseUrl: _connectedUrl ?? '', token: res.token);
-          final mediaId = await authed.uploadImage(_photo!.path);
+          final mediaId = await authed.uploadImageBytes(_photoBytes!, filename: 'profile.png');
           final updatedUser = await authed.setProfilePhoto(mediaId);
           res = AuthResult(token: res.token, user: updatedUser);
         } catch (_) {
@@ -434,7 +433,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   Future<void> _pickPhoto() async {
     final x = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 85);
-    if (x != null && mounted) setState(() => _photo = x);
+    if (x == null || !mounted) return;
+    final bytes = await x.readAsBytes();
+    if (!mounted) return;
+    final cropped = await PhotoCropScreen.crop(context, bytes);
+    if (cropped != null && mounted) setState(() => _photoBytes = cropped);
   }
 
   Future<void> _pickBirthday() async {
@@ -694,10 +697,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
               height: 104,
               child: Stack(
                 children: [
-                  if (_photo != null)
+                  if (_photoBytes != null)
                     ClipOval(
-                      child: Image.file(File(_photo!.path),
-                          width: 104, height: 104, fit: BoxFit.cover),
+                      child: Image.memory(_photoBytes!, width: 104, height: 104, fit: BoxFit.cover),
                     )
                   else
                     Container(

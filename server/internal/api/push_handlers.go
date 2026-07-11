@@ -48,17 +48,18 @@ func (s *Server) handleUnregisterDevice(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleGetNotificationPrefs(w http.ResponseWriter, r *http.Request) {
-	posts, replies, err := s.db.NotificationPrefs(r.Context(), userFrom(r).ID)
+	posts, replies, likes, err := s.db.NotificationPrefs(r.Context(), userFrom(r).ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"posts": posts, "replies": replies})
+	writeJSON(w, http.StatusOK, map[string]bool{"posts": posts, "replies": replies, "likes": likes})
 }
 
 type notifyPrefsReq struct {
 	Posts   *bool `json:"posts"`
 	Replies *bool `json:"replies"`
+	Likes   *bool `json:"likes"`
 }
 
 // handleUpdateNotificationPrefs sets the caller's opt-out toggles. Omitted fields keep
@@ -69,7 +70,7 @@ func (s *Server) handleUpdateNotificationPrefs(w http.ResponseWriter, r *http.Re
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	posts, replies, err := s.db.NotificationPrefs(r.Context(), userFrom(r).ID)
+	posts, replies, likes, err := s.db.NotificationPrefs(r.Context(), userFrom(r).ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
@@ -80,11 +81,14 @@ func (s *Server) handleUpdateNotificationPrefs(w http.ResponseWriter, r *http.Re
 	if req.Replies != nil {
 		replies = *req.Replies
 	}
-	if err := s.db.SetNotificationPrefs(r.Context(), userFrom(r).ID, posts, replies); err != nil {
+	if req.Likes != nil {
+		likes = *req.Likes
+	}
+	if err := s.db.SetNotificationPrefs(r.Context(), userFrom(r).ID, posts, replies, likes); err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"posts": posts, "replies": replies})
+	writeJSON(w, http.StatusOK, map[string]bool{"posts": posts, "replies": replies, "likes": likes})
 }
 
 // notifyPost pushes a new-post notification to everyone opted in except the author. It
@@ -129,6 +133,26 @@ func (s *Server) notifyReply(commenterName string, postID, commenterID int64) {
 	}
 	s.push.Send(ctx, tokens, s.serverName(ctx), commenterName+" commented on your check-in",
 		s.pushData("comment", postID))
+}
+
+// notifyLike pushes a like notification to the post's author.
+func (s *Server) notifyLike(likerName string, postID, likerID int64) {
+	if s.push == nil {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("notifyLike: recovered: %v", rec)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tokens, err := s.db.TokensForLike(ctx, postID, likerID)
+	if err != nil || len(tokens) == 0 {
+		return
+	}
+	s.push.Send(ctx, tokens, s.serverName(ctx), likerName+" liked your check-in",
+		s.pushData("like", postID))
 }
 
 // pushData builds the data payload for a push message. Besides the post reference it

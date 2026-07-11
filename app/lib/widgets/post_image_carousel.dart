@@ -14,13 +14,30 @@ const _defaultAspect = 4 / 3; // used while the image dimensions are still loadi
 /// Renders a post's image(s), sizing itself. A single image adopts its own (clamped)
 /// aspect ratio so portrait photos aren't center-cropped; multiple images become a
 /// swipeable carousel with page dots and a counter pill at a fixed 4:3.
+///
+/// Tap and double-tap are handled here (not by the caller) so the currently-shown media
+/// id is known: a single tap reports the visible image via [onImageTap] (e.g. to open a
+/// full-screen viewer), a double-tap fires [onDoubleTap] (e.g. like). Centralising both in
+/// one detector avoids the gesture-arena conflicts of nesting tap handlers.
 class PostImageCarousel extends StatefulWidget {
-  const PostImageCarousel({super.key, required this.mediaIds, this.groupId});
+  const PostImageCarousel({
+    super.key,
+    required this.mediaIds,
+    this.groupId,
+    this.onImageTap,
+    this.onDoubleTap,
+  });
 
   final List<int> mediaIds;
 
   /// The connected group the media ids belong to (null = the current group).
   final String? groupId;
+
+  /// Called with the currently-visible media id when the photo is tapped.
+  final void Function(int mediaId)? onImageTap;
+
+  /// Called when the photo is double-tapped (e.g. to like).
+  final VoidCallback? onDoubleTap;
 
   @override
   State<PostImageCarousel> createState() => _PostImageCarouselState();
@@ -40,9 +57,21 @@ class _PostImageCarouselState extends State<PostImageCarousel> {
   Widget build(BuildContext context) {
     final ids = widget.mediaIds;
     if (ids.isEmpty) return const SizedBox.shrink();
-    if (ids.length == 1) {
-      return _AdaptiveImage(mediaId: ids.first, groupId: widget.groupId);
-    }
+    final content = ids.length == 1 ? _single(ids) : _carousel(ids);
+    if (widget.onImageTap == null && widget.onDoubleTap == null) return content;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: widget.onImageTap == null
+          ? null
+          : () => widget.onImageTap!(ids[_page.clamp(0, ids.length - 1)]),
+      onDoubleTap: widget.onDoubleTap,
+      child: content,
+    );
+  }
+
+  Widget _single(List<int> ids) => _AdaptiveImage(mediaId: ids.first, groupId: widget.groupId);
+
+  Widget _carousel(List<int> ids) {
     return AspectRatio(
       aspectRatio: _defaultAspect,
       child: Stack(

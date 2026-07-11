@@ -7,8 +7,11 @@ import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/photo_viewer.dart';
 import '../../widgets/post_image_carousel.dart';
+import '../../widgets/tagged_people_line.dart';
 import '../../widgets/user_avatar.dart';
+import '../profile/profile_screen.dart';
 
 String _relativeTime(DateTime dt) {
   final diff = DateTime.now().difference(dt);
@@ -203,8 +206,12 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                           borderRadius: BorderRadius.circular(14),
                           child: AspectRatio(
                             aspectRatio: 4 / 3,
-                            child:
-                                PostImageCarousel(mediaIds: post.images, groupId: widget.groupId),
+                            child: PostImageCarousel(
+                              mediaIds: post.images,
+                              groupId: widget.groupId,
+                              onImageTap: (mediaId) => PhotoViewerScreen.open(context,
+                                  mediaId: mediaId, groupId: widget.groupId),
+                            ),
                           ),
                         ),
                       ),
@@ -293,32 +300,48 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     );
   }
 
+  /// Opens a member's profile in this post's group (no-op for a missing id).
+  void _openProfile(int userId) {
+    if (userId <= 0) return;
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => ProfileScreen(userId: userId, groupId: widget.groupId),
+    ));
+  }
+
   Widget _postHeader(Post post) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
       child: Row(
         children: [
-          UserAvatar(
-              name: post.authorName,
-              mediaId: post.authorPhotoId,
-              size: 42,
-              colorSeed: post.authorId,
-              groupId: widget.groupId),
+          GestureDetector(
+            onTap: () => _openProfile(post.authorId),
+            child: UserAvatar(
+                name: post.authorName,
+                mediaId: post.authorPhotoId,
+                size: 42,
+                colorSeed: post.authorId,
+                groupId: widget.groupId),
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(post.authorName,
-                    style: const TextStyle(
-                        color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 15)),
+                GestureDetector(
+                  onTap: () => _openProfile(post.authorId),
+                  behavior: HitTestBehavior.opaque,
+                  child: Text(post.authorName,
+                      style: const TextStyle(
+                          color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 15)),
+                ),
                 if (post.people.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 1),
-                    child: Text(post.peopleLabel,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: kFgMuted, fontSize: 12.5)),
+                    child: TaggedPeopleLine(
+                      people: post.people,
+                      groupId: widget.groupId,
+                      style: const TextStyle(color: kFgMuted, fontSize: 12.5),
+                    ),
                   ),
                 const SizedBox(height: 2),
                 Tooltip(
@@ -350,12 +373,15 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          UserAvatar(
-              name: c.authorName,
-              mediaId: c.authorPhotoId,
-              size: 32,
-              colorSeed: c.id,
-              groupId: widget.groupId),
+          GestureDetector(
+            onTap: () => _openProfile(c.authorId),
+            child: UserAvatar(
+                name: c.authorName,
+                mediaId: c.authorPhotoId,
+                size: 32,
+                colorSeed: c.id,
+                groupId: widget.groupId),
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -364,11 +390,15 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                 Row(
                   children: [
                     Flexible(
-                      child: Text(c.authorName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 13)),
+                      child: GestureDetector(
+                        onTap: () => _openProfile(c.authorId),
+                        behavior: HitTestBehavior.opaque,
+                        child: Text(c.authorName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 13)),
+                      ),
                     ),
                     const SizedBox(width: 8),
                     Tooltip(

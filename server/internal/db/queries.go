@@ -13,8 +13,8 @@ import (
 // commentPreviewExpr is a SELECT-list fragment returning the 2 most recent comments on
 // post p as a JSON array (oldest-of-the-two first), for inline feed previews.
 const commentPreviewExpr = `, COALESCE((
-		SELECT json_agg(json_build_object('authorName', t.name, 'body', t.body) ORDER BY t.created_at)
-		FROM (SELECT u2.name, c.body, c.created_at FROM comments c JOIN users u2 ON u2.id = c.user_id
+		SELECT json_agg(json_build_object('authorId', t.user_id, 'authorName', t.name, 'body', t.body) ORDER BY t.created_at)
+		FROM (SELECT c.user_id, u2.name, c.body, c.created_at FROM comments c JOIN users u2 ON u2.id = c.user_id
 		      WHERE c.post_id = p.id
 		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)
 		      ORDER BY c.created_at DESC LIMIT 2) t), '[]'::json)`
@@ -483,17 +483,18 @@ func (d *DB) DeleteDeviceToken(ctx context.Context, token string) error {
 }
 
 // NotificationPrefs reports a user's opt-out toggles.
-func (d *DB) NotificationPrefs(ctx context.Context, userID int64) (posts, replies bool, err error) {
+func (d *DB) NotificationPrefs(ctx context.Context, userID int64) (posts, replies, likes bool, err error) {
 	err = d.Pool.QueryRow(ctx,
-		`SELECT notify_posts, notify_replies FROM users WHERE id = $1`, userID,
-	).Scan(&posts, &replies)
-	return posts, replies, err
+		`SELECT notify_posts, notify_replies, notify_likes FROM users WHERE id = $1`, userID,
+	).Scan(&posts, &replies, &likes)
+	return posts, replies, likes, err
 }
 
 // SetNotificationPrefs updates a user's notification toggles.
-func (d *DB) SetNotificationPrefs(ctx context.Context, userID int64, posts, replies bool) error {
+func (d *DB) SetNotificationPrefs(ctx context.Context, userID int64, posts, replies, likes bool) error {
 	_, err := d.Pool.Exec(ctx,
-		`UPDATE users SET notify_posts = $2, notify_replies = $3 WHERE id = $1`, userID, posts, replies)
+		`UPDATE users SET notify_posts = $2, notify_replies = $3, notify_likes = $4 WHERE id = $1`,
+		userID, posts, replies, likes)
 	return err
 }
 
@@ -515,6 +516,17 @@ func (d *DB) TokensForReply(ctx context.Context, postID, commenterID int64) ([]s
 		JOIN users u ON u.id = p.author_id
 		WHERE dt.user_id = p.author_id AND u.status = 'active'
 		  AND u.notify_replies = TRUE AND p.author_id <> $2`, postID, commenterID)
+}
+
+// TokensForLike returns the post author's device tokens when they want like
+// notifications and aren't the one who just liked.
+func (d *DB) TokensForLike(ctx context.Context, postID, likerID int64) ([]string, error) {
+	return d.scanTokens(ctx, `
+		SELECT dt.token FROM device_tokens dt
+		JOIN posts p ON p.id = $1
+		JOIN users u ON u.id = p.author_id
+		WHERE dt.user_id = p.author_id AND u.status = 'active'
+		  AND u.notify_likes = TRUE AND p.author_id <> $2`, postID, likerID)
 }
 
 func (d *DB) scanTokens(ctx context.Context, sql string, args ...any) ([]string, error) {
@@ -993,12 +1005,13 @@ func (d *DB) PostVisible(ctx context.Context, postID int64) (bool, error) {
 	return ok, err
 }
 
-// LikePost adds a like, ignoring duplicates.
-func (d *DB) LikePost(ctx context.Context, postID, userID int64) error {
-	_, err := d.Pool.Exec(ctx,
+// LikePost adds a like, ignoring duplicates. Returns whether a new like was actually
+// inserted (false when the post was already liked) so callers can skip a redundant push.
+func (d *DB) LikePost(ctx context.Context, postID, userID int64) (bool, error) {
+	tag, err := d.Pool.Exec(ctx,
 		`INSERT INTO likes (post_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 		postID, userID)
-	return err
+	return tag.RowsAffected() > 0, err
 }
 
 // UnlikePost removes a like.

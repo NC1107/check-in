@@ -121,20 +121,33 @@ class ApiClient {
       _dio.delete('/api/me/devices', data: {'token': token});
 
   /// notificationPrefs returns the per-account push opt-outs.
-  Future<({bool posts, bool replies})> notificationPrefs() async {
+  Future<({bool posts, bool replies, bool likes})> notificationPrefs() async {
     final r = await _dio.get('/api/me/notifications');
     final j = r.data as Map<String, dynamic>;
-    return (posts: j['posts'] as bool? ?? true, replies: j['replies'] as bool? ?? true);
+    return (
+      posts: j['posts'] as bool? ?? true,
+      replies: j['replies'] as bool? ?? true,
+      likes: j['likes'] as bool? ?? true,
+    );
   }
 
   /// updateNotificationPrefs toggles the opt-outs. Omitted fields keep their value.
-  Future<({bool posts, bool replies})> updateNotificationPrefs({bool? posts, bool? replies}) async {
+  Future<({bool posts, bool replies, bool likes})> updateNotificationPrefs({
+    bool? posts,
+    bool? replies,
+    bool? likes,
+  }) async {
     final r = await _dio.patch('/api/me/notifications', data: {
       if (posts != null) 'posts': posts,
       if (replies != null) 'replies': replies,
+      if (likes != null) 'likes': likes,
     });
     final j = r.data as Map<String, dynamic>;
-    return (posts: j['posts'] as bool? ?? true, replies: j['replies'] as bool? ?? true);
+    return (
+      posts: j['posts'] as bool? ?? true,
+      replies: j['replies'] as bool? ?? true,
+      likes: j['likes'] as bool? ?? true,
+    );
   }
 
   /// setProfilePhoto attaches an already-uploaded media item as the current user's
@@ -287,9 +300,15 @@ class ApiClient {
   /// transcode) and returns the new media id. Used so the server never has to decode a
   /// full-resolution photo or an iPhone HEIC it can't read.
   Future<int> uploadImageBytes(List<int> bytes, {String filename = 'upload.jpg'}) async {
+    final ext = filename.split('.').last.toLowerCase();
+    final contentType = switch (ext) {
+      'png' => MediaType('image', 'png'),
+      'gif' => MediaType('image', 'gif'),
+      'webp' => MediaType('image', 'webp'),
+      _ => MediaType('image', 'jpeg'),
+    };
     final form = FormData.fromMap({
-      'file': MultipartFile.fromBytes(bytes,
-          filename: filename, contentType: MediaType('image', 'jpeg')),
+      'file': MultipartFile.fromBytes(bytes, filename: filename, contentType: contentType),
     });
     final r = await _dio.post('/api/media', data: form);
     return (r.data as Map<String, dynamic>)['id'] as int;

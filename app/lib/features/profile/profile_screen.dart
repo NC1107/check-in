@@ -6,6 +6,7 @@ import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/photo_viewer.dart';
 import '../../widgets/skeletons.dart';
 import '../../widgets/user_avatar.dart';
 import '../feed/post_card.dart';
@@ -157,16 +158,23 @@ class _MyProfileScreenState extends ConsumerState<MyProfileScreen> {
   }
 
   Widget _header(User user, int count, bool isHost) {
+    final groupId = ref.read(multiSessionProvider).current?.id;
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
       child: Column(
         children: [
-          UserAvatar(
-              name: user.name,
-              mediaId: user.profileMediaId,
-              size: 88,
-              colorSeed: user.id,
-              groupId: ref.read(multiSessionProvider).current?.id),
+          GestureDetector(
+            onTap: user.profileMediaId == null
+                ? null
+                : () => PhotoViewerScreen.open(context,
+                    mediaId: user.profileMediaId!, groupId: groupId),
+            child: UserAvatar(
+                name: user.name,
+                mediaId: user.profileMediaId,
+                size: 88,
+                colorSeed: user.id,
+                groupId: groupId),
+          ),
           const SizedBox(height: 14),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -343,12 +351,18 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
       child: Column(
         children: [
-          UserAvatar(
-              name: user.name,
-              mediaId: user.profileMediaId,
-              size: 88,
-              colorSeed: user.id,
-              groupId: widget.groupId),
+          GestureDetector(
+            onTap: user.profileMediaId == null
+                ? null
+                : () => PhotoViewerScreen.open(context,
+                    mediaId: user.profileMediaId!, groupId: widget.groupId),
+            child: UserAvatar(
+                name: user.name,
+                mediaId: user.profileMediaId,
+                size: 88,
+                colorSeed: user.id,
+                groupId: widget.groupId),
+          ),
           const SizedBox(height: 14),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
