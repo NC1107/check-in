@@ -330,7 +330,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         ];
         if (more.isEmpty) break;
         final known = all.map((p) => p.id).toSet();
+        final lenBefore = all.length;
         all.addAll(more.where((p) => known.add(p.id)));
+        // A page that added nothing new means we've caught up - stop rather than re-fetch
+        // the same cursor.
+        if (all.length == lenBefore) break;
         cursor = all.last;
       }
     }

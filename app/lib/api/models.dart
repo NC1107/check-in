@@ -33,7 +33,8 @@ class User {
     this.firstName = '',
     this.lastName = '',
     this.profileMediaId,
-    this.birthday,
+    this.birthdayMonth = 0,
+    this.birthdayDay = 0,
   });
 
   final int id;
@@ -44,9 +45,10 @@ class User {
   final bool isAdmin;
   final int? profileMediaId;
 
-  /// The member's birthday. Only the month and day are shown (see [birthdayLabel]); the
-  /// year is never surfaced in the UI.
-  final DateTime? birthday;
+  /// The member's birthday month and day (1-based; 0 = unknown). The year is never sent by
+  /// the server, so a member's age can't be derived - see [birthdayLabel].
+  final int birthdayMonth;
+  final int birthdayDay;
 
   factory User.fromJson(Map<String, dynamic> j) => User(
         id: j['id'] as int,
@@ -56,17 +58,15 @@ class User {
         phone: j['phone'] as String? ?? '',
         isAdmin: j['isAdmin'] as bool? ?? false,
         profileMediaId: j['profileMediaId'] as int?,
-        birthday: DateTime.tryParse(j['birthday'] as String? ?? ''),
+        birthdayMonth: (j['birthdayMonth'] as num?)?.toInt() ?? 0,
+        birthdayDay: (j['birthdayDay'] as num?)?.toInt() ?? 0,
       );
 
-  /// The birthday as "March 14" (month and day only), or '' when unknown. The stored value
-  /// is a UTC midnight, so we read its UTC calendar fields to avoid a timezone shift moving
-  /// the date to the day before.
+  /// The birthday as "March 14" (month and day only), or '' when unknown.
   String get birthdayLabel {
-    final b = birthday;
-    if (b == null) return '';
-    final u = b.toUtc();
-    return DateFormat.MMMMd().format(DateTime(u.year, u.month, u.day));
+    if (birthdayMonth < 1 || birthdayDay < 1) return '';
+    // 2000 is a leap year, so Feb 29 formats fine; only the month/day are used.
+    return DateFormat.MMMMd().format(DateTime(2000, birthdayMonth, birthdayDay));
   }
 }
 
