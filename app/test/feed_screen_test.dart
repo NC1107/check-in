@@ -120,4 +120,26 @@ void main() {
     expect(find.text('Download 3 photos?'), findsNothing);
     expect(find.byIcon(Icons.download_rounded), findsOneWidget);
   });
+
+  testWidgets('active filter chips are opaque, so they stay legible over scrolling photos',
+      (tester) async {
+    final now = DateTime.now();
+    await pump(tester, [post(1, now, 'a post')]);
+
+    await tester.tap(find.byIcon(Icons.filter_list));
+    await tester.pumpAndSettle();
+    await tester.tap(find.descendant(of: find.byType(BottomSheet), matching: find.text('Today')));
+    await tester.pump();
+    await tester.tap(find.text('Show results'));
+    await tester.pumpAndSettle();
+
+    // The only close icon on the filtered feed is the chip's remove affordance.
+    expect(find.byIcon(Icons.close), findsOneWidget);
+    final box = tester.widget<Container>(
+      find.ancestor(of: find.byIcon(Icons.close), matching: find.byType(Container)).first,
+    );
+    final fill = (box.decoration! as BoxDecoration).color!;
+    // A translucent tint disappears the moment a photo scrolls underneath it.
+    expect(fill.a, 1.0, reason: 'filter chip fill must be fully opaque');
+  });
 }
