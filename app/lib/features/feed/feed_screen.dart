@@ -459,22 +459,24 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       return;
     }
     if (!mounted) return;
+    // Collection is done - while the dialog waits for the user, nothing is "working".
+    setState(() => _downloading = false);
     if (items.isEmpty) {
-      setState(() => _downloading = false);
       _snack('No photos match this filter.');
       return;
     }
-    final confirmed = await _showDownloadConfirm(items.length);
-    if (confirmed != true) {
-      if (mounted) setState(() => _downloading = false);
-      return;
-    }
+    if (await _showDownloadConfirm(items.length) != true) return;
     await _saveItems(items);
   }
 
   /// Writes the gathered photos to the device gallery, reporting progress and the outcome.
   Future<void> _saveItems(List<({String? groupId, int mediaId})> items) async {
-    if (mounted) setState(() => _dlTotal = items.length);
+    if (!mounted) return;
+    setState(() {
+      _downloading = true;
+      _dlDone = 0;
+      _dlTotal = items.length;
+    });
     HapticFeedback.mediumImpact();
     var saved = 0;
     var failed = 0;
