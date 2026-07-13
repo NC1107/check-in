@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:gal/gal.dart';
 
 import '../../api/models.dart';
 import '../../state/app_state.dart';
@@ -167,6 +168,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   bool _loadingMore = false;
   bool _reachedEnd = false;
 
+  // Bulk "download all photos matching the current filter" progress.
+  bool _downloading = false;
+  int _dlDone = 0;
+  int _dlTotal = 0;
+
   bool get _hasFilter => _people.isNotEmpty || _datePreset != null || _location != null;
 
   @override
@@ -291,6 +297,89 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                 p.people.any((t) => _people.contains(_directory.keyFor(p.groupId, t.id)))))
         .where((p) => _withinPreset(p.createdAt))
         .toList();
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  /// Gathers every post matching the active filter for a bulk download. In single-group
+  /// view it pages the feed to the end (bounded, and stopping once a date filter's window
+  /// is passed) so the download isn't limited to what's been scrolled; the merged view has
+  /// no cross-group cursor yet, so it uses the loaded posts.
+  Future<List<Post>> _collectFilteredForDownload() async {
+    final all = [..._allPosts];
+    final account = ref.read(multiSessionProvider).soleShown;
+    if (account != null && !_reachedEnd && all.isNotEmpty) {
+      final api = ref.read(apiForGroupProvider(account.id));
+      var cursor = all.last;
+      for (var page = 0; page < 40; page++) {
+        // Posts are newest-first, so once the cursor predates the date window, so does
+        // everything older - stop paging.
+        if (_datePreset != null && !_withinPreset(cursor.createdAt)) break;
+        final more = [
+          for (final p in await api.feed(
+            location: _location,
+            before: cursor.createdAt,
+            beforeId: cursor.id,
+          ))
+            p.withGroup(account.id)
+        ];
+        if (more.isEmpty) break;
+        final known = all.map((p) => p.id).toSet();
+        all.addAll(more.where((p) => known.add(p.id)));
+        cursor = all.last;
+      }
+    }
+    return _applyFilter(all);
+  }
+
+  /// Downloads every photo in the filtered set to the device gallery, with progress.
+  Future<void> _downloadAll() async {
+    setState(() {
+      _downloading = true;
+      _dlDone = 0;
+      _dlTotal = 0;
+    });
+    HapticFeedback.mediumImpact();
+    try {
+      final posts = await _collectFilteredForDownload();
+      final items = [
+        for (final p in posts)
+          for (final mediaId in p.images) (groupId: p.groupId, mediaId: mediaId)
+      ];
+      if (items.isEmpty) {
+        _snack('No photos match this filter.');
+        return;
+      }
+      if (mounted) setState(() => _dlTotal = items.length);
+      var saved = 0;
+      var failed = 0;
+      for (final it in items) {
+        try {
+          final bytes = await ref.read(contentApiProvider(it.groupId)).downloadMedia(it.mediaId);
+          await Gal.putImageBytes(bytes);
+          saved++;
+        } on GalException {
+          rethrow; // permission denied - abort the whole run
+        } catch (_) {
+          failed++;
+        }
+        if (mounted) setState(() => _dlDone++);
+      }
+      _snack(failed == 0
+          ? 'Saved $saved ${saved == 1 ? 'photo' : 'photos'} to your photos'
+          : 'Saved $saved of ${items.length} - $failed could not be saved');
+    } on GalException {
+      _snack('Allow photo access to save these.');
+    } catch (_) {
+      _snack("Couldn't download - check your connection and try again.");
+    } finally {
+      if (mounted) setState(() => _downloading = false);
+    }
   }
 
   /// People present in the loaded feed - authors plus anyone tagged in a post - for the
@@ -646,12 +735,55 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
           setState(() => _location = null);
           ref.read(feedLocationProvider.notifier).state = null;
         }),
+      _downloadAllButton(),
     ];
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
       child: Align(
         alignment: Alignment.centerLeft,
         child: Wrap(spacing: 8, runSpacing: 8, children: chips),
+      ),
+    );
+  }
+
+  /// A filled action pill (distinct from the removable filter chips) that saves every photo
+  /// in the filtered set to the device gallery.
+  Widget _downloadAllButton() {
+    final label = _downloading
+        ? (_dlTotal > 0 ? 'Saving $_dlDone/$_dlTotal' : 'Preparing...')
+        : 'Download photos';
+    return Semantics(
+      button: true,
+      label: 'Download all photos matching this filter',
+      child: GestureDetector(
+        onTap: _downloading ? null : _downloadAll,
+        behavior: HitTestBehavior.opaque,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(11, 5, 11, 5),
+          decoration: BoxDecoration(
+            color: _downloading ? context.accentLight : context.accent,
+            borderRadius: BorderRadius.circular(9999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (_downloading)
+                SizedBox(
+                  width: 13,
+                  height: 13,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: context.accent),
+                )
+              else
+                const Icon(Icons.download_rounded, size: 15, color: Colors.white),
+              const SizedBox(width: 6),
+              Text(label,
+                  style: TextStyle(
+                      color: _downloading ? context.accent : Colors.white,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12)),
+            ],
+          ),
+        ),
       ),
     );
   }
