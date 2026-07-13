@@ -15,8 +15,8 @@ import 'global_search_delegate.dart';
 import 'post_card.dart';
 
 /// Bumped when the user taps the Home tab while already on the feed; the feed listens and
-/// animates back to the top. (Tapping the iOS status bar scrolls to top natively, since the
-/// feed list is the primary scroll view.)
+/// animates back to the top. Tapping the status-bar strip does the same (see the tap-strip
+/// in build) - we handle it explicitly rather than relying on iOS's native status-bar tap.
 final feedScrollToTopProvider = StateProvider<int>((ref) => 0);
 
 // Theme tokens (centralized in theme/tokens.dart).
@@ -592,117 +592,136 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     final allView = session.isAllView;
     return Scaffold(
       backgroundColor: _bgMain,
-      body: SafeArea(
-        child: Stack(
-          children: [
-            PrimaryScrollController(
-              controller: _scrollCtrl,
-              child: RefreshIndicator(
-                onRefresh: _refresh,
-                color: context.accent,
-                backgroundColor: _bgSurface,
-                child: ref.watch(feedProvider).when(
-                      loading: () => const FeedSkeleton(),
-                      error: (e, _) => ListView(primary: false, children: [
-                        const SizedBox(height: 120),
-                        Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.cloud_off_outlined, size: 42, color: _fgMuted),
-                              const SizedBox(height: 12),
-                              const Text('Could not load the feed.',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(color: _fgSecondary, fontSize: 15)),
-                              const SizedBox(height: 10),
-                              TextButton(onPressed: _refresh, child: const Text('Try again')),
-                            ],
-                          ),
-                        ),
-                      ]),
-                      data: (result) {
-                        _allPosts = [...result.posts, ..._morePosts];
-                        final posts = _applyFilter(_allPosts);
-                        if (_allPosts.isEmpty) {
-                          final s = ref.read(multiSessionProvider);
-                          if (s.nothingShown) {
-                            // Every group is toggled off - say so instead of "no check-ins".
-                            return _emptyState(
-                              icon: Icons.public_off,
-                              title: 'No groups shown',
-                              subtitle: 'Choose which groups appear in Filters.',
+      body: Stack(
+        children: [
+          SafeArea(
+            child: Stack(
+              children: [
+                PrimaryScrollController(
+                  controller: _scrollCtrl,
+                  child: RefreshIndicator(
+                    onRefresh: _refresh,
+                    color: context.accent,
+                    backgroundColor: _bgSurface,
+                    child: ref.watch(feedProvider).when(
+                          loading: () => const FeedSkeleton(),
+                          error: (e, _) => ListView(primary: false, children: [
+                            const SizedBox(height: 120),
+                            Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.cloud_off_outlined, size: 42, color: _fgMuted),
+                                  const SizedBox(height: 12),
+                                  const Text('Could not load the feed.',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(color: _fgSecondary, fontSize: 15)),
+                                  const SizedBox(height: 10),
+                                  TextButton(onPressed: _refresh, child: const Text('Try again')),
+                                ],
+                              ),
+                            ),
+                          ]),
+                          data: (result) {
+                            _allPosts = [...result.posts, ..._morePosts];
+                            final posts = _applyFilter(_allPosts);
+                            if (_allPosts.isEmpty) {
+                              final s = ref.read(multiSessionProvider);
+                              if (s.nothingShown) {
+                                // Every group is toggled off - say so instead of "no check-ins".
+                                return _emptyState(
+                                  icon: Icons.public_off,
+                                  title: 'No groups shown',
+                                  subtitle: 'Choose which groups appear in Filters.',
+                                );
+                              }
+                              final shown = s.shownGroups;
+                              final where = shown.length > 1
+                                  ? ' in ${[for (final g in shown) g.displayName].join(', ')}'
+                                  : '';
+                              return _emptyState(
+                                icon: Icons.photo_camera_outlined,
+                                title: 'No check-ins yet$where',
+                                subtitle: 'Tap + to share an update.',
+                              );
+                            }
+                            final items = _buildItems(
+                                posts, [for (final g in result.unreachable) g.displayName]);
+                            // Trailing spinner row while the next page loads.
+                            final showSpinner = _loadingMore && posts.isNotEmpty;
+                            return ListView.builder(
+                              // Primary so the pagination controller (_scrollCtrl) attaches
+                              // here; that also drives _scrollToTop() for the Home-tap and
+                              // the status-bar tap-strip.
+                              primary: true,
+                              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                              padding: EdgeInsets.only(top: _hasFilter ? 116 : 72, bottom: 24),
+                              itemCount: posts.isEmpty ? 1 : items.length + (showSpinner ? 1 : 0),
+                              itemBuilder: (_, i) {
+                                if (posts.isEmpty) {
+                                  return const Padding(
+                                    padding: EdgeInsets.only(top: 60),
+                                    child: Center(
+                                      child: Text('No check-ins match your filters.',
+                                          style: TextStyle(color: _fgMuted)),
+                                    ),
+                                  );
+                                }
+                                if (i >= items.length) {
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 20),
+                                    child: Center(
+                                        child: CircularProgressIndicator(color: context.accent)),
+                                  );
+                                }
+                                return _buildItem(items[i], allView: allView);
+                              },
                             );
-                          }
-                          final shown = s.shownGroups;
-                          final where = shown.length > 1
-                              ? ' in ${[for (final g in shown) g.displayName].join(', ')}'
-                              : '';
-                          return _emptyState(
-                            icon: Icons.photo_camera_outlined,
-                            title: 'No check-ins yet$where',
-                            subtitle: 'Tap + to share an update.',
-                          );
-                        }
-                        final items =
-                            _buildItems(posts, [for (final g in result.unreachable) g.displayName]);
-                        // Trailing spinner row while the next page loads.
-                        final showSpinner = _loadingMore && posts.isNotEmpty;
-                        return ListView.builder(
-                          // Primary so the pagination controller attaches here and iOS
-                          // status-bar taps scroll it to the top.
-                          primary: true,
-                          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                          padding: EdgeInsets.only(top: _hasFilter ? 116 : 72, bottom: 24),
-                          itemCount: posts.isEmpty ? 1 : items.length + (showSpinner ? 1 : 0),
-                          itemBuilder: (_, i) {
-                            if (posts.isEmpty) {
-                              return const Padding(
-                                padding: EdgeInsets.only(top: 60),
-                                child: Center(
-                                  child: Text('No check-ins match your filters.',
-                                      style: TextStyle(color: _fgMuted)),
-                                ),
-                              );
-                            }
-                            if (i >= items.length) {
-                              return Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 20),
-                                child:
-                                    Center(child: CircularProgressIndicator(color: context.accent)),
-                              );
-                            }
-                            return _buildItem(items[i], allView: allView);
                           },
-                        );
-                      },
-                    ),
-              ),
-            ),
-            // Floating search bar + active filter chips - slide away on scroll down.
-            AnimatedSlide(
-              offset: _searchHidden ? const Offset(0, -2) : Offset.zero,
-              duration: const Duration(milliseconds: 280),
-              curve: const Cubic(0.2, 0.8, 0.2, 1.0),
-              child: AnimatedOpacity(
-                opacity: _searchHidden ? 0 : 1,
-                duration: const Duration(milliseconds: 200),
-                child: IgnorePointer(
-                  ignoring: _searchHidden,
-                  child: Column(
-                    children: [
-                      _SearchBar(
-                        onSearch: _openSearch,
-                        onFilter: _openFilter,
-                        filterActive: _hasFilter,
-                      ),
-                      if (_hasFilter) _activeChips(),
-                    ],
+                        ),
                   ),
                 ),
-              ),
+                // Floating search bar + active filter chips - slide away on scroll down.
+                AnimatedSlide(
+                  offset: _searchHidden ? const Offset(0, -2) : Offset.zero,
+                  duration: const Duration(milliseconds: 280),
+                  curve: const Cubic(0.2, 0.8, 0.2, 1.0),
+                  child: AnimatedOpacity(
+                    opacity: _searchHidden ? 0 : 1,
+                    duration: const Duration(milliseconds: 200),
+                    child: IgnorePointer(
+                      ignoring: _searchHidden,
+                      child: Column(
+                        children: [
+                          _SearchBar(
+                            onSearch: _openSearch,
+                            onFilter: _openFilter,
+                            filterActive: _hasFilter,
+                          ),
+                          if (_hasFilter) _activeChips(),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+          // Invisible strip over the status-bar inset. Tapping it jumps back to the top of
+          // the feed. iOS's native status-bar tap-to-top is unreliable here because the
+          // profile tab stays mounted in the IndexedStack (a second primary scroll view),
+          // so we handle the gesture ourselves.
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: MediaQuery.of(context).padding.top,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _scrollToTop,
+            ),
+          ),
+        ],
       ),
     );
   }
