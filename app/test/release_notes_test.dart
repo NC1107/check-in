@@ -20,6 +20,15 @@ void main() {
   });
 
   group('maybeShowWhatsNew', () {
+    // A phone-height surface: the sheet grows with the number of highlights, and the
+    // default 600px test window would push "Got it" below the fold.
+    void tallSurface(WidgetTester tester) {
+      tester.view.physicalSize = const Size(500, 1400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+    }
+
     Widget host() => MaterialApp(
           home: Scaffold(
             body: Builder(
@@ -34,6 +43,7 @@ void main() {
         );
 
     testWidgets('pops once after an update, then records the latest version', (tester) async {
+      tallSurface(tester);
       SharedPreferences.setMockInitialValues(
           {'whats_new_last_seen_version': '0.0-before-this-feature'});
       await tester.pumpWidget(host());
@@ -56,6 +66,7 @@ void main() {
     });
 
     testWidgets('stays silent on a fresh install but seeds the version', (tester) async {
+      tallSurface(tester);
       SharedPreferences.setMockInitialValues({});
       await tester.pumpWidget(host());
 

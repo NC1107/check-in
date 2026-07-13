@@ -19,8 +19,10 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
-    version: '1.1',
+    version: '1.2',
     highlights: [
+      'Get one daily summary of new check-ins instead of a notification for each - at a time you pick.',
+      "A 'You're all caught up' line shows where the check-ins you've already seen begin.",
       'Filter your feed by a custom date range - not just Today, this week, or this month.',
       'Download every photo matching a filter right from the search bar, with a quick confirm.',
       'Tap the top of the screen to jump back to the top of the feed.',
