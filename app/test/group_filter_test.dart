@@ -303,4 +303,65 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.state.hiddenGroupIds, isEmpty);
   });
+
+  testWidgets(
+      'DATE offers presets + a custom range; a preset filters the feed and reveals the '
+      'download button', (tester) async {
+    Post dated(int id, DateTime created, String body) => Post(
+          id: id,
+          authorId: 1,
+          authorName: 'Nick',
+          kind: 'text',
+          body: body,
+          createdAt: created,
+          likeCount: 0,
+          commentCount: 0,
+          likedByViewer: false,
+          groupId: 'alpha.invalid',
+        );
+    final now = DateTime.now();
+    await pump(
+      tester,
+      const MultiSession(groups: [alpha], restored: true),
+      posts: [
+        dated(2, now, 'today post'),
+        dated(1, now.subtract(const Duration(days: 40)), 'old post'),
+      ],
+    );
+
+    // Both posts show, and with no filter there is no bulk-download button.
+    expect(find.text('today post'), findsOneWidget);
+    expect(find.text('old post'), findsOneWidget);
+    expect(find.byIcon(Icons.download_rounded), findsNothing);
+
+    await openFilter(tester);
+    // Presets plus the new custom-range option (scoped to the sheet: the feed behind it
+    // renders a "Today" date divider too).
+    final sheet = find.byType(BottomSheet);
+    expect(find.descendant(of: sheet, matching: find.text('Today')), findsOneWidget);
+    expect(find.descendant(of: sheet, matching: find.text('This week')), findsOneWidget);
+    expect(find.descendant(of: sheet, matching: find.text('This month')), findsOneWidget);
+    expect(find.descendant(of: sheet, matching: find.text('Custom range')), findsOneWidget);
+
+    // Picking "Today" keeps only today's post...
+    await tester.tap(find.descendant(of: sheet, matching: find.text('Today')));
+    await tester.pump();
+    await tester.tap(find.text('Show results'));
+    await tester.pumpAndSettle();
+    expect(find.text('today post'), findsOneWidget);
+    expect(find.text('old post'), findsNothing);
+    // ...and an active filter reveals the compact download button.
+    expect(find.byIcon(Icons.download_rounded), findsOneWidget);
+  });
+
+  testWidgets('the custom range pill opens a calendar range picker', (tester) async {
+    await pump(tester, const MultiSession(groups: [alpha], restored: true));
+
+    await openFilter(tester);
+    await tester
+        .tap(find.descendant(of: find.byType(BottomSheet), matching: find.text('Custom range')));
+    await tester.pumpAndSettle();
+    // The Material date-range picker (its helpText) is now on screen.
+    expect(find.text('Select date range'), findsOneWidget);
+  });
 }

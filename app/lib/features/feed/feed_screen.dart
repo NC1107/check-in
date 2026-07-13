@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
+import 'package:intl/intl.dart';
 
 import '../../api/models.dart';
 import '../../state/app_state.dart';
@@ -15,8 +16,8 @@ import 'global_search_delegate.dart';
 import 'post_card.dart';
 
 /// Bumped when the user taps the Home tab while already on the feed; the feed listens and
-/// animates back to the top. (Tapping the iOS status bar scrolls to top natively, since the
-/// feed list is the primary scroll view.)
+/// animates back to the top. Tapping the status-bar strip does the same (see the tap-strip
+/// in build) - we handle it explicitly rather than relying on iOS's native status-bar tap.
 final feedScrollToTopProvider = StateProvider<int>((ref) => 0);
 
 // Theme tokens (centralized in theme/tokens.dart).
@@ -29,6 +30,72 @@ const _fgSecondary = kFgSecondary;
 const _fgMuted = kFgMuted;
 
 const _datePresets = ['Today', 'This week', 'This month'];
+
+/// The feed's active date filter: a named preset (re-evaluated against "now", so "Today"
+/// keeps meaning today) or an explicit custom range. Its [matches] gate is shared by the
+/// live feed filter and the bulk-download collector, so both agree on what's in range.
+sealed class _DateFilter {
+  const _DateFilter();
+
+  /// Whether a post created at [created] (any timezone) falls inside the window.
+  bool matches(DateTime created);
+
+  /// Whether [oldest] is older than the window's earliest bound - so every still-older
+  /// post is outside it too and paging (which runs newest-first) can stop.
+  bool isPastWindow(DateTime oldest);
+
+  /// Short label for the active-filter chip and the download summary.
+  String get label;
+}
+
+/// One of [_datePresets], evaluated live relative to now.
+class _PresetDate extends _DateFilter {
+  const _PresetDate(this.preset);
+  final String preset;
+
+  @override
+  bool matches(DateTime created) {
+    final now = DateTime.now();
+    final c = created.toLocal();
+    return switch (preset) {
+      'Today' => c.year == now.year && c.month == now.month && c.day == now.day,
+      'This week' => now.difference(c).inDays < 7,
+      'This month' => now.difference(c).inDays < 31,
+      _ => true,
+    };
+  }
+
+  // Posts are never in the future, so failing [matches] means older-than-window.
+  @override
+  bool isPastWindow(DateTime oldest) => !matches(oldest);
+
+  @override
+  String get label => preset;
+}
+
+/// An explicit [start]..[end] window (both inclusive; local day boundaries).
+class _RangeDate extends _DateFilter {
+  const _RangeDate(this.start, this.end);
+  final DateTime start;
+  final DateTime end;
+
+  @override
+  bool matches(DateTime created) {
+    final c = created.toLocal();
+    return !c.isBefore(start) && !c.isAfter(end);
+  }
+
+  @override
+  bool isPastWindow(DateTime oldest) => oldest.toLocal().isBefore(start);
+
+  @override
+  String get label {
+    final f = DateFormat.MMMd();
+    final s = f.format(start);
+    final e = f.format(end);
+    return s == e ? s : '$s - $e';
+  }
+}
 
 /// A feed item that renders the section date label with connector lines.
 class _DateDivider extends StatelessWidget {
@@ -150,7 +217,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   List<Post> _allPosts = [];
   final Set<String> _people = {}; // selected person keys (PersonDirectory.keyFor)
   bool _includeTagged = true; // also match posts the selected people are tagged in
-  String? _datePreset;
+  _DateFilter? _dateFilter;
   String? _location; // server-side place filter (mirrors feedLocationProvider)
 
   // The phone-based cross-group identity join, refreshed from each group's member list
@@ -173,7 +240,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   int _dlDone = 0;
   int _dlTotal = 0;
 
-  bool get _hasFilter => _people.isNotEmpty || _datePreset != null || _location != null;
+  bool get _hasFilter => _people.isNotEmpty || _dateFilter != null || _location != null;
 
   @override
   void initState() {
@@ -206,10 +273,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     } else if (delta < -6 && _searchHidden) {
       setState(() => _searchHidden = false);
     }
-    // Near the bottom → load the next page. Skipped while a date preset is active, since
-    // that filter is client-side and self-bounded (avoids loading the whole history).
+    // Near the bottom → load the next page. Skipped while a preset (Today/This week/This
+    // month) is active, since those sit near "now" and the first page covers them. A custom
+    // range can reach into the past, so paging stays on to walk back to it.
     final pos = _scrollCtrl.position;
-    if (_datePreset == null && pos.pixels >= pos.maxScrollExtent - 600) {
+    if (_dateFilter is! _PresetDate && pos.pixels >= pos.maxScrollExtent - 600) {
       _loadMore();
     }
   }
@@ -276,18 +344,6 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
 
   // --- filtering ---
 
-  bool _withinPreset(DateTime created) {
-    if (_datePreset == null) return true;
-    final now = DateTime.now();
-    final c = created.toLocal();
-    return switch (_datePreset) {
-      'Today' => c.year == now.year && c.month == now.month && c.day == now.day,
-      'This week' => now.difference(c).inDays < 7,
-      'This month' => now.difference(c).inDays < 31,
-      _ => true,
-    };
-  }
-
   List<Post> _applyFilter(List<Post> posts) {
     return posts
         .where((p) =>
@@ -295,7 +351,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
             _people.contains(_directory.keyFor(p.groupId, p.authorId)) ||
             (_includeTagged &&
                 p.people.any((t) => _people.contains(_directory.keyFor(p.groupId, t.id)))))
-        .where((p) => _withinPreset(p.createdAt))
+        .where((p) => _dateFilter?.matches(p.createdAt) ?? true)
         .toList();
   }
 
@@ -317,9 +373,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       final api = ref.read(apiForGroupProvider(account.id));
       var cursor = all.last;
       for (var page = 0; page < 40; page++) {
-        // Posts are newest-first, so once the cursor predates the date window, so does
+        // Posts are newest-first, so once the cursor is older than the date window, so is
         // everything older - stop paging.
-        if (_datePreset != null && !_withinPreset(cursor.createdAt)) break;
+        if (_dateFilter?.isPastWindow(cursor.createdAt) ?? false) break;
         final more = [
           for (final p in await api.feed(
             location: _location,
@@ -341,27 +397,90 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     return _applyFilter(all);
   }
 
-  /// Downloads every photo in the filtered set to the device gallery, with progress.
-  Future<void> _downloadAll() async {
+  /// After a custom range is chosen, pages the feed (bounded) until the loaded posts reach
+  /// back past the range's start, so a range in the past isn't an empty dead-end. Presets
+  /// sit near "now" and are covered by the first page, so they don't need this. Merged view
+  /// has no cross-group cursor yet, so it's a no-op there.
+  Future<void> _ensureRangeLoaded(_RangeDate range) async {
+    final account = ref.read(multiSessionProvider).soleShown;
+    if (account == null || _allPosts.isEmpty || _reachedEnd) return;
+    var cursor = _allPosts.last;
+    if (range.isPastWindow(cursor.createdAt)) return; // already loaded past the range
+    final api = ref.read(apiForGroupProvider(account.id));
+    final known = _allPosts.map((p) => p.id).toSet();
+    if (mounted) setState(() => _loadingMore = true);
+    try {
+      for (var page = 0; page < 40; page++) {
+        if (range.isPastWindow(cursor.createdAt)) break;
+        final more = [
+          for (final p in await api.feed(
+            location: _location,
+            before: cursor.createdAt,
+            beforeId: cursor.id,
+          ))
+            p.withGroup(account.id)
+        ];
+        if (more.isEmpty) {
+          if (mounted) setState(() => _reachedEnd = true);
+          break;
+        }
+        final fresh = more.where((p) => known.add(p.id)).toList();
+        if (fresh.isEmpty) break;
+        if (!mounted) return;
+        setState(() => _morePosts.addAll(fresh));
+        cursor = fresh.last;
+      }
+    } catch (_) {
+      // Leave it; the user can pull to refresh or scroll to keep loading.
+    } finally {
+      if (mounted) setState(() => _loadingMore = false);
+    }
+  }
+
+  /// Bulk download entry point: gathers the filtered photos, confirms the count and what's
+  /// being saved, then writes them to the gallery. Collecting up front means the dialog can
+  /// state an exact count, and the same list is reused for the save (no double paging).
+  Future<void> _confirmAndDownload() async {
     setState(() {
       _downloading = true;
       _dlDone = 0;
       _dlTotal = 0;
     });
-    HapticFeedback.mediumImpact();
+    List<({String? groupId, int mediaId})> items;
     try {
       final posts = await _collectFilteredForDownload();
-      final items = [
+      items = [
         for (final p in posts)
           for (final mediaId in p.images) (groupId: p.groupId, mediaId: mediaId)
       ];
-      if (items.isEmpty) {
-        _snack('No photos match this filter.');
-        return;
-      }
-      if (mounted) setState(() => _dlTotal = items.length);
-      var saved = 0;
-      var failed = 0;
+    } catch (_) {
+      if (mounted) setState(() => _downloading = false);
+      _snack("Couldn't prepare the download - check your connection and try again.");
+      return;
+    }
+    if (!mounted) return;
+    // Collection is done - while the dialog waits for the user, nothing is "working".
+    setState(() => _downloading = false);
+    if (items.isEmpty) {
+      _snack('No photos match this filter.');
+      return;
+    }
+    if (await _showDownloadConfirm(items.length) != true) return;
+    await _saveItems(items);
+  }
+
+  /// Writes the gathered photos to the device gallery, reporting progress and the outcome.
+  Future<void> _saveItems(List<({String? groupId, int mediaId})> items) async {
+    if (!mounted) return;
+    setState(() {
+      _downloading = true;
+      _dlDone = 0;
+      _dlTotal = items.length;
+    });
+    HapticFeedback.mediumImpact();
+    var saved = 0;
+    var failed = 0;
+    try {
       for (final it in items) {
         try {
           final bytes = await ref.read(contentApiProvider(it.groupId)).downloadMedia(it.mediaId);
@@ -384,6 +503,62 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     } finally {
       if (mounted) setState(() => _downloading = false);
     }
+  }
+
+  /// A plain-language description of the active filter, e.g. "from Jul 1 to Jul 13, with
+  /// Alice & Bob, in Paris", for the download confirmation. Empty when nothing is set.
+  String _filterSummary() {
+    final parts = <String>[];
+    final d = _dateFilter;
+    if (d is _RangeDate) {
+      final f = DateFormat.MMMd();
+      parts.add('from ${f.format(d.start)} to ${f.format(d.end)}');
+    } else if (d is _PresetDate) {
+      parts.add('from ${d.preset.toLowerCase()}');
+    }
+    if (_people.isNotEmpty) {
+      final names = {for (final a in _authors()) a.key: a.name};
+      parts.add('with ${_joinNames([for (final k in _people) names[k] ?? 'someone'])}');
+    }
+    if (_location != null) parts.add('in $_location');
+    return parts.join(', ');
+  }
+
+  String _joinNames(List<String> names) {
+    if (names.length <= 1) return names.isEmpty ? '' : names.first;
+    if (names.length == 2) return '${names[0]} & ${names[1]}';
+    return '${names.sublist(0, names.length - 1).join(', ')} & ${names.last}';
+  }
+
+  Future<bool?> _showDownloadConfirm(int count) {
+    final photos = '$count ${count == 1 ? 'photo' : 'photos'}';
+    final summary = _filterSummary();
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: _bgSurface,
+        title: Text('Download $photos?',
+            style: const TextStyle(color: _fgPrimary, fontSize: 17, fontWeight: FontWeight.w700)),
+        content: Text(
+          summary.isEmpty
+              ? 'Save $photos to your device.'
+              : 'Save $photos $summary to your device.',
+          style: const TextStyle(color: _fgSecondary, fontSize: 14.5, height: 1.35),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: _fgSecondary)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(
+                backgroundColor: context.accent, foregroundColor: context.onAccent),
+            child: const Text('Download'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// People present in the loaded feed - authors plus anyone tagged in a post - for the
@@ -482,7 +657,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
           Set<String> hidden,
           Set<String> people,
           bool includeTagged,
-          String? date,
+          _DateFilter? date,
           String? location
         })>(
       context: context,
@@ -502,7 +677,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         authors: _authors(),
         selectedPeople: _people,
         includeTagged: _includeTagged,
-        datePreset: _datePreset,
+        dateFilter: _dateFilter,
         locations: locs,
         selectedLocation: _location,
       ),
@@ -514,12 +689,15 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         ..clear()
         ..addAll(result.people);
       _includeTagged = result.includeTagged;
-      _datePreset = result.date;
+      _dateFilter = result.date;
       _location = result.location;
     });
     // Group visibility and location both refetch the feed via their providers.
     ref.read(multiSessionProvider.notifier).setHiddenGroups(result.hidden);
     ref.read(feedLocationProvider.notifier).state = _location;
+    // A past custom range can sit beyond the first page - walk back to it so the feed
+    // isn't an empty dead-end.
+    if (result.date is _RangeDate) _ensureRangeLoaded(result.date as _RangeDate);
   }
 
   List<_FeedItem> _buildItems(List<Post> posts, List<String> unreachable) {
@@ -592,117 +770,139 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     final allView = session.isAllView;
     return Scaffold(
       backgroundColor: _bgMain,
-      body: SafeArea(
-        child: Stack(
-          children: [
-            PrimaryScrollController(
-              controller: _scrollCtrl,
-              child: RefreshIndicator(
-                onRefresh: _refresh,
-                color: context.accent,
-                backgroundColor: _bgSurface,
-                child: ref.watch(feedProvider).when(
-                      loading: () => const FeedSkeleton(),
-                      error: (e, _) => ListView(primary: false, children: [
-                        const SizedBox(height: 120),
-                        Center(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(Icons.cloud_off_outlined, size: 42, color: _fgMuted),
-                              const SizedBox(height: 12),
-                              const Text('Could not load the feed.',
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(color: _fgSecondary, fontSize: 15)),
-                              const SizedBox(height: 10),
-                              TextButton(onPressed: _refresh, child: const Text('Try again')),
-                            ],
-                          ),
-                        ),
-                      ]),
-                      data: (result) {
-                        _allPosts = [...result.posts, ..._morePosts];
-                        final posts = _applyFilter(_allPosts);
-                        if (_allPosts.isEmpty) {
-                          final s = ref.read(multiSessionProvider);
-                          if (s.nothingShown) {
-                            // Every group is toggled off - say so instead of "no check-ins".
-                            return _emptyState(
-                              icon: Icons.public_off,
-                              title: 'No groups shown',
-                              subtitle: 'Choose which groups appear in Filters.',
+      body: Stack(
+        children: [
+          SafeArea(
+            child: Stack(
+              children: [
+                PrimaryScrollController(
+                  controller: _scrollCtrl,
+                  child: RefreshIndicator(
+                    onRefresh: _refresh,
+                    color: context.accent,
+                    backgroundColor: _bgSurface,
+                    child: ref.watch(feedProvider).when(
+                          loading: () => const FeedSkeleton(),
+                          error: (e, _) => ListView(primary: false, children: [
+                            const SizedBox(height: 120),
+                            Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.cloud_off_outlined, size: 42, color: _fgMuted),
+                                  const SizedBox(height: 12),
+                                  const Text('Could not load the feed.',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(color: _fgSecondary, fontSize: 15)),
+                                  const SizedBox(height: 10),
+                                  TextButton(onPressed: _refresh, child: const Text('Try again')),
+                                ],
+                              ),
+                            ),
+                          ]),
+                          data: (result) {
+                            _allPosts = [...result.posts, ..._morePosts];
+                            final posts = _applyFilter(_allPosts);
+                            if (_allPosts.isEmpty) {
+                              final s = ref.read(multiSessionProvider);
+                              if (s.nothingShown) {
+                                // Every group is toggled off - say so instead of "no check-ins".
+                                return _emptyState(
+                                  icon: Icons.public_off,
+                                  title: 'No groups shown',
+                                  subtitle: 'Choose which groups appear in Filters.',
+                                );
+                              }
+                              final shown = s.shownGroups;
+                              final where = shown.length > 1
+                                  ? ' in ${[for (final g in shown) g.displayName].join(', ')}'
+                                  : '';
+                              return _emptyState(
+                                icon: Icons.photo_camera_outlined,
+                                title: 'No check-ins yet$where',
+                                subtitle: 'Tap + to share an update.',
+                              );
+                            }
+                            final items = _buildItems(
+                                posts, [for (final g in result.unreachable) g.displayName]);
+                            // Trailing spinner row while the next page loads.
+                            final showSpinner = _loadingMore && posts.isNotEmpty;
+                            return ListView.builder(
+                              // Primary so the pagination controller (_scrollCtrl) attaches
+                              // here; that also drives _scrollToTop() for the Home-tap and
+                              // the status-bar tap-strip.
+                              primary: true,
+                              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                              padding: EdgeInsets.only(top: _hasFilter ? 116 : 72, bottom: 24),
+                              itemCount: posts.isEmpty ? 1 : items.length + (showSpinner ? 1 : 0),
+                              itemBuilder: (_, i) {
+                                if (posts.isEmpty) {
+                                  return const Padding(
+                                    padding: EdgeInsets.only(top: 60),
+                                    child: Center(
+                                      child: Text('No check-ins match your filters.',
+                                          style: TextStyle(color: _fgMuted)),
+                                    ),
+                                  );
+                                }
+                                if (i >= items.length) {
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 20),
+                                    child: Center(
+                                        child: CircularProgressIndicator(color: context.accent)),
+                                  );
+                                }
+                                return _buildItem(items[i], allView: allView);
+                              },
                             );
-                          }
-                          final shown = s.shownGroups;
-                          final where = shown.length > 1
-                              ? ' in ${[for (final g in shown) g.displayName].join(', ')}'
-                              : '';
-                          return _emptyState(
-                            icon: Icons.photo_camera_outlined,
-                            title: 'No check-ins yet$where',
-                            subtitle: 'Tap + to share an update.',
-                          );
-                        }
-                        final items =
-                            _buildItems(posts, [for (final g in result.unreachable) g.displayName]);
-                        // Trailing spinner row while the next page loads.
-                        final showSpinner = _loadingMore && posts.isNotEmpty;
-                        return ListView.builder(
-                          // Primary so the pagination controller attaches here and iOS
-                          // status-bar taps scroll it to the top.
-                          primary: true,
-                          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-                          padding: EdgeInsets.only(top: _hasFilter ? 116 : 72, bottom: 24),
-                          itemCount: posts.isEmpty ? 1 : items.length + (showSpinner ? 1 : 0),
-                          itemBuilder: (_, i) {
-                            if (posts.isEmpty) {
-                              return const Padding(
-                                padding: EdgeInsets.only(top: 60),
-                                child: Center(
-                                  child: Text('No check-ins match your filters.',
-                                      style: TextStyle(color: _fgMuted)),
-                                ),
-                              );
-                            }
-                            if (i >= items.length) {
-                              return Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 20),
-                                child:
-                                    Center(child: CircularProgressIndicator(color: context.accent)),
-                              );
-                            }
-                            return _buildItem(items[i], allView: allView);
                           },
-                        );
-                      },
-                    ),
-              ),
-            ),
-            // Floating search bar + active filter chips - slide away on scroll down.
-            AnimatedSlide(
-              offset: _searchHidden ? const Offset(0, -2) : Offset.zero,
-              duration: const Duration(milliseconds: 280),
-              curve: const Cubic(0.2, 0.8, 0.2, 1.0),
-              child: AnimatedOpacity(
-                opacity: _searchHidden ? 0 : 1,
-                duration: const Duration(milliseconds: 200),
-                child: IgnorePointer(
-                  ignoring: _searchHidden,
-                  child: Column(
-                    children: [
-                      _SearchBar(
-                        onSearch: _openSearch,
-                        onFilter: _openFilter,
-                        filterActive: _hasFilter,
-                      ),
-                      if (_hasFilter) _activeChips(),
-                    ],
+                        ),
                   ),
                 ),
-              ),
+                // Floating search bar + active filter chips - slide away on scroll down.
+                AnimatedSlide(
+                  offset: _searchHidden ? const Offset(0, -2) : Offset.zero,
+                  duration: const Duration(milliseconds: 280),
+                  curve: const Cubic(0.2, 0.8, 0.2, 1.0),
+                  child: AnimatedOpacity(
+                    opacity: _searchHidden ? 0 : 1,
+                    duration: const Duration(milliseconds: 200),
+                    child: IgnorePointer(
+                      ignoring: _searchHidden,
+                      child: Column(
+                        children: [
+                          _SearchBar(
+                            onSearch: _openSearch,
+                            onFilter: _openFilter,
+                            filterActive: _hasFilter,
+                            downloading: _downloading,
+                            downloadProgress: _dlTotal > 0 ? _dlDone / _dlTotal : null,
+                            onDownload: _confirmAndDownload,
+                          ),
+                          if (_hasFilter) _activeChips(),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
+          ),
+          // Invisible strip over the status-bar inset. Tapping it jumps back to the top of
+          // the feed. iOS's native status-bar tap-to-top is unreliable here because the
+          // profile tab stays mounted in the IndexedStack (a second primary scroll view),
+          // so we handle the gesture ourselves.
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: MediaQuery.of(context).padding.top,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _scrollToTop,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -733,61 +933,19 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     final chips = <Widget>[
       for (final key in _people)
         _filterChip(names[key] ?? 'Someone', () => setState(() => _people.remove(key))),
-      if (_datePreset != null) _filterChip(_datePreset!, () => setState(() => _datePreset = null)),
+      if (_dateFilter != null)
+        _filterChip(_dateFilter!.label, () => setState(() => _dateFilter = null)),
       if (_location != null)
         _filterChip(_location!, () {
           setState(() => _location = null);
           ref.read(feedLocationProvider.notifier).state = null;
         }),
-      _downloadAllButton(),
     ];
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
       child: Align(
         alignment: Alignment.centerLeft,
         child: Wrap(spacing: 8, runSpacing: 8, children: chips),
-      ),
-    );
-  }
-
-  /// A filled action pill (distinct from the removable filter chips) that saves every photo
-  /// in the filtered set to the device gallery.
-  Widget _downloadAllButton() {
-    final label = _downloading
-        ? (_dlTotal > 0 ? 'Saving $_dlDone/$_dlTotal' : 'Preparing...')
-        : 'Download photos';
-    return Semantics(
-      button: true,
-      label: 'Download all photos matching this filter',
-      child: GestureDetector(
-        onTap: _downloading ? null : _downloadAll,
-        behavior: HitTestBehavior.opaque,
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(11, 5, 11, 5),
-          decoration: BoxDecoration(
-            color: _downloading ? context.accentLight : context.accent,
-            borderRadius: BorderRadius.circular(9999),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (_downloading)
-                SizedBox(
-                  width: 13,
-                  height: 13,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: context.accent),
-                )
-              else
-                const Icon(Icons.download_rounded, size: 15, color: Colors.white),
-              const SizedBox(width: 6),
-              Text(label,
-                  style: TextStyle(
-                      color: _downloading ? context.accent : Colors.white,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 12)),
-            ],
-          ),
-        ),
       ),
     );
   }
@@ -827,11 +985,20 @@ class _SearchBar extends StatelessWidget {
     required this.onSearch,
     required this.onFilter,
     required this.filterActive,
+    required this.downloading,
+    required this.downloadProgress,
+    required this.onDownload,
   });
 
   final VoidCallback onSearch;
   final VoidCallback onFilter;
   final bool filterActive;
+
+  /// Bulk-download state. The compact button appears (left of Filters) only when a filter
+  /// is active, since that's the only time "download everything matching" is meaningful.
+  final bool downloading;
+  final double? downloadProgress; // 0..1 while saving, null while preparing
+  final VoidCallback onDownload;
 
   @override
   Widget build(BuildContext context) {
@@ -875,6 +1042,7 @@ class _SearchBar extends StatelessWidget {
               ),
             ),
           ),
+          if (filterActive) _downloadButton(context),
           Semantics(
             button: true,
             label: 'Filters',
@@ -904,6 +1072,40 @@ class _SearchBar extends StatelessWidget {
       ),
     );
   }
+
+  /// Compact "save every photo matching this filter" button, sized to match the Filters
+  /// chip. Shows a progress ring while working (determinate once the count is known).
+  Widget _downloadButton(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: 'Download photos matching this filter',
+      child: GestureDetector(
+        onTap: downloading ? null : onDownload,
+        behavior: HitTestBehavior.opaque,
+        child: SizedBox(
+          width: 44,
+          height: 44,
+          child: Center(
+            child: Container(
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                color: _bgSurfaceHover,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: downloading
+                  ? Padding(
+                      padding: const EdgeInsets.all(7),
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, value: downloadProgress, color: context.accent),
+                    )
+                  : const Icon(Icons.download_rounded, size: 19, color: _fgSecondary),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Bottom sheet to filter the feed: which groups show, plus person/date/place. Group
@@ -918,7 +1120,7 @@ class _FilterSheet extends StatefulWidget {
     required this.authors,
     required this.selectedPeople,
     required this.includeTagged,
-    required this.datePreset,
+    required this.dateFilter,
     required this.locations,
     required this.selectedLocation,
   });
@@ -931,7 +1133,7 @@ class _FilterSheet extends StatefulWidget {
   final List<_FilterPerson> authors;
   final Set<String> selectedPeople;
   final bool includeTagged;
-  final String? datePreset;
+  final _DateFilter? dateFilter;
   final List<({String location, int count})> locations;
   final String? selectedLocation;
 
@@ -943,7 +1145,7 @@ class _FilterSheetState extends State<_FilterSheet> {
   late final Set<String> _hidden = {...widget.hiddenGroupIds};
   late final Set<String> _people = {...widget.selectedPeople};
   late bool _includeTagged = widget.includeTagged;
-  late String? _date = widget.datePreset;
+  late _DateFilter? _date = widget.dateFilter;
   late String? _location = widget.selectedLocation;
   String _personQuery = '';
 
@@ -1172,7 +1374,10 @@ class _FilterSheetState extends State<_FilterSheet> {
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: [for (final d in _datePresets) _datePill(d)],
+            children: [
+              for (final d in _datePresets) _datePill(d),
+              _customRangePill(context),
+            ],
           ),
           if (widget.locations.isNotEmpty) ...[
             const SizedBox(height: 22),
@@ -1338,13 +1543,14 @@ class _FilterSheetState extends State<_FilterSheet> {
   }
 
   Widget _datePill(String label) {
-    final on = _date == label;
+    final date = _date;
+    final on = date is _PresetDate && date.preset == label;
     return Semantics(
       button: true,
       selected: on,
       label: label,
       child: GestureDetector(
-        onTap: () => setState(() => _date = on ? null : label),
+        onTap: () => setState(() => _date = on ? null : _PresetDate(label)),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
           decoration: BoxDecoration(
@@ -1360,6 +1566,74 @@ class _FilterSheetState extends State<_FilterSheet> {
         ),
       ),
     );
+  }
+
+  /// The "Custom range" pill: opens a calendar range picker and, once picked, shows the
+  /// chosen span (tap again to adjust). Picking a preset above clears it, and vice versa.
+  Widget _customRangePill(BuildContext context) {
+    final date = _date;
+    final range = date is _RangeDate ? date : null;
+    final on = range != null;
+    return Semantics(
+      button: true,
+      selected: on,
+      label: on ? 'Custom range, ${range.label}' : 'Custom date range',
+      child: GestureDetector(
+        onTap: _pickRange,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+          decoration: BoxDecoration(
+            color: on ? context.accent : Colors.transparent,
+            border: Border.all(color: on ? context.accent : _border),
+            borderRadius: BorderRadius.circular(9999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.event_outlined, size: 15, color: on ? context.onAccent : _fgSecondary),
+              const SizedBox(width: 6),
+              Text(on ? range.label : 'Custom range',
+                  style: TextStyle(
+                      color: on ? context.onAccent : _fgSecondary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickRange() async {
+    final now = DateTime.now();
+    final date = _date;
+    final current = date is _RangeDate ? date : null;
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(now.year - 5),
+      lastDate: DateTime(now.year, now.month, now.day),
+      initialDateRange: current == null
+          ? null
+          : DateTimeRange(
+              start: DateTime(current.start.year, current.start.month, current.start.day),
+              end: DateTime(current.end.year, current.end.month, current.end.day),
+            ),
+      helpText: 'Select date range',
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: Theme.of(context).colorScheme.copyWith(primary: context.accent),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      // Normalize to whole local days: start at midnight, end at the last second.
+      _date = _RangeDate(
+        DateTime(picked.start.year, picked.start.month, picked.start.day),
+        DateTime(picked.end.year, picked.end.month, picked.end.day, 23, 59, 59),
+      );
+    });
   }
 
   Widget _placePill(({String location, int count}) l) {
