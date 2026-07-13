@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../state/person_directory.dart';
+import '../../state/unread.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/skeletons.dart';
@@ -156,12 +157,47 @@ class _GapConnector extends StatelessWidget {
   }
 }
 
+/// The boundary line between check-ins posted since the member's last visit and the ones
+/// they've already seen. Everything above it is new.
+class _CaughtUpDivider extends StatelessWidget {
+  const _CaughtUpDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+      child: Row(
+        children: [
+          Expanded(child: Container(height: 1, color: context.accentLight)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.check_circle_outline, size: 14, color: context.accent),
+                const SizedBox(width: 6),
+                Text("You're all caught up",
+                    style: TextStyle(
+                        color: context.accent, fontWeight: FontWeight.w600, fontSize: 12)),
+              ],
+            ),
+          ),
+          Expanded(child: Container(height: 1, color: context.accentLight)),
+        ],
+      ),
+    );
+  }
+}
+
 sealed class _FeedItem {}
 
 class _DividerItem extends _FeedItem {
   _DividerItem(this.label);
   final String label;
 }
+
+/// Marks where the member's unread check-ins end and already-seen ones begin.
+class _CaughtUpItem extends _FeedItem {}
 
 /// Non-blocking notice at the top of the combined feed when some groups couldn't be
 /// reached (their posts are simply missing until they come back).
@@ -229,6 +265,13 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   // tags, or whose posts carry no photo).
   Map<String, ({int? mediaId, String groupId})> _photoByKey = const {};
 
+  // Per-group "newest check-in you'd already seen", loaded once when the screen opens and
+  // then held fixed for the whole visit. Holding it fixed is the point: the marker on disk
+  // advances as soon as posts are shown, but the caught-up line must stay put under the
+  // member rather than sliding away while they read.
+  Map<String, DateTime> _seenAt = const {};
+  bool _seenLoaded = false;
+
   // Pagination: posts loaded past the provider's first page, plus loading flags. Reset
   // whenever a fresh first page arrives (pull-to-refresh, compose, location change).
   final List<Post> _morePosts = [];
@@ -246,12 +289,39 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   void initState() {
     super.initState();
     _scrollCtrl.addListener(_onScroll);
+    _loadSeenMarkers();
   }
 
   @override
   void dispose() {
     _scrollCtrl.dispose();
     super.dispose();
+  }
+
+  /// Snapshots where the member left off, once per visit. Until it resolves the feed simply
+  /// draws no caught-up line, rather than flashing one in the wrong place.
+  Future<void> _loadSeenMarkers() async {
+    final groups = ref.read(multiSessionProvider).signedIn;
+    final seen = await loadSeenMarkers([for (final g in groups) g.id]);
+    if (!mounted) return;
+    setState(() {
+      _seenAt = seen;
+      _seenLoaded = true;
+    });
+  }
+
+  /// Advances the on-disk markers to the newest post on show, so the next visit measures
+  /// "new" from here. [_seenAt] is deliberately left alone - see its declaration.
+  void _recordSeen(List<Post> posts) {
+    if (posts.isEmpty) return;
+    final newest = <String, DateTime>{};
+    for (final p in posts) {
+      final gid = p.groupId;
+      if (gid == null) continue;
+      final at = newest[gid];
+      if (at == null || p.createdAt.isAfter(at)) newest[gid] = p.createdAt;
+    }
+    saveSeenMarkers(newest);
   }
 
   void _scrollToTop() {
@@ -700,11 +770,36 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     if (result.date is _RangeDate) _ensureRangeLoaded(result.date as _RangeDate);
   }
 
+  /// Whether [p] was posted after the member last saw this group's feed.
+  bool _isUnread(Post p) {
+    final seen = _seenAt[p.groupId];
+    // No marker = never visited this group's feed, so nothing is "new" to catch up on.
+    return seen != null && p.createdAt.isAfter(seen);
+  }
+
+  /// Index of the first already-seen post, or null when every post is new. Posts arrive
+  /// newest-first, so this is exactly where the caught-up line belongs.
+  int? _caughtUpAt(List<Post> posts) {
+    if (!_seenLoaded || _hasFilter) return null; // a filtered feed isn't a reading position
+    for (var i = 0; i < posts.length; i++) {
+      if (!_isUnread(posts[i])) return i;
+    }
+    return null;
+  }
+
   List<_FeedItem> _buildItems(List<Post> posts, List<String> unreachable) {
     final items = <_FeedItem>[];
     if (unreachable.isNotEmpty) items.add(_UnreachableItem(unreachable));
+    // Only worth drawing when there's unread above it AND seen posts below it - a line at
+    // the very top or with nothing under it says nothing.
+    final caughtUpAt = _caughtUpAt(posts);
     String? lastLabel;
-    for (final post in posts) {
+    for (var i = 0; i < posts.length; i++) {
+      if (i == caughtUpAt && i > 0) {
+        items.add(_CaughtUpItem());
+        lastLabel = null; // restart date grouping below the line so the next date re-labels
+      }
+      final post = posts[i];
       final label = _dateLabel(post.createdAt.toLocal());
       if (label != lastLabel) {
         items.add(_DividerItem(label));
@@ -720,6 +815,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   Widget _buildItem(_FeedItem item, {required bool allView}) {
     return switch (item) {
       _DividerItem(:final label) => _DateDivider(label: label),
+      _CaughtUpItem() => const _CaughtUpDivider(),
       _GapItem() => const _GapConnector(),
       _UnreachableItem(:final names) => Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
@@ -762,6 +858,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       if (next is AsyncData<FeedResult>) {
         _morePosts.clear();
         _reachedEnd = false;
+        // These posts are now on screen, so the member is caught up to them from the next
+        // visit's point of view. The in-memory _seenAt is untouched, so the line they're
+        // reading against stays where it is.
+        _recordSeen(next.value.posts);
       }
     });
     // Home-tab re-tap (from the bottom nav) scrolls the feed back to the top.
