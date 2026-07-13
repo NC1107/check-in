@@ -51,6 +51,34 @@ func (u User) MarshalJSON() ([]byte, error) {
 	})
 }
 
+// NotifyPrefs is a member's notification settings: the three instant opt-outs, plus an
+// optional daily digest that replaces per-check-in pushes with one summary.
+type NotifyPrefs struct {
+	Posts   bool `json:"posts"`
+	Replies bool `json:"replies"`
+	Likes   bool `json:"likes"`
+
+	// DigestEnabled swaps new-post pushes for a single summary at DigestHour, the member's
+	// local hour (0-23). DigestOffset is their UTC offset in minutes, refreshed by the app
+	// on launch so a DST shift self-corrects. Replies and likes stay instant either way.
+	DigestEnabled bool `json:"digestEnabled"`
+	DigestHour    int  `json:"digestHour"`
+	DigestOffset  int  `json:"digestOffset"`
+}
+
+// Normalize clamps the digest window to values the scheduler can act on, so a bad client
+// can't park a member on an hour that never comes round.
+func (p NotifyPrefs) Normalize() NotifyPrefs {
+	if p.DigestHour < 0 || p.DigestHour > 23 {
+		p.DigestHour = 20
+	}
+	// Real UTC offsets span -12:00 to +14:00.
+	if p.DigestOffset < -12*60 || p.DigestOffset > 14*60 {
+		p.DigestOffset = 0
+	}
+	return p
+}
+
 // Media is an uploaded image (post image or profile picture).
 type Media struct {
 	ID        int64     `json:"id"`

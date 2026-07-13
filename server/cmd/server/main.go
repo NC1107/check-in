@@ -68,6 +68,9 @@ func main() {
 	}
 
 	srv := api.New(cfg, database, store, pushSender)
+	// Daily summaries for members who chose a digest over a ping per check-in. No-op when
+	// push isn't configured.
+	srv.StartDigestScheduler(ctx)
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           srv.Router(),

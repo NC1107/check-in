@@ -120,34 +120,32 @@ class ApiClient {
   Future<void> unregisterDevice(String token) =>
       _dio.delete('/api/me/devices', data: {'token': token});
 
-  /// notificationPrefs returns the per-account push opt-outs.
-  Future<({bool posts, bool replies, bool likes})> notificationPrefs() async {
+  /// notificationPrefs returns the per-account push settings.
+  Future<NotifyPrefs> notificationPrefs() async {
     final r = await _dio.get('/api/me/notifications');
-    final j = r.data as Map<String, dynamic>;
-    return (
-      posts: j['posts'] as bool? ?? true,
-      replies: j['replies'] as bool? ?? true,
-      likes: j['likes'] as bool? ?? true,
-    );
+    return NotifyPrefs.fromJson(r.data as Map<String, dynamic>);
   }
 
-  /// updateNotificationPrefs toggles the opt-outs. Omitted fields keep their value.
-  Future<({bool posts, bool replies, bool likes})> updateNotificationPrefs({
+  /// updateNotificationPrefs changes the push settings. Omitted fields keep their value,
+  /// so the app can send just [digestOffset] on launch to keep a DST shift from silently
+  /// moving someone's digest.
+  Future<NotifyPrefs> updateNotificationPrefs({
     bool? posts,
     bool? replies,
     bool? likes,
+    bool? digestEnabled,
+    int? digestHour,
+    int? digestOffset,
   }) async {
     final r = await _dio.patch('/api/me/notifications', data: {
       if (posts != null) 'posts': posts,
       if (replies != null) 'replies': replies,
       if (likes != null) 'likes': likes,
+      if (digestEnabled != null) 'digestEnabled': digestEnabled,
+      if (digestHour != null) 'digestHour': digestHour,
+      if (digestOffset != null) 'digestOffset': digestOffset,
     });
-    final j = r.data as Map<String, dynamic>;
-    return (
-      posts: j['posts'] as bool? ?? true,
-      replies: j['replies'] as bool? ?? true,
-      likes: j['likes'] as bool? ?? true,
-    );
+    return NotifyPrefs.fromJson(r.data as Map<String, dynamic>);
   }
 
   /// setProfilePhoto attaches an already-uploaded media item as the current user's

@@ -290,6 +290,55 @@ class ContentReport {
       );
 }
 
+/// A member's push settings: the three instant toggles, plus an optional daily digest that
+/// replaces per-check-in pushes with a single summary at a chosen local hour.
+class NotifyPrefs {
+  const NotifyPrefs({
+    required this.posts,
+    required this.replies,
+    required this.likes,
+    required this.digestEnabled,
+    required this.digestHour,
+    required this.digestOffset,
+  });
+
+  final bool posts;
+  final bool replies;
+  final bool likes;
+
+  /// When on, new-check-in pushes are replaced by one summary at [digestHour] (the
+  /// member's local hour, 0-23). Replies and likes stay instant either way.
+  final bool digestEnabled;
+  final int digestHour;
+
+  /// The member's UTC offset in minutes, which the server uses to work out when their
+  /// chosen hour has arrived. The app refreshes it on launch so a DST shift self-corrects.
+  final int digestOffset;
+
+  /// "8:00 PM" - the digest time, for display.
+  String get digestLabel => DateFormat.jm().format(DateTime(2000, 1, 1, digestHour));
+
+  NotifyPrefs copyWith(
+          {bool? posts, bool? replies, bool? likes, bool? digestEnabled, int? digestHour}) =>
+      NotifyPrefs(
+        posts: posts ?? this.posts,
+        replies: replies ?? this.replies,
+        likes: likes ?? this.likes,
+        digestEnabled: digestEnabled ?? this.digestEnabled,
+        digestHour: digestHour ?? this.digestHour,
+        digestOffset: digestOffset,
+      );
+
+  factory NotifyPrefs.fromJson(Map<String, dynamic> j) => NotifyPrefs(
+        posts: j['posts'] as bool? ?? true,
+        replies: j['replies'] as bool? ?? true,
+        likes: j['likes'] as bool? ?? true,
+        digestEnabled: j['digestEnabled'] as bool? ?? false,
+        digestHour: (j['digestHour'] as num?)?.toInt() ?? 20,
+        digestOffset: (j['digestOffset'] as num?)?.toInt() ?? 0,
+      );
+}
+
 /// Result of a successful login or signup.
 class AuthResult {
   AuthResult({required this.token, required this.user});
