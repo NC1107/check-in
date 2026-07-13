@@ -1,6 +1,9 @@
 package db
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // User is a registered member of the server.
 type User struct {
@@ -11,11 +14,41 @@ type User struct {
 	Name           string    `json:"name"`
 	FirstName      string    `json:"firstName"`
 	LastName       string    `json:"lastName"`
-	Birthday       time.Time `json:"birthday"`
+	Birthday       time.Time `json:"-"` // exposed as month/day only, see MarshalJSON
 	ProfileMediaID *int64    `json:"profileMediaId,omitempty"`
 	IsAdmin        bool      `json:"isAdmin"`
 	Status         string    `json:"status"`
 	CreatedAt      time.Time `json:"createdAt"`
+}
+
+// MarshalJSON emits only the month and day of the birthday, never the year, so a member's
+// age is never exposed over the API (the app only ever shows month + day).
+func (u User) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		ID             int64     `json:"id"`
+		Phone          string    `json:"phone"`
+		Name           string    `json:"name"`
+		FirstName      string    `json:"firstName"`
+		LastName       string    `json:"lastName"`
+		BirthdayMonth  int       `json:"birthdayMonth"`
+		BirthdayDay    int       `json:"birthdayDay"`
+		ProfileMediaID *int64    `json:"profileMediaId,omitempty"`
+		IsAdmin        bool      `json:"isAdmin"`
+		Status         string    `json:"status"`
+		CreatedAt      time.Time `json:"createdAt"`
+	}{
+		ID:             u.ID,
+		Phone:          u.Phone,
+		Name:           u.Name,
+		FirstName:      u.FirstName,
+		LastName:       u.LastName,
+		BirthdayMonth:  int(u.Birthday.Month()),
+		BirthdayDay:    u.Birthday.Day(),
+		ProfileMediaID: u.ProfileMediaID,
+		IsAdmin:        u.IsAdmin,
+		Status:         u.Status,
+		CreatedAt:      u.CreatedAt,
+	})
 }
 
 // Media is an uploaded image (post image or profile picture).

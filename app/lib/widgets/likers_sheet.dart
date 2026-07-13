@@ -85,22 +85,23 @@ class _LikersSheetState extends ConsumerState<_LikersSheet> {
                 )
               else
                 Flexible(
-                  child: ListView(
+                  child: ListView.builder(
                     shrinkWrap: true,
-                    children: [
-                      for (final u in likers)
-                        ListTile(
-                          leading: UserAvatar(
-                              name: u.name,
-                              mediaId: u.profileMediaId,
-                              size: 38,
-                              colorSeed: u.id,
-                              groupId: widget.groupId),
-                          title:
-                              Text(u.name, style: const TextStyle(color: kFgPrimary, fontSize: 15)),
-                          onTap: () => _openProfile(u.id),
-                        ),
-                    ],
+                    itemCount: likers.length,
+                    itemBuilder: (_, i) {
+                      final u = likers[i];
+                      return ListTile(
+                        leading: UserAvatar(
+                            name: u.name,
+                            mediaId: u.profileMediaId,
+                            size: 38,
+                            colorSeed: u.id,
+                            groupId: widget.groupId),
+                        title:
+                            Text(u.name, style: const TextStyle(color: kFgPrimary, fontSize: 15)),
+                        onTap: () => _openProfile(u.id),
+                      );
+                    },
                   ),
                 ),
               const SizedBox(height: 8),
