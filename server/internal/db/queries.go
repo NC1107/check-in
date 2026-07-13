@@ -482,29 +482,103 @@ func (d *DB) DeleteDeviceToken(ctx context.Context, token string) error {
 	return err
 }
 
-// NotificationPrefs reports a user's opt-out toggles.
-func (d *DB) NotificationPrefs(ctx context.Context, userID int64) (posts, replies, likes bool, err error) {
-	err = d.Pool.QueryRow(ctx,
-		`SELECT notify_posts, notify_replies, notify_likes FROM users WHERE id = $1`, userID,
-	).Scan(&posts, &replies, &likes)
-	return posts, replies, likes, err
+// NotificationPrefs reports a user's notification settings.
+func (d *DB) NotificationPrefs(ctx context.Context, userID int64) (NotifyPrefs, error) {
+	var p NotifyPrefs
+	err := d.Pool.QueryRow(ctx,
+		`SELECT notify_posts, notify_replies, notify_likes,
+		        digest_enabled, digest_hour, digest_offset
+		   FROM users WHERE id = $1`, userID,
+	).Scan(&p.Posts, &p.Replies, &p.Likes, &p.DigestEnabled, &p.DigestHour, &p.DigestOffset)
+	return p, err
 }
 
-// SetNotificationPrefs updates a user's notification toggles.
-func (d *DB) SetNotificationPrefs(ctx context.Context, userID int64, posts, replies, likes bool) error {
-	_, err := d.Pool.Exec(ctx,
-		`UPDATE users SET notify_posts = $2, notify_replies = $3, notify_likes = $4 WHERE id = $1`,
-		userID, posts, replies, likes)
+// SetNotificationPrefs updates a user's notification settings. Changing the digest window
+// clears digest_sent_at so a member who just set "8pm" gets tonight's summary rather than
+// being locked out by a send that already happened under the old window.
+func (d *DB) SetNotificationPrefs(ctx context.Context, userID int64, p NotifyPrefs) error {
+	_, err := d.Pool.Exec(ctx, `
+		UPDATE users SET
+			notify_posts = $2, notify_replies = $3, notify_likes = $4,
+			digest_enabled = $5, digest_hour = $6, digest_offset = $7,
+			digest_sent_at = CASE
+				WHEN digest_enabled IS DISTINCT FROM $5
+				  OR digest_hour    IS DISTINCT FROM $6
+				  OR digest_offset  IS DISTINCT FROM $7 THEN NULL
+				ELSE digest_sent_at
+			END
+		WHERE id = $1`,
+		userID, p.Posts, p.Replies, p.Likes, p.DigestEnabled, p.DigestHour, p.DigestOffset)
 	return err
 }
 
 // TokensForNewPost returns the device tokens of every active member who wants new-post
-// notifications, excluding the post's author.
+// notifications, excluding the post's author. Members on a digest are excluded: their
+// check-ins arrive as one summary at their chosen hour instead of a ping each.
 func (d *DB) TokensForNewPost(ctx context.Context, authorID int64) ([]string, error) {
 	return d.scanTokens(ctx, `
 		SELECT dt.token FROM device_tokens dt
 		JOIN users u ON u.id = dt.user_id
-		WHERE u.status = 'active' AND u.notify_posts = TRUE AND u.id <> $1`, authorID)
+		WHERE u.status = 'active' AND u.notify_posts = TRUE
+		  AND u.digest_enabled = FALSE AND u.id <> $1`, authorID)
+}
+
+// DigestDue is one member whose digest hour has arrived, with the window to summarize.
+type DigestDue struct {
+	UserID int64
+	Since  time.Time
+}
+
+// DigestTargets finds active members whose chosen local hour is the current hour and who
+// haven't had a summary in the last 20 hours (so each member gets at most one a day, while
+// still tolerating a scheduler tick that runs late).
+//
+// now() is converted to the member's wall clock by adding their stored UTC offset; the
+// AT TIME ZONE 'UTC' pins the arithmetic to UTC regardless of the session's timezone.
+func (d *DB) DigestTargets(ctx context.Context) ([]DigestDue, error) {
+	rows, err := d.Pool.Query(ctx, `
+		SELECT id, COALESCE(digest_sent_at, now() - interval '24 hours')
+		  FROM users
+		 WHERE digest_enabled AND status = 'active'
+		   AND EXTRACT(HOUR FROM ((now() AT TIME ZONE 'UTC')
+		         + make_interval(mins => digest_offset))) = digest_hour
+		   AND (digest_sent_at IS NULL OR digest_sent_at < now() - interval '20 hours')`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DigestDue
+	for rows.Next() {
+		var t DigestDue
+		if err := rows.Scan(&t.UserID, &t.Since); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// CountPostsSince counts check-ins by everyone but [userID] since [since] - what that
+// member has missed in the window their digest covers.
+func (d *DB) CountPostsSince(ctx context.Context, userID int64, since time.Time) (int, error) {
+	var n int
+	err := d.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM posts WHERE author_id <> $1 AND created_at > $2`, userID, since,
+	).Scan(&n)
+	return n, err
+}
+
+// TokensForUser returns every device token registered by one member.
+func (d *DB) TokensForUser(ctx context.Context, userID int64) ([]string, error) {
+	return d.scanTokens(ctx, `SELECT token FROM device_tokens WHERE user_id = $1`, userID)
+}
+
+// MarkDigestSent records that this member's summary has been delivered for today. It is
+// set even when there was nothing to report, so the window advances and the scheduler
+// doesn't re-examine them for the rest of the hour.
+func (d *DB) MarkDigestSent(ctx context.Context, userID int64) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE users SET digest_sent_at = now() WHERE id = $1`, userID)
+	return err
 }
 
 // TokensForReply returns the post author's device tokens when they want reply

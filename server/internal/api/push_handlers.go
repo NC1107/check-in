@@ -48,47 +48,62 @@ func (s *Server) handleUnregisterDevice(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleGetNotificationPrefs(w http.ResponseWriter, r *http.Request) {
-	posts, replies, likes, err := s.db.NotificationPrefs(r.Context(), userFrom(r).ID)
+	prefs, err := s.db.NotificationPrefs(r.Context(), userFrom(r).ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"posts": posts, "replies": replies, "likes": likes})
+	writeJSON(w, http.StatusOK, prefs)
 }
 
 type notifyPrefsReq struct {
 	Posts   *bool `json:"posts"`
 	Replies *bool `json:"replies"`
 	Likes   *bool `json:"likes"`
+
+	DigestEnabled *bool `json:"digestEnabled"`
+	DigestHour    *int  `json:"digestHour"`
+	DigestOffset  *int  `json:"digestOffset"`
 }
 
-// handleUpdateNotificationPrefs sets the caller's opt-out toggles. Omitted fields keep
-// their current value.
+// handleUpdateNotificationPrefs sets the caller's notification settings. Omitted fields
+// keep their current value, so the app can PATCH just the UTC offset on launch (keeping a
+// DST shift from silently moving someone's digest) without restating everything else.
 func (s *Server) handleUpdateNotificationPrefs(w http.ResponseWriter, r *http.Request) {
 	var req notifyPrefsReq
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	posts, replies, likes, err := s.db.NotificationPrefs(r.Context(), userFrom(r).ID)
+	prefs, err := s.db.NotificationPrefs(r.Context(), userFrom(r).ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
 	if req.Posts != nil {
-		posts = *req.Posts
+		prefs.Posts = *req.Posts
 	}
 	if req.Replies != nil {
-		replies = *req.Replies
+		prefs.Replies = *req.Replies
 	}
 	if req.Likes != nil {
-		likes = *req.Likes
+		prefs.Likes = *req.Likes
 	}
-	if err := s.db.SetNotificationPrefs(r.Context(), userFrom(r).ID, posts, replies, likes); err != nil {
+	if req.DigestEnabled != nil {
+		prefs.DigestEnabled = *req.DigestEnabled
+	}
+	if req.DigestHour != nil {
+		prefs.DigestHour = *req.DigestHour
+	}
+	if req.DigestOffset != nil {
+		prefs.DigestOffset = *req.DigestOffset
+	}
+	prefs = prefs.Normalize()
+	if err := s.db.SetNotificationPrefs(r.Context(), userFrom(r).ID, prefs); err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"posts": posts, "replies": replies, "likes": likes})
+	writeJSON(w, http.StatusOK, prefs)
 }
 
 // notifyPost pushes a new-post notification to everyone opted in except the author. It

@@ -127,4 +127,33 @@ void main() {
     final noBday = User.fromJson({'id': 3, 'name': 'Bo'});
     expect(noBday.birthdayLabel, '');
   });
+
+  test('NotifyPrefs defaults to instant delivery, and reads back a digest window', () {
+    final instant = NotifyPrefs.fromJson({'posts': true, 'replies': true, 'likes': true});
+    expect(instant.digestEnabled, isFalse);
+    expect(instant.digestHour, 20); // the default window, unused while instant
+
+    final digest = NotifyPrefs.fromJson({
+      'posts': true,
+      'replies': false,
+      'likes': true,
+      'digestEnabled': true,
+      'digestHour': 8,
+      'digestOffset': -300,
+    });
+    expect(digest.digestEnabled, isTrue);
+    expect(digest.digestHour, 8);
+    expect(digest.digestOffset, -300);
+    expect(digest.replies, isFalse);
+  });
+
+  test('NotifyPrefs.digestLabel renders the chosen hour', () {
+    NotifyPrefs at(int hour) => NotifyPrefs.fromJson({'digestEnabled': true, 'digestHour': hour});
+    // intl separates the meridiem with a narrow no-break space; normalize so the test is
+    // about the time, not the whitespace codepoint.
+    String label(int hour) => at(hour).digestLabel.replaceAll(RegExp(r'[  ]'), ' ');
+    expect(label(20), '8:00 PM');
+    expect(label(8), '8:00 AM');
+    expect(label(0), '12:00 AM');
+  });
 }

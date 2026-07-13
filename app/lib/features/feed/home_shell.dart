@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -64,6 +65,25 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         (api: ref.read(apiForGroupProvider(g.id)), id: g.id, name: g.displayName)
     ]);
     requestDeviceToken([for (final g in session.signedIn) ref.read(apiForGroupProvider(g.id))]);
+    _refreshDigestOffset(session);
+  }
+
+  /// Tells every group where this member currently is, so the daily summary keeps landing
+  /// at the hour they picked. Without this a DST change (or a flight) would silently shift
+  /// their 8pm digest by an hour. Best-effort: an unreachable group keeps its old offset
+  /// and re-syncs on the next launch.
+  void _refreshDigestOffset(MultiSession session) {
+    final offset = DateTime.now().timeZoneOffset.inMinutes;
+    for (final g in session.signedIn) {
+      final api = ref.read(apiForGroupProvider(g.id));
+      unawaited(() async {
+        try {
+          await api.updateNotificationPrefs(digestOffset: offset);
+        } catch (_) {
+          // Nothing to do: the digest still fires, just against the previous offset.
+        }
+      }());
+    }
   }
 
   /// A push payload carries the origin server's public URL (see the Go side's

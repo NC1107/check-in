@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../api/models.dart';
 import '../../notifications/birthday_notifier.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
@@ -19,9 +20,13 @@ class NotificationSettingsScreen extends ConsumerStatefulWidget {
 
 class _NotificationSettingsScreenState extends ConsumerState<NotificationSettingsScreen> {
   bool _loading = true;
-  bool _posts = true;
-  bool _replies = true;
-  bool _likes = true;
+  NotifyPrefs _prefs = const NotifyPrefs(
+      posts: true,
+      replies: true,
+      likes: true,
+      digestEnabled: false,
+      digestHour: 20,
+      digestOffset: 0);
   int _leadDays = 0;
   String? _error;
   bool _saving = false;
@@ -38,9 +43,7 @@ class _NotificationSettingsScreenState extends ConsumerState<NotificationSetting
       final leadDays = await birthdayLeadDays();
       if (!mounted) return;
       setState(() {
-        _posts = prefs.posts;
-        _replies = prefs.replies;
-        _likes = prefs.likes;
+        _prefs = prefs;
         _leadDays = leadDays;
         _loading = false;
       });
@@ -53,15 +56,23 @@ class _NotificationSettingsScreenState extends ConsumerState<NotificationSetting
     }
   }
 
-  Future<void> _update({bool? posts, bool? replies, bool? likes}) async {
-    // Optimistic flip so the switch feels instant; revert if the server rejects it.
-    final prevPosts = _posts;
-    final prevReplies = _replies;
-    final prevLikes = _likes;
+  Future<void> _update({
+    bool? posts,
+    bool? replies,
+    bool? likes,
+    bool? digestEnabled,
+    int? digestHour,
+  }) async {
+    // Optimistic flip so the control feels instant; revert if the server rejects it.
+    final prev = _prefs;
     setState(() {
-      if (posts != null) _posts = posts;
-      if (replies != null) _replies = replies;
-      if (likes != null) _likes = likes;
+      _prefs = _prefs.copyWith(
+        posts: posts,
+        replies: replies,
+        likes: likes,
+        digestEnabled: digestEnabled,
+        digestHour: digestHour,
+      );
       _saving = true;
     });
     try {
@@ -69,26 +80,47 @@ class _NotificationSettingsScreenState extends ConsumerState<NotificationSetting
             posts: posts,
             replies: replies,
             likes: likes,
+            digestEnabled: digestEnabled,
+            digestHour: digestHour,
+            // Always restate the offset when changing the window, so the server resolves
+            // "their 8pm" against where they actually are right now.
+            digestOffset: (digestEnabled != null || digestHour != null)
+                ? DateTime.now().timeZoneOffset.inMinutes
+                : null,
           );
       if (!mounted) return;
       setState(() {
-        _posts = result.posts;
-        _replies = result.replies;
-        _likes = result.likes;
+        _prefs = result;
         _saving = false;
       });
     } catch (_) {
       if (!mounted) return;
       setState(() {
-        _posts = prevPosts;
-        _replies = prevReplies;
-        _likes = prevLikes;
+        _prefs = prev;
         _saving = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Couldn't update - check your connection.")),
       );
     }
+  }
+
+  /// Picks the hour the daily summary arrives. Only the hour is used - the server matches
+  /// on the member's local hour - so any minutes the picker returns are dropped.
+  Future<void> _editDigestTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: _prefs.digestHour, minute: 0),
+      helpText: 'Summary arrives at',
+      builder: (context, child) => Theme(
+        data: Theme.of(context).copyWith(
+          colorScheme: Theme.of(context).colorScheme.copyWith(primary: context.accent),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked == null || !mounted) return;
+    await _update(digestHour: picked.hour);
   }
 
   @override
@@ -113,22 +145,66 @@ class _NotificationSettingsScreenState extends ConsumerState<NotificationSetting
                     _toggle(
                       title: 'New check-ins',
                       subtitle: 'When someone in your group shares a check-in',
-                      value: _posts,
+                      value: _prefs.posts,
                       onChanged: _saving ? null : (v) => _update(posts: v),
                     ),
+                    // The digest only makes sense as a way to *receive* new check-ins, so
+                    // it's nested under that toggle and hidden when it's off entirely.
+                    if (_prefs.posts) ...[
+                      _toggle(
+                        title: 'Send as a daily summary',
+                        subtitle: _prefs.digestEnabled
+                            ? 'One notification a day instead of one per check-in'
+                            : 'A notification each time someone checks in',
+                        value: _prefs.digestEnabled,
+                        onChanged: _saving ? null : (v) => _update(digestEnabled: v),
+                        inset: true,
+                      ),
+                      if (_prefs.digestEnabled)
+                        ListTile(
+                          contentPadding: const EdgeInsets.only(left: 36, right: 20),
+                          title: const Text('Summary time',
+                              style: TextStyle(
+                                  color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 15)),
+                          subtitle: const Padding(
+                            padding: EdgeInsets.only(top: 2),
+                            child: Text('e.g. "8 new check-ins while you were away"',
+                                style: TextStyle(color: kFgMuted, fontSize: 13)),
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(_prefs.digestLabel,
+                                  style: TextStyle(
+                                      color: context.accent, fontWeight: FontWeight.w600)),
+                              const SizedBox(width: 4),
+                              const Icon(Icons.chevron_right, color: kFgMuted, size: 20),
+                            ],
+                          ),
+                          onTap: _saving ? null : _editDigestTime,
+                        ),
+                    ],
                     const Divider(color: kBorder, height: 1, indent: 16, endIndent: 16),
                     _toggle(
                       title: 'Replies',
                       subtitle: 'When someone comments on your check-in',
-                      value: _replies,
+                      value: _prefs.replies,
                       onChanged: _saving ? null : (v) => _update(replies: v),
                     ),
                     const Divider(color: kBorder, height: 1, indent: 16, endIndent: 16),
                     _toggle(
                       title: 'Likes',
                       subtitle: 'When someone likes your check-in',
-                      value: _likes,
+                      value: _prefs.likes,
                       onChanged: _saving ? null : (v) => _update(likes: v),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(20, 8, 20, 0),
+                      child: Text(
+                        'Replies and likes are always sent as they happen - the summary '
+                        'only groups new check-ins.',
+                        style: TextStyle(color: kFgMuted, fontSize: 12.5, height: 1.4),
+                      ),
                     ),
                     const Padding(
                       padding: EdgeInsets.fromLTRB(20, 26, 20, 6),
@@ -245,12 +321,13 @@ class _NotificationSettingsScreenState extends ConsumerState<NotificationSetting
     required String subtitle,
     required bool value,
     required ValueChanged<bool>? onChanged,
+    bool inset = false, // nested under the toggle it depends on
   }) {
     return SwitchListTile(
       value: value,
       onChanged: onChanged,
       activeThumbColor: context.accent,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+      contentPadding: EdgeInsets.only(left: inset ? 36 : 20, right: 20),
       title: Text(title,
           style: const TextStyle(color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 15)),
       subtitle: Padding(
