@@ -7,6 +7,7 @@ import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/likers_sheet.dart';
 import '../../widgets/photo_viewer.dart';
 import '../../widgets/post_image_carousel.dart';
 import '../../widgets/tagged_people_line.dart';
@@ -284,6 +285,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   Widget _actions(Post post, int commentCount) {
     final liked = _likeOverride ?? post.likedByViewer;
     final likes = post.likeCount + (liked == post.likedByViewer ? 0 : (liked ? 1 : -1));
+    final me = ref.read(contentAccountProvider(widget.groupId))?.user;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Row(
@@ -292,6 +294,10 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
             color: Colors.transparent,
             child: InkResponse(
               onTap: () => _toggleLike(post),
+              // The author can long-press their own post's like to see who liked it.
+              onLongPress: (me != null && me.id == post.authorId)
+                  ? () => showLikersSheet(context, postId: post.id, groupId: widget.groupId)
+                  : null,
               radius: 28,
               containedInkWell: true,
               highlightShape: BoxShape.rectangle,

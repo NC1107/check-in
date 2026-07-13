@@ -251,6 +251,15 @@ class ApiClient {
   Future<void> like(int postId) => _dio.post('/api/posts/$postId/like');
   Future<void> unlike(int postId) => _dio.delete('/api/posts/$postId/like');
 
+  /// postLikers returns who liked a post, most recent first. The server allows this only
+  /// for the post's own author (403 otherwise).
+  Future<List<User>> postLikers(int postId) async {
+    final r = await _dio.get('/api/posts/$postId/likes');
+    return ((r.data as Map<String, dynamic>)['likers'] as List? ?? [])
+        .map((e) => User.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   Future<List<Comment>> comments(int postId) async {
     final r = await _dio.get('/api/posts/$postId/comments');
     return ((r.data as Map<String, dynamic>)['comments'] as List? ?? [])

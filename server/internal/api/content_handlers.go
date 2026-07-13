@@ -283,6 +283,35 @@ func (s *Server) handleUnlike(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleListLikers returns who liked a post. Only the post's author may see this, so a
+// non-author (or a stranger) gets 403 rather than the list.
+func (s *Server) handleListLikers(w http.ResponseWriter, r *http.Request) {
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+	authorID, err := s.db.PostAuthorID(r.Context(), id)
+	if errors.Is(err, db.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "post not found")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	if authorID != userFrom(r).ID {
+		writeErr(w, http.StatusForbidden, "only the author can see who liked this")
+		return
+	}
+	likers, err := s.db.PostLikers(r.Context(), id)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"likers": likers})
+}
+
 func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {

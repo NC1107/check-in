@@ -1005,6 +1005,39 @@ func (d *DB) PostVisible(ctx context.Context, postID int64) (bool, error) {
 	return ok, err
 }
 
+// PostAuthorID returns the id of the member who created a post, or ErrNotFound.
+func (d *DB) PostAuthorID(ctx context.Context, postID int64) (int64, error) {
+	var authorID int64
+	err := d.Pool.QueryRow(ctx, `SELECT author_id FROM posts WHERE id = $1`, postID).Scan(&authorID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, ErrNotFound
+	}
+	return authorID, err
+}
+
+// PostLikers returns the members who liked a post, most recent first. Used by the
+// author-only "who liked this" list.
+func (d *DB) PostLikers(ctx context.Context, postID int64) ([]Liker, error) {
+	rows, err := d.Pool.Query(ctx, `
+		SELECT u.id, u.name, u.profile_media_id
+		FROM likes l JOIN users u ON u.id = l.user_id
+		WHERE l.post_id = $1 AND u.status = 'active'
+		ORDER BY l.created_at DESC`, postID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	likers := []Liker{}
+	for rows.Next() {
+		var lk Liker
+		if err := rows.Scan(&lk.ID, &lk.Name, &lk.ProfileMediaID); err != nil {
+			return nil, err
+		}
+		likers = append(likers, lk)
+	}
+	return likers, rows.Err()
+}
+
 // LikePost adds a like, ignoring duplicates. Returns whether a new like was actually
 // inserted (false when the post was already liked) so callers can skip a redundant push.
 func (d *DB) LikePost(ctx context.Context, postID, userID int64) (bool, error) {

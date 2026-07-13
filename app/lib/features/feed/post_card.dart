@@ -10,6 +10,7 @@ import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/likers_sheet.dart';
 import '../../widgets/photo_viewer.dart';
 import '../../widgets/post_image_carousel.dart';
 import '../../widgets/tagged_people_line.dart';
@@ -292,6 +293,7 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
     required String label,
     required String semantic,
     required VoidCallback onTap,
+    VoidCallback? onLongPress,
     Listenable? bump,
   }) {
     Widget iconWidget = Icon(icon, size: 22, color: iconColor);
@@ -313,6 +315,7 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
         color: Colors.transparent,
         child: InkResponse(
           onTap: onTap,
+          onLongPress: onLongPress,
           radius: 28,
           containedInkWell: true,
           highlightShape: BoxShape.rectangle,
@@ -547,6 +550,10 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                   semantic: _liked ? 'Unlike' : 'Like',
                   bump: _likePop,
                   onTap: _toggleLike,
+                  // The author can long-press their own post's like to see who liked it.
+                  onLongPress: (me != null && me.id == p.authorId)
+                      ? () => showLikersSheet(context, postId: p.id, groupId: p.groupId)
+                      : null,
                 ),
                 _action(
                   icon: Icons.chat_bubble_outline,

@@ -97,6 +97,7 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/api/posts/{id}", s.handleDeletePost)
 		r.Post("/api/posts/{id}/like", s.handleLike)
 		r.Delete("/api/posts/{id}/like", s.handleUnlike)
+		r.Get("/api/posts/{id}/likes", s.handleListLikers)
 		r.Get("/api/posts/{id}/comments", s.handleListComments)
 		r.Post("/api/posts/{id}/comments", s.handleAddComment)
 

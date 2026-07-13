@@ -57,6 +57,13 @@ type TaggedPerson struct {
 	Name string `json:"name"`
 }
 
+// Liker is one member who liked a post, for the author-only "who liked this" list.
+type Liker struct {
+	ID             int64  `json:"id"`
+	Name           string `json:"name"`
+	ProfileMediaID *int64 `json:"profileMediaId,omitempty"`
+}
+
 // CommentPreview is a lightweight comment (author + body) for inline feed previews.
 type CommentPreview struct {
 	AuthorID   int64  `json:"authorId"`
