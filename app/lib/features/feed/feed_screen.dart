@@ -950,6 +950,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     );
   }
 
+  /// A removable chip for one active filter. These float over the scrolling feed, so the
+  /// accent tint is composited onto the app background rather than left at 16% alpha - a
+  /// translucent fill is unreadable once a photo scrolls under it - and it carries the same
+  /// lift as the search bar above it.
   Widget _filterChip(String label, VoidCallback onRemove) {
     return Semantics(
       button: true,
@@ -960,9 +964,13 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         child: Container(
           padding: const EdgeInsets.fromLTRB(11, 5, 9, 5),
           decoration: BoxDecoration(
-            color: context.accentLight,
+            color: Color.alphaBlend(context.accentLight, _bgMain),
             border: Border.all(color: context.accent),
             borderRadius: BorderRadius.circular(9999),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withAlpha(90), blurRadius: 14, offset: const Offset(0, 5)),
+            ],
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
