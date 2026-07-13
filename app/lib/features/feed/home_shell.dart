@@ -19,6 +19,7 @@ import '../../theme/tokens.dart';
 import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
 import '../profile/profile_screen.dart';
+import '../whats_new/release_notes.dart';
 import 'feed_screen.dart';
 
 const _bgMain = kBgMain;
@@ -47,6 +48,8 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       _registerServices();
       // Route notification taps: switch to the push's origin group and open the post.
       setPushTapHandler(_onPushTap);
+      // Show "What's New" once after an update (silent on a fresh install).
+      maybeShowWhatsNew(context);
     });
   }
 
