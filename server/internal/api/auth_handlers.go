@@ -142,9 +142,49 @@ type checkPhoneReq struct {
 	Phone string `json:"phone"`
 }
 
+// inviteState is what an invited phone may do next: nothing, sign up, or log in.
+type inviteState int
+
+const (
+	inviteNone    inviteState = iota // not on the allowlist - may not sign up
+	inviteOpen                       // invited and unclaimed - may sign up
+	inviteClaimed                    // an account already holds this number - log in instead
+)
+
+// inviteStateFor derives what a phone may do from its allowlist row and whether an account
+// holds the number. The users table - not allowed_phones.used - decides whether an invite is
+// claimed: deleting an account deletes its invite row (see DeleteAccount), so a used invite
+// with no account behind it is stale, left over from a user row removed out of band. Reading
+// the flag as gospel would dead-end an invited number forever behind an "already registered"
+// error that is false and that no admin screen can clear (the invite list only offers Remove
+// on pending rows).
+func inviteStateFor(allowed, registered bool) inviteState {
+	switch {
+	case !allowed:
+		return inviteNone
+	case registered:
+		return inviteClaimed
+	default:
+		return inviteOpen
+	}
+}
+
+// invite looks up the [inviteState] for an already-normalized phone.
+func (s *Server) invite(ctx context.Context, phone string) (inviteState, error) {
+	allowed, _, err := s.db.PhoneAllowed(ctx, phone)
+	if err != nil {
+		return inviteNone, err
+	}
+	registered, err := s.db.PhoneRegistered(ctx, phone)
+	if err != nil {
+		return inviteNone, err
+	}
+	return inviteStateFor(allowed, registered), nil
+}
+
 // handleCheckPhone reports whether a phone may sign up. The first user (before any
 // admin exists) may always sign up and becomes the admin; everyone else must be on the
-// allowlist and not already used.
+// allowlist with an unclaimed invite.
 func (s *Server) handleCheckPhone(w http.ResponseWriter, r *http.Request) {
 	var req checkPhoneReq
 	if err := decodeJSON(w, r, &req); err != nil {
@@ -174,14 +214,14 @@ func (s *Server) handleCheckPhone(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	allowed, used, err := s.db.PhoneAllowed(r.Context(), phone)
+	allowed, _, err := s.db.PhoneAllowed(r.Context(), phone)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"allowed":      allowed && !used, // may still claim an invite (sign up)
-		"registered":   registered,       // already has an account (log in)
+		"allowed":      inviteStateFor(allowed, registered) == inviteOpen, // may sign up
+		"registered":   registered,                                        // already has an account (log in)
 		"isFirstAdmin": false,
 	})
 }
@@ -252,18 +292,19 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		// First ever user → admin.
 		isAdmin = true
 	} else {
-		allowed, used, err := s.db.PhoneAllowed(r.Context(), phone)
+		state, err := s.invite(r.Context(), phone)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, "server error")
 			return
 		}
-		if !allowed {
+		switch state {
+		case inviteNone:
 			writeErr(w, http.StatusForbidden, "this phone number is not on the invite list")
 			return
-		}
-		if used {
+		case inviteClaimed:
 			writeErr(w, http.StatusConflict, "this phone number has already been registered")
 			return
+		case inviteOpen:
 		}
 	}
 
