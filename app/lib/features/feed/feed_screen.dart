@@ -10,6 +10,7 @@ import '../../state/person_directory.dart';
 import '../../state/unread.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/date_range_sheet.dart';
 import '../../widgets/skeletons.dart';
 import '../../widgets/user_avatar.dart';
 import '../onboarding/auth_screen.dart';
@@ -1716,31 +1717,29 @@ class _FilterSheetState extends State<_FilterSheet> {
     final now = DateTime.now();
     final date = _date;
     final current = date is _RangeDate ? date : null;
-    final picked = await showDateRangePicker(
-      context: context,
+    final choice = await showDateRangeSheet(
+      context,
       firstDate: DateTime(now.year - 5),
       lastDate: DateTime(now.year, now.month, now.day),
-      initialDateRange: current == null
+      initial: current == null
           ? null
           : DateTimeRange(
               start: DateTime(current.start.year, current.start.month, current.start.day),
               end: DateTime(current.end.year, current.end.month, current.end.day),
             ),
-      helpText: 'Select date range',
-      builder: (context, child) => Theme(
-        data: Theme.of(context).copyWith(
-          colorScheme: Theme.of(context).colorScheme.copyWith(primary: context.accent),
-        ),
-        child: child!,
-      ),
     );
-    if (picked == null || !mounted) return;
+    if (choice == null || !mounted) return;
     setState(() {
-      // Normalize to whole local days: start at midnight, end at the last second.
-      _date = _RangeDate(
-        DateTime(picked.start.year, picked.start.month, picked.start.day),
-        DateTime(picked.end.year, picked.end.month, picked.end.day, 23, 59, 59),
-      );
+      switch (choice) {
+        // Normalize to whole local days: start at midnight, end at the last second.
+        case PickRange(:final range):
+          _date = _RangeDate(
+            DateTime(range.start.year, range.start.month, range.start.day),
+            DateTime(range.end.year, range.end.month, range.end.day, 23, 59, 59),
+          );
+        case ClearRange():
+          _date = null;
+      }
     });
   }
 
