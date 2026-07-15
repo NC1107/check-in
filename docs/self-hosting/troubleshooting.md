@@ -37,10 +37,10 @@ failures.
 
 Usually it can't reach the database. Check `docker compose logs server`.
 
-- Wait a moment on first boot — the server waits for PostgreSQL to become healthy.
+- Wait a moment on first boot, since the server waits for PostgreSQL to become healthy.
 - Confirm `POSTGRES_PASSWORD` is set in `.env` (the DB container refuses to start without
   it) and that you didn't change it after the volume was first created. If you changed
-  the password after first run, the existing `db_data` volume still has the old one —
+  the password after first run, the existing `db_data` volume still has the old one, so
   either set it back, or reset the database (destroys data): `docker compose down` then
   remove the volume.
 
@@ -49,7 +49,7 @@ Usually it can't reach the database. Check `docker compose logs server`.
 - `docker compose logs db` will show the cause. A common one is a previously
   initialized volume with a different password (see above).
 - Ensure nothing else on the host is using the same internal resources; the DB is not
-  meant to be published to the host — don't add a `ports:` mapping for it.
+  meant to be published to the host, so don't add a `ports:` mapping for it.
 
 ## Contacts upload added 0 numbers
 
@@ -64,14 +64,32 @@ Usually it can't reach the database. Check `docker compose logs server`.
 - The number they're entering must match an uploaded contact after normalization (see
   the matching note in [security.md](security.md)). Watch for a missing/extra country
   code (`+1`).
-- If they already registered once, the number is marked used — they should **log in**
+- If they already registered once, the number is marked used, so they should **log in**
   instead. If they need a fresh start, remove them from the Admin tab and re-upload.
+
+## Nobody gets push notifications
+
+Check the server log on boot. It always states the push mode in one line.
+
+- `push: disabled (no FCM credentials)` means push is off, which is the default. Nothing is
+  broken. See [configuration.md](configuration.md#push-notifications) for your options.
+- `push: FCM ... (SENDER_ID_MISMATCH)` means FCM is refusing your sends because your
+  members' app was built against a **different Firebase project** than your credentials.
+  This is what happens when you configure your own Firebase service account but your
+  members installed the app from the App Store or Google Play. It cannot be fixed by
+  changing configuration; the Firebase project is compiled into the app binary. Read
+  [configuration.md](configuration.md#push-notifications) for the three honest options.
+- `push: FCM ... (UNREGISTERED)` for one member usually just means they uninstalled the app
+  or the token went stale. If it happens for *every* member, treat it as the case above.
+
+Notifications are also easy to lose at the device end: check that the member granted
+notification permission, and note that iOS suppresses banners while the app is foregrounded.
 
 ## 502 Bad Gateway
 
 Caddy is up but can't reach the server container.
 
-- `docker compose ps` — is `server` running and healthy?
+- `docker compose ps`: is `server` running and healthy?
 - `docker compose logs server` for a startup error (often a DB connection problem).
 - `docker compose restart server`.
 

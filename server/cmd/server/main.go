@@ -62,9 +62,18 @@ func main() {
 		} else if pushSender, err = push.New(ctx, creds); err != nil {
 			log.Printf("push: init failed (%v); push disabled", err)
 			pushSender = nil
-		} else {
-			log.Println("push: FCM enabled")
 		}
+	}
+	// State the push mode on every boot: "no notifications" is otherwise indistinguishable
+	// from a healthy server, and it is the hardest thing for a self-hoster to diagnose.
+	if pushSender != nil {
+		log.Printf("push: direct FCM, sending through Firebase project %q. Delivery only works if "+
+			"the app your members installed was built against this project; the published apps "+
+			"were not. See docs/self-hosting/configuration.md#push-notifications",
+			pushSender.ProjectID())
+	} else {
+		log.Println("push: disabled (no FCM credentials). Members will not receive notifications. " +
+			"See docs/self-hosting/configuration.md#push-notifications")
 	}
 
 	srv := api.New(cfg, database, store, pushSender)

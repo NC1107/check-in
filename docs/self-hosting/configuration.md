@@ -35,6 +35,62 @@ Under Compose, sensible values are already wired up; override only if you need t
 | `CHECKIN_SESSION_TTL` | `720h` (30 days) | How long a login session stays valid. Accepts Go durations (e.g. `168h`, `720h`). |
 | `CHECKIN_MAX_UPLOAD_BYTES` | `10485760` (10 MiB) | Maximum accepted size for an uploaded image. |
 
+## Push notifications
+
+**Read this before setting up push.** Push is the one part of Check-In you cannot fully self-host today, and the reason is not obvious.
+
+Push notifications go out through Firebase Cloud Messaging, which reaches Android directly and iOS through APNs.
+FCM will only deliver to a device token that was minted against the *same* Firebase project the sending credentials belong to.
+The Check-In apps published on the App Store and Google Play embed the maintainer's Firebase configuration, so every device running a published app mints its token against the maintainer's Firebase project.
+
+The consequence: **if you point your server at your own Firebase service account, every send fails.**
+FCM rejects each one with `SENDER_ID_MISMATCH`, your members get nothing, and your server otherwise looks perfectly healthy.
+This is not a bug in your setup, and no amount of configuration fixes it.
+
+There are three honest options.
+
+### 1. Push off (the default)
+
+Leave `CHECKIN_FCM_CREDENTIALS_FILE` unset.
+Everything else in Check-In works; members simply see new check-ins when they open the app.
+The server logs `push: disabled (no FCM credentials)` on every boot so this is never a mystery.
+
+### 2. Relay through the maintainer (planned)
+
+A small relay service, operated by the maintainer, that holds the Firebase credential and accepts sends from your server using a per-server key.
+Your server keeps its data; the relay only ever sees a short title and body (never post content, photos, or comments) plus the device tokens to deliver to.
+
+This does not exist yet.
+If you want it, [open an issue](https://github.com/NC1107/check-in/issues) saying so and you will get a key when it ships.
+
+The maintainer cannot simply email you the Firebase service-account JSON instead: that credential grants permission to send a notification to *any* Check-In device on *any* server, including other people's groups.
+It is a master key, not a per-host one.
+The relay exists precisely so hosts can be given something scoped and revocable.
+
+In keeping with the project's approach, the relay will not paywall any feature and will be free to use for as long as it stays cheap to run.
+FCM itself costs nothing at any volume; if the relay's hosting ever becomes a real recurring cost, that will be stated plainly rather than quietly turned into a subscription.
+
+### 3. Bring your own Firebase (free, fully independent)
+
+The only path that gives you working push with no dependency on the maintainer at all.
+It requires **building and distributing the app yourself**, because the Firebase project is compiled into the app binary:
+
+1. Create your own Firebase project and register an Android and/or iOS app in it.
+2. Replace `app/android/app/google-services.json` and `app/ios/Runner/GoogleService-Info.plist` with yours.
+3. For iOS, upload an APNs key to your Firebase project.
+4. Build the app and distribute it to your members, sideloaded or through your own store listing.
+   On iOS this means your own Apple Developer account and your own App Review submission.
+5. Point the server at a service-account JSON from that same Firebase project:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CHECKIN_FCM_CREDENTIALS_HOST` | *(empty)* | Path on the host to your Firebase service-account JSON, mounted read-only into the container. |
+| `CHECKIN_FCM_CREDENTIALS_FILE` | *(empty)* | Path the server reads it from *inside* the container, e.g. `/run/secrets/fcm-service-account.json`. Unset disables push. |
+
+On boot the server prints which Firebase project it is sending through, so you can confirm it matches the one your app was built against.
+
+Using these variables **with the published app** puts you in the broken state described above.
+
 ## Image version
 
 | Variable | Default | Description |
@@ -43,8 +99,8 @@ Under Compose, sensible values are already wired up; override only if you need t
 
 ## Storage volumes
 
-`docker-compose.yml` defines four named Docker volumes. These hold all persistent state —
-back them up (see [operations.md](operations.md)):
+`docker-compose.yml` defines four named Docker volumes. These hold all persistent state,
+so back them up (see [operations.md](operations.md)):
 
 | Volume | Holds |
 |--------|-------|
