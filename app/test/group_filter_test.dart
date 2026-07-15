@@ -354,14 +354,21 @@ void main() {
     expect(find.byIcon(Icons.download_rounded), findsOneWidget);
   });
 
-  testWidgets('the custom range pill opens a calendar range picker', (tester) async {
+  testWidgets('the custom range pill opens the in-theme calendar sheet', (tester) async {
+    tester.view.physicalSize = const Size(500, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
     await pump(tester, const MultiSession(groups: [alpha], restored: true));
 
     await openFilter(tester);
     await tester
         .tap(find.descendant(of: find.byType(BottomSheet), matching: find.text('Custom range')));
     await tester.pumpAndSettle();
-    // The Material date-range picker (its helpText) is now on screen.
-    expect(find.text('Select date range'), findsOneWidget);
+    // The custom dark range sheet is on screen (title + Apply, not the Material picker).
+    expect(find.text('Select dates'), findsOneWidget);
+    expect(find.text('Apply'), findsOneWidget);
+    expect(find.text('Select a start date'), findsOneWidget);
   });
 }
