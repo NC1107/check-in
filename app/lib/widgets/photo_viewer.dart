@@ -35,8 +35,7 @@ class PhotoViewerScreen extends StatefulWidget {
   State<PhotoViewerScreen> createState() => _PhotoViewerScreenState();
 }
 
-class _PhotoViewerScreenState extends State<PhotoViewerScreen>
-    with SingleTickerProviderStateMixin {
+class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTickerProviderStateMixin {
   final _controller = TransformationController();
   late final AnimationController _reset =
       AnimationController(vsync: this, duration: const Duration(milliseconds: 200));

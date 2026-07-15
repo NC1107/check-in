@@ -17,7 +17,8 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
   }
 
-  Future<DateRangeChoice?> openAndPick(WidgetTester tester, Future<void> Function() interact) async {
+  Future<DateRangeChoice?> openAndPick(
+      WidgetTester tester, Future<void> Function() interact) async {
     DateRangeChoice? result;
     late BuildContext ctx;
     await tester.pumpWidget(MaterialApp(
@@ -28,8 +29,8 @@ void main() {
         }),
       ),
     ));
-    final future = showDateRangeSheet(ctx, firstDate: firstDate, lastDate: lastDate)
-        .then((r) => result = r);
+    final future =
+        showDateRangeSheet(ctx, firstDate: firstDate, lastDate: lastDate).then((r) => result = r);
     await tester.pumpAndSettle();
     await interact();
     await future;

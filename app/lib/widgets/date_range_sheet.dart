@@ -59,8 +59,9 @@ class _DateRangeSheetState extends State<_DateRangeSheet> {
 
   final _scroll = ScrollController();
   late final DateTime _firstMonth = DateTime(widget.firstDate.year, widget.firstDate.month);
-  late final int _monthCount =
-      (widget.lastDate.year - _firstMonth.year) * 12 + (widget.lastDate.month - _firstMonth.month) + 1;
+  late final int _monthCount = (widget.lastDate.year - _firstMonth.year) * 12 +
+      (widget.lastDate.month - _firstMonth.month) +
+      1;
 
   DateTime? _start;
   DateTime? _end;
@@ -109,7 +110,8 @@ class _DateRangeSheetState extends State<_DateRangeSheet> {
     });
   }
 
-  bool _selectable(DateTime day) => !day.isBefore(_dayOnly(widget.firstDate)) && !day.isAfter(widget.lastDate);
+  bool _selectable(DateTime day) =>
+      !day.isBefore(_dayOnly(widget.firstDate)) && !day.isAfter(widget.lastDate);
 
   String get _summary {
     final f = DateFormat.MMMd();
@@ -227,10 +229,7 @@ class _DateRangeSheetState extends State<_DateRangeSheet> {
     final isEnd = _end != null && _sameDay(day, _end!);
     final endpoint = isStart || isEnd;
     final single = _start != null && _end != null && _sameDay(_start!, _end!);
-    final inRange = _start != null &&
-        _end != null &&
-        !day.isBefore(_start!) &&
-        !day.isAfter(_end!);
+    final inRange = _start != null && _end != null && !day.isBefore(_start!) && !day.isAfter(_end!);
 
     BorderRadius? bandRadius;
     if (inRange) {
