@@ -37,42 +37,55 @@ Under Compose, sensible values are already wired up; override only if you need t
 
 ## Push notifications
 
-**Read this before setting up push.** Push is the one part of Check-In you cannot fully self-host today, and the reason is not obvious.
+Push works out of the box now, so most self-hosters don't need to configure anything here. This section explains how, and how to change it.
 
 Push notifications go out through Firebase Cloud Messaging, which reaches Android directly and iOS through APNs.
 FCM will only deliver to a device token that was minted against the *same* Firebase project the sending credentials belong to.
 The Check-In apps published on the App Store and Google Play embed the maintainer's Firebase configuration, so every device running a published app mints its token against the maintainer's Firebase project.
 
-The consequence: **if you point your server at your own Firebase service account, every send fails.**
-FCM rejects each one with `SENDER_ID_MISMATCH`, your members get nothing, and your server otherwise looks perfectly healthy.
-This is not a bug in your setup, and no amount of configuration fixes it.
+That one fact decides how push works for you:
 
-There are three honest options.
+- **If your members use the published apps** (the normal case), only the maintainer's Firebase project can deliver to them, and your server cannot reach that project directly. So your server forwards notifications through a relay the maintainer runs. This is automatic and is the default.
+- **If you build and ship your own app** with your own Firebase project compiled in, your server sends to FCM directly with your own credentials.
 
-### 1. Push off (the default)
+There are three options.
 
-Leave `CHECKIN_FCM_CREDENTIALS_FILE` unset.
-Everything else in Check-In works; members simply see new check-ins when they open the app.
-The server logs `push: disabled (no FCM credentials)` on every boot so this is never a mystery.
+### 1. Relay through the maintainer (the default)
 
-### 2. Relay through the maintainer (planned)
+Out of the box your server forwards push through a small relay the maintainer runs at a fixed URL.
+On its first boot the server registers itself with the relay, gets a scoped, revocable key, stores it, and reuses it on every boot after.
+There is nothing to set up: a freshly started server whose members use the published apps just delivers notifications.
 
-A small relay service, operated by the maintainer, that holds the Firebase credential and accepts sends from your server using a per-server key.
-Your server keeps its data; the relay only ever sees a short title and body (never post content, photos, or comments) plus the device tokens to deliver to.
+The relay holds the one Firebase credential the published apps were built against and forwards on your behalf.
+It only ever sees a short notification title and body (for example "Alice shared a check-in") plus the device tokens to deliver to.
+It never sees post content, photos, comments, phone numbers, or who is in your group, and it does not log the title, body, or tokens.
 
-This does not exist yet.
-If you want it, [open an issue](https://github.com/NC1107/check-in/issues) saying so and you will get a key when it ships.
+The tradeoff is that you are trusting the maintainer's relay with that short title and body in transit.
+If that is not acceptable, use option 3 for full independence, or turn push off with option 2.
 
-The maintainer cannot simply email you the Firebase service-account JSON instead: that credential grants permission to send a notification to *any* Check-In device on *any* server, including other people's groups.
-It is a master key, not a per-host one.
-The relay exists precisely so hosts can be given something scoped and revocable.
+The maintainer cannot simply hand you the Firebase service-account JSON instead: that credential can send a notification to *any* Check-In device on *any* server, including other people's groups.
+It is a master key, not a per-host one, which is exactly why the relay exists - so each host gets something scoped and revocable.
 
-In keeping with the project's approach, the relay will not paywall any feature and will be free to use for as long as it stays cheap to run.
+The relay will not paywall any feature and is free to use for as long as it stays cheap to run.
 FCM itself costs nothing at any volume; if the relay's hosting ever becomes a real recurring cost, that will be stated plainly rather than quietly turned into a subscription.
+
+On boot the server logs `push: relay via <url>`, so which mode you're in is never a mystery.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CHECKIN_RELAY_URL` | the maintainer's relay | Base URL of the relay to forward push through. Set it to an empty string to turn the relay off (option 2). Ignored when `CHECKIN_FCM_CREDENTIALS_FILE` is set, since that means the server sends directly. |
+
+### 2. Push off
+
+Set `CHECKIN_RELAY_URL` to an empty string, and leave `CHECKIN_FCM_CREDENTIALS_FILE` unset.
+Everything else in Check-In works; members simply see new check-ins when they open the app.
+The server logs `push: disabled (no FCM credentials and no relay URL)` on every boot.
+
+Leaving the variable *unset* does not turn push off - unset means "use the default relay". You have to set it to an explicit empty value to opt out.
 
 ### 3. Bring your own Firebase (free, fully independent)
 
-The only path that gives you working push with no dependency on the maintainer at all.
+The only path with no dependency on the maintainer at all.
 It requires **building and distributing the app yourself**, because the Firebase project is compiled into the app binary:
 
 1. Create your own Firebase project and register an Android and/or iOS app in it.
@@ -85,11 +98,10 @@ It requires **building and distributing the app yourself**, because the Firebase
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CHECKIN_FCM_CREDENTIALS_HOST` | *(empty)* | Path on the host to your Firebase service-account JSON, mounted read-only into the container. |
-| `CHECKIN_FCM_CREDENTIALS_FILE` | *(empty)* | Path the server reads it from *inside* the container, e.g. `/run/secrets/fcm-service-account.json`. Unset disables push. |
+| `CHECKIN_FCM_CREDENTIALS_FILE` | *(empty)* | Path the server reads it from *inside* the container, e.g. `/run/secrets/fcm-service-account.json`. When set, the server sends directly through FCM and ignores the relay. |
 
 On boot the server prints which Firebase project it is sending through, so you can confirm it matches the one your app was built against.
-
-Using these variables **with the published app** puts you in the broken state described above.
+Using these variables **with the published app** puts you in the `SENDER_ID_MISMATCH` state: the published app's tokens belong to the maintainer's project, not yours, and every send fails while the server looks healthy.
 
 ## Image version
 

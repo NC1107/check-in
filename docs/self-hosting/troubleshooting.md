@@ -71,16 +71,26 @@ Usually it can't reach the database. Check `docker compose logs server`.
 
 Check the server log on boot. It always states the push mode in one line.
 
-- `push: disabled (no FCM credentials)` means push is off, which is the default. Nothing is
-  broken. See [configuration.md](configuration.md#push-notifications) for your options.
+- `push: relay via <url>` is the default: your server forwards notifications through the
+  maintainer's relay. If notifications still don't arrive, it's usually the device end (see
+  below). Otherwise look earlier in the log for `push: relay registration ... failed`, which
+  means the server couldn't register with the relay on boot and push stays off until a
+  restart succeeds - check the server can reach the relay URL.
+- `push: direct FCM ...` means your server sends to FCM directly with your own credentials
+  (you built and ship your own app). If nothing arrives, confirm the Firebase project named
+  in the log matches the one your app was built against.
+- `push: disabled (no FCM credentials and no relay URL)` means push was turned off
+  explicitly by setting `CHECKIN_RELAY_URL` empty. Nothing is broken; see
+  [configuration.md](configuration.md#push-notifications) to turn it back on.
 - `push: FCM ... (SENDER_ID_MISMATCH)` means FCM is refusing your sends because your
   members' app was built against a **different Firebase project** than your credentials.
   This is what happens when you configure your own Firebase service account but your
   members installed the app from the App Store or Google Play. It cannot be fixed by
-  changing configuration; the Firebase project is compiled into the app binary. Read
-  [configuration.md](configuration.md#push-notifications) for the three honest options.
-- `push: FCM ... (UNREGISTERED)` for one member usually just means they uninstalled the app
-  or the token went stale. If it happens for *every* member, treat it as the case above.
+  changing configuration; the Firebase project is compiled into the app binary. Use the
+  default relay instead, or read [configuration.md](configuration.md#push-notifications).
+- An `unregistered` count in a `push: relay sent ...` line (or `push: FCM ... (UNREGISTERED)`
+  in direct mode) for one member usually just means they uninstalled the app or the token
+  went stale. If it happens for *every* member, treat it as the case above.
 
 Notifications are also easy to lose at the device end: check that the member granted
 notification permission, and note that iOS suppresses banners while the app is foregrounded.

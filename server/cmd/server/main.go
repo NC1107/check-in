@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -52,31 +53,13 @@ func main() {
 		log.Fatalf("storage: %v", err)
 	}
 
-	// Optional push notifications via FCM. Failure here only disables push; it never
-	// stops the server from running.
-	var pushSender *push.Sender
-	if cfg.FCMCredentialsFile != "" {
-		creds, rerr := os.ReadFile(cfg.FCMCredentialsFile)
-		if rerr != nil {
-			log.Printf("push: cannot read FCM credentials (%v); push disabled", rerr)
-		} else if pushSender, err = push.New(ctx, creds); err != nil {
-			log.Printf("push: init failed (%v); push disabled", err)
-			pushSender = nil
-		}
-	}
-	// State the push mode on every boot: "no notifications" is otherwise indistinguishable
-	// from a healthy server, and it is the hardest thing for a self-hoster to diagnose.
-	if pushSender != nil {
-		log.Printf("push: direct FCM, sending through Firebase project %q. Delivery only works if "+
-			"the app your members installed was built against this project; the published apps "+
-			"were not. See docs/self-hosting/configuration.md#push-notifications",
-			pushSender.ProjectID())
-	} else {
-		log.Println("push: disabled (no FCM credentials). Members will not receive notifications. " +
-			"See docs/self-hosting/configuration.md#push-notifications")
-	}
-
-	srv := api.New(cfg, database, store, pushSender)
+	// Push notifications. A server with its own FCM credentials sends directly; otherwise it
+	// forwards through the relay (the default), registering once on first boot; with neither
+	// configured, push is off. setupPush states the chosen mode on every boot - "no
+	// notifications" is otherwise indistinguishable from a healthy server and is the hardest
+	// thing for a self-hoster to diagnose. A push failure only disables push, never stops
+	// the server.
+	srv := api.New(cfg, database, store, setupPush(ctx, cfg, database))
 	// Daily summaries for members who chose a digest over a ping per check-in. No-op when
 	// push isn't configured.
 	srv.StartDigestScheduler(ctx)
@@ -115,6 +98,76 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = httpServer.Shutdown(shutdownCtx)
+}
+
+// setupPush selects and builds the push Notifier from config, logging the chosen mode. It
+// returns nil (push off) rather than erroring, so a push misconfiguration never stops the
+// server. Precedence: direct FCM when credentials are present (a host shipping its own app,
+// and the maintainer's own server), else the relay when a URL is set (the default), else off.
+func setupPush(ctx context.Context, cfg config.Config, database *db.DB) push.Notifier {
+	if cfg.FCMCredentialsFile != "" {
+		creds, err := os.ReadFile(cfg.FCMCredentialsFile)
+		if err != nil {
+			log.Printf("push: cannot read FCM credentials (%v); push disabled", err)
+			return nil
+		}
+		sender, err := push.New(ctx, creds)
+		if err != nil {
+			log.Printf("push: init failed (%v); push disabled", err)
+			return nil
+		}
+		if sender == nil {
+			log.Println("push: disabled (empty FCM credentials file)")
+			return nil
+		}
+		log.Printf("push: direct FCM, sending through Firebase project %q. Delivery only works if "+
+			"the app your members installed was built against this project; the published apps "+
+			"were not. See docs/self-hosting/configuration.md#push-notifications",
+			sender.ProjectID())
+		return sender
+	}
+
+	if cfg.RelayURL != "" {
+		key, err := ensureRelayKey(ctx, cfg, database)
+		if err != nil {
+			log.Printf("push: relay registration with %s failed (%v); push disabled. Members will "+
+				"not receive notifications. See docs/self-hosting/configuration.md#push-notifications",
+				cfg.RelayURL, err)
+			return nil
+		}
+		log.Printf("push: relay via %s. Members running the published apps receive notifications "+
+			"through the maintainer's relay, which sees only a short title/body plus the device "+
+			"tokens - never post content. Clear CHECKIN_RELAY_URL to turn this off. "+
+			"See docs/self-hosting/configuration.md#push-notifications", cfg.RelayURL)
+		return push.NewRelaySender(cfg.RelayURL, key)
+	}
+
+	log.Println("push: disabled (no FCM credentials and no relay URL). Members will not receive " +
+		"notifications. See docs/self-hosting/configuration.md#push-notifications")
+	return nil
+}
+
+// ensureRelayKey returns this server's relay key, registering with the relay on first use
+// and persisting the issued key so registration happens exactly once across restarts.
+func ensureRelayKey(ctx context.Context, cfg config.Config, database *db.DB) (string, error) {
+	key, err := database.GetRelayKey(ctx)
+	if err != nil {
+		return "", fmt.Errorf("read stored relay key: %w", err)
+	}
+	if key != "" {
+		return key, nil
+	}
+	regCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	key, err = push.RegisterWithRelay(regCtx, cfg.RelayURL, cfg.PublicURL)
+	if err != nil {
+		return "", err
+	}
+	if err := database.SetRelayKey(ctx, key); err != nil {
+		return "", fmt.Errorf("persist relay key: %w", err)
+	}
+	log.Println("push: registered with the relay and stored a key for future boots")
+	return key, nil
 }
 
 // healthcheck performs a single GET against the local health endpoint, returning 0 when
