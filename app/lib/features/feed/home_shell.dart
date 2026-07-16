@@ -110,8 +110,8 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     if (t == null || !t.isSignedIn || !mounted) return;
     // Make sure the tapped group is visible in the feed when you return to it.
     ref.read(multiSessionProvider.notifier).showGroup(t.id);
-    // A comment notification should land on the thread, not the top of the post.
-    final focusComments = data['type'] == 'comment';
+    // A comment or reply notification should land on the thread, not the top of the post.
+    final focusComments = data['type'] == 'comment' || data['type'] == 'reply';
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) =>
@@ -132,6 +132,8 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     ).then((posted) {
       if (posted == true) {
         ref.invalidate(feedProvider); // surface the new post immediately
+        // Nudge the always-alive profile tab to reload so the new post shows there too.
+        ref.read(profileRefreshProvider.notifier).state++;
         if (_index != 0) setState(() => _index = 0);
       }
     });

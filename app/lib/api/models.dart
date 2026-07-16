@@ -238,6 +238,7 @@ class Comment {
     required this.createdAt,
     this.authorPhotoId,
     this.groupId,
+    this.parentCommentId,
   });
 
   final int id;
@@ -251,6 +252,10 @@ class Comment {
   /// a cross-post's thread is merged, so each comment can show its group; null otherwise.
   final String? groupId;
 
+  /// The comment this one replies to (same server), or null for a top-level comment. Used to
+  /// show a "replying to X" line and to route a reply to the parent's group.
+  final int? parentCommentId;
+
   Comment withGroup(String? groupId) => Comment(
         id: id,
         authorId: authorId,
@@ -259,6 +264,7 @@ class Comment {
         createdAt: createdAt,
         authorPhotoId: authorPhotoId,
         groupId: groupId,
+        parentCommentId: parentCommentId,
       );
 
   factory Comment.fromJson(Map<String, dynamic> j) => Comment(
@@ -268,6 +274,7 @@ class Comment {
         body: j['body'] as String? ?? '',
         createdAt: DateTime.parse(j['createdAt'] as String),
         authorPhotoId: j['authorPhotoId'] as int?,
+        parentCommentId: (j['parentCommentId'] as num?)?.toInt(),
       );
 }
 

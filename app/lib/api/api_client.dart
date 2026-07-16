@@ -267,8 +267,11 @@ class ApiClient {
         .toList();
   }
 
-  Future<Comment> addComment(int postId, String body) async {
-    final r = await _dio.post('/api/posts/$postId/comments', data: {'body': body});
+  Future<Comment> addComment(int postId, String body, {int? parentCommentId}) async {
+    final r = await _dio.post('/api/posts/$postId/comments', data: {
+      'body': body,
+      if (parentCommentId != null) 'parentCommentId': parentCommentId,
+    });
     return Comment.fromJson(r.data as Map<String, dynamic>);
   }
 

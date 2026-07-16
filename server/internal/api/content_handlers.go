@@ -340,6 +340,9 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 
 type addCommentReq struct {
 	Body string `json:"body"`
+	// ParentCommentID, when set, makes this a reply to that comment (which must be on the
+	// same post). It notifies the parent's author on top of the post's author.
+	ParentCommentID *int64 `json:"parentCommentId"`
 }
 
 func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
@@ -365,13 +368,28 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "post not found")
 		return
 	}
+	// A reply must point at a real comment on this same post.
+	if req.ParentCommentID != nil {
+		parentPostID, _, found, err := s.db.ParentCommentForPost(r.Context(), *req.ParentCommentID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "server error")
+			return
+		}
+		if !found || parentPostID != id {
+			writeErr(w, http.StatusBadRequest, "reply target not found")
+			return
+		}
+	}
 	me := userFrom(r)
-	comment, err := s.db.AddComment(r.Context(), id, me.ID, req.Body)
+	comment, err := s.db.AddComment(r.Context(), id, me.ID, req.Body, req.ParentCommentID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not add comment")
 		return
 	}
 	go s.notifyReply(me.Name, id, me.ID)
+	if req.ParentCommentID != nil {
+		go s.notifyCommentReply(me.Name, id, *req.ParentCommentID, me.ID)
+	}
 	writeJSON(w, http.StatusCreated, comment)
 }
 

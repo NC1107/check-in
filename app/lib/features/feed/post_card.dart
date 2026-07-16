@@ -115,15 +115,9 @@ class PostCard extends ConsumerStatefulWidget {
 }
 
 class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMixin {
-  late bool _liked = _fullyLiked(widget.post);
-  late int _likes = widget.post.totalLikes;
+  // Like state lives in the app-wide likesProvider (a single source of truth shared with
+  // the post screen), so only the comment count is tracked locally here.
   late int _comments = widget.post.totalComments;
-  // For a collapsed cross-post: the groups the viewer currently likes it in, so the one
-  // heart can toggle their like across every group they share it with.
-  late Set<String> _likedGroups = {
-    for (final c in widget.post.copies)
-      if (c.likedByViewer) c.groupId
-  };
   final _commentCtrl = TextEditingController();
   bool _postingComment = false;
   // Comments added inline on this card since it was built, shown immediately so the
@@ -138,27 +132,17 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
       AnimationController(vsync: this, duration: const Duration(milliseconds: 520));
 
   // If this State gets re-bound to a different post (e.g. the list shifts when a new
-  // post is prepended), resync the like/comment state so counts don't bleed between
-  // posts. A ValueKey on each card normally prevents this; this is a safety net.
+  // post is prepended), resync the comment state so counts don't bleed between posts. A
+  // ValueKey on each card normally prevents this; this is a safety net. (Like state is not
+  // reseeded here - it comes from likesProvider, keyed by post, so it can't bleed.)
   @override
   void didUpdateWidget(PostCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.post.id != widget.post.id) {
-      _liked = _fullyLiked(widget.post);
-      _likes = widget.post.totalLikes;
       _comments = widget.post.totalComments;
-      _likedGroups = {
-        for (final c in widget.post.copies)
-          if (c.likedByViewer) c.groupId
-      };
       _added.clear();
     }
   }
-
-  /// The heart reads as filled when the viewer likes this post everywhere they can see it:
-  /// their own like in a single group, or in every group of a collapsed cross-post.
-  static bool _fullyLiked(Post p) =>
-      p.isCrossPost ? p.copies.every((c) => c.likedByViewer) : p.likedByViewer;
 
   @override
   void dispose() {
@@ -237,63 +221,29 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
   void _snack(String msg) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 
-  Future<void> _toggleLike() async {
+  /// Toggles the viewer's like through the shared likesProvider, so the change shows here,
+  /// on the post screen, and on profiles at once and survives leaving the feed. A collapsed
+  /// cross-post's one heart brings every copy to the same state (each on its own server).
+  void _toggleLike() {
     HapticFeedback.lightImpact();
     final post = widget.post;
+    final overlay = ref.read(likesProvider);
+    final want = !likeView(post, overlay).liked;
+    if (want) _likePop.forward(from: 0);
+    final likes = ref.read(likesProvider.notifier);
     if (post.isCrossPost) {
-      await _toggleLikeAcrossGroups(post);
-      return;
-    }
-    final api = ref.read(contentApiProvider(post.groupId));
-    setState(() {
-      _liked = !_liked;
-      _likes += _liked ? 1 : -1;
-    });
-    if (_liked) _likePop.forward(from: 0);
-    try {
-      _liked ? await api.like(post.id) : await api.unlike(post.id);
-    } catch (_) {
-      setState(() {
-        _liked = !_liked;
-        _likes += _liked ? 1 : -1;
-      });
-    }
-  }
-
-  /// One tap on the collapsed card likes (or unlikes) the post in every group the viewer
-  /// shares it with, since it stands in for all of them. Each group's like is a separate
-  /// call to that group's server; failures are left as-is rather than faked.
-  Future<void> _toggleLikeAcrossGroups(Post post) async {
-    final wantLike = !_liked;
-    final changed = [
-      for (final c in post.copies)
-        if (_likedGroups.contains(c.groupId) != wantLike) c,
-    ];
-    if (changed.isEmpty) return;
-    setState(() {
-      _liked = wantLike;
-      for (final c in changed) {
-        if (wantLike) {
-          _likedGroups.add(c.groupId);
-          _likes++;
-        } else {
-          _likedGroups.remove(c.groupId);
-          _likes--;
-        }
+      for (final c in post.copies) {
+        final cur = overlay['${c.groupId}:${c.postId}'] ?? c.likedByViewer;
+        if (cur != want) likes.setLiked(c.groupId, c.postId, want);
       }
-    });
-    if (wantLike) _likePop.forward(from: 0);
-    for (final c in changed) {
-      try {
-        final api = ref.read(contentApiProvider(c.groupId));
-        wantLike ? await api.like(c.postId) : await api.unlike(c.postId);
-      } catch (_) {}
+    } else {
+      likes.setLiked(post.groupId, post.id, want);
     }
   }
 
   /// Double-tapping the photo likes it (never unlikes) and plays the heart burst.
   void _doubleTapLike() {
-    if (!_liked) {
+    if (!likeView(widget.post, ref.read(likesProvider)).liked) {
       _toggleLike();
     } else {
       HapticFeedback.lightImpact();
@@ -426,6 +376,7 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
     final p = widget.post;
     final account = ref.watch(contentAccountProvider(p.groupId));
     final me = account?.user;
+    final like = likeView(p, ref.watch(likesProvider));
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 14),
@@ -642,10 +593,10 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
             child: Row(
               children: [
                 _action(
-                  icon: _liked ? Icons.favorite : Icons.favorite_border,
-                  iconColor: _liked ? _like : _fgSecondary,
-                  label: '$_likes',
-                  semantic: _liked ? 'Unlike' : 'Like',
+                  icon: like.liked ? Icons.favorite : Icons.favorite_border,
+                  iconColor: like.liked ? _like : _fgSecondary,
+                  label: '${like.likes}',
+                  semantic: like.liked ? 'Unlike' : 'Like',
                   bump: _likePop,
                   onTap: _toggleLike,
                   // The author can long-press their own post's like to see who liked it -
