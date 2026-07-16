@@ -101,6 +101,10 @@ type Post struct {
 	Location  *string   `json:"location,omitempty"` // coarse "City, Country", optional
 	CreatedAt time.Time `json:"createdAt"`
 
+	// CrossPostID groups the copies of one post shared to several groups at once, so the
+	// multi-group client can collapse them into a single card. Null for a single-group post.
+	CrossPostID *string `json:"crossPostId,omitempty"`
+
 	// Joined/derived fields populated by feed and detail queries.
 	AuthorName      string           `json:"authorName,omitempty"`
 	AuthorPhotoID   *int64           `json:"authorPhotoId,omitempty"`

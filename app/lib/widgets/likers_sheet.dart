@@ -9,47 +9,83 @@ import '../theme/accent.dart';
 import '../theme/tokens.dart';
 import 'user_avatar.dart';
 
-/// Pulls up the list of members who liked [postId] from the bottom. The server only serves
-/// this to the post's own author, so callers gate the entry point (a long-press on the like
-/// button) to the author too.
-Future<void> showLikersSheet(BuildContext context, {required int postId, String? groupId}) {
+/// One place a post's likes live: its id on a particular group's server.
+typedef _LikerSource = ({int postId, String? groupId});
+
+/// A liker plus which group's server they liked on (null in a single-group view).
+typedef _TaggedLiker = ({User user, String? groupId});
+
+/// Pulls up the list of members who liked a post from the bottom. The server serves this
+/// only to the post's own author, so callers gate the entry point (a long-press on the like
+/// button) to the author too. Pass [copies] for a cross-post to merge likers from every
+/// group it was shared to, each tagged with its group; otherwise pass [postId]/[groupId].
+Future<void> showLikersSheet(BuildContext context,
+    {int? postId, String? groupId, List<PostCopy>? copies}) {
   HapticFeedback.selectionClick();
+  final sources = <_LikerSource>[
+    if (copies != null && copies.isNotEmpty)
+      for (final c in copies) (postId: c.postId, groupId: c.groupId)
+    else
+      (postId: postId!, groupId: groupId),
+  ];
   return showModalBottomSheet<void>(
     context: context,
     backgroundColor: kBgSurface,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
     ),
-    builder: (_) => _LikersSheet(postId: postId, groupId: groupId),
+    builder: (_) => _LikersSheet(sources: sources),
   );
 }
 
 class _LikersSheet extends ConsumerStatefulWidget {
-  const _LikersSheet({required this.postId, this.groupId});
+  const _LikersSheet({required this.sources});
 
-  final int postId;
-  final String? groupId;
+  final List<_LikerSource> sources;
 
   @override
   ConsumerState<_LikersSheet> createState() => _LikersSheetState();
 }
 
 class _LikersSheetState extends ConsumerState<_LikersSheet> {
-  late final Future<List<User>> _future =
-      ref.read(contentApiProvider(widget.groupId)).postLikers(widget.postId);
+  late final Future<List<_TaggedLiker>> _future = _load();
 
-  void _openProfile(int userId) {
+  /// Fetches likers from each source in turn, tagging every liker with its group. Best
+  /// effort: a group that can't be reached contributes nothing rather than failing the whole.
+  Future<List<_TaggedLiker>> _load() async {
+    final out = <_TaggedLiker>[];
+    for (final s in widget.sources) {
+      try {
+        final users = await ref.read(contentApiProvider(s.groupId)).postLikers(s.postId);
+        for (final u in users) {
+          out.add((user: u, groupId: s.groupId));
+        }
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  ServerAccount? _account(String? groupId) {
+    if (groupId == null) return null;
+    for (final a in ref.read(multiSessionProvider).signedIn) {
+      if (a.id == groupId) return a;
+    }
+    return null;
+  }
+
+  void _openProfile(int userId, String? groupId) {
     if (userId <= 0) return;
     Navigator.of(context).pop();
     Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => ProfileScreen(userId: userId, groupId: widget.groupId),
+      builder: (_) => ProfileScreen(userId: userId, groupId: groupId),
     ));
   }
 
   @override
   Widget build(BuildContext context) {
+    final multiGroup = widget.sources.length > 1;
     return SafeArea(
-      child: FutureBuilder<List<User>>(
+      child: FutureBuilder<List<_TaggedLiker>>(
         future: _future,
         builder: (context, snap) {
           final likers = snap.data;
@@ -89,17 +125,20 @@ class _LikersSheetState extends ConsumerState<_LikersSheet> {
                     shrinkWrap: true,
                     itemCount: likers.length,
                     itemBuilder: (_, i) {
-                      final u = likers[i];
+                      final u = likers[i].user;
+                      final gid = likers[i].groupId;
                       return ListTile(
                         leading: UserAvatar(
                             name: u.name,
                             mediaId: u.profileMediaId,
                             size: 38,
                             colorSeed: u.id,
-                            groupId: widget.groupId),
+                            groupId: gid),
                         title:
                             Text(u.name, style: const TextStyle(color: kFgPrimary, fontSize: 15)),
-                        onTap: () => _openProfile(u.id),
+                        // Which group they liked in only matters once more than one is merged.
+                        trailing: multiGroup ? _groupBadge(gid) : null,
+                        onTap: () => _openProfile(u.id, gid),
                       );
                     },
                   ),
@@ -108,6 +147,33 @@ class _LikersSheetState extends ConsumerState<_LikersSheet> {
             ],
           );
         },
+      ),
+    );
+  }
+
+  Widget? _groupBadge(String? groupId) {
+    final acct = _account(groupId);
+    if (acct == null) return null;
+    final color = acct.displayColor;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        color: Color.alphaBlend(color.withValues(alpha: 0.16), kBgSurface),
+        borderRadius: BorderRadius.circular(9999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            margin: const EdgeInsets.only(right: 6),
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          Text(acct.displayName,
+              style:
+                  const TextStyle(color: kFgSecondary, fontSize: 12, fontWeight: FontWeight.w600)),
+        ],
       ),
     );
   }

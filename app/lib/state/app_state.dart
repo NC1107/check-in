@@ -558,15 +558,53 @@ class FeedResult {
   final List<ServerAccount> unreachable;
 }
 
-/// Merges per-group feed pages into one list, newest first. Ties break on post id so
-/// the order is stable across refreshes.
+/// Merges per-group feed pages into one list, newest first, collapsing any post shared to
+/// several shown groups into a single card. Ties break on post id so the order is stable
+/// across refreshes.
 List<Post> mergeFeeds(Iterable<List<Post>> pages) {
-  final merged = [for (final page in pages) ...page];
+  final merged = collapseCrossPosts([for (final page in pages) ...page]);
   merged.sort((a, b) {
     final byTime = b.createdAt.compareTo(a.createdAt);
     return byTime != 0 ? byTime : b.id.compareTo(a.id);
   });
   return merged;
+}
+
+/// Collapses posts sharing a [Post.crossPostId] into one card carrying every copy the
+/// viewer can see (each on its own group's server). A copy only appears here if the viewer
+/// is in that group, so a single-group member's app never has more than one copy and sees
+/// nothing merged - the per-group isolation is enforced by which servers they can reach,
+/// not by a permission check. The newest copy stands in as the representative.
+List<Post> collapseCrossPosts(List<Post> posts) {
+  final groups = <String, List<Post>>{};
+  final out = <Post>[];
+  for (final p in posts) {
+    final id = p.crossPostId;
+    if (id == null || p.groupId == null) {
+      out.add(p);
+      continue;
+    }
+    (groups[id] ??= []).add(p);
+  }
+  for (final entry in groups.values) {
+    if (entry.length == 1) {
+      out.add(entry.first);
+      continue;
+    }
+    entry.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final copies = [
+      for (final p in entry)
+        (
+          groupId: p.groupId!,
+          postId: p.id,
+          likeCount: p.likeCount,
+          commentCount: p.commentCount,
+          likedByViewer: p.likedByViewer,
+        ),
+    ];
+    out.add(entry.first.withCopies(copies));
+  }
+  return out;
 }
 
 /// The home feed as a refreshable provider. Invalidate it (e.g. after creating a post)

@@ -88,6 +88,8 @@ class Post {
     this.commentsPreview = const [],
     this.people = const [],
     this.groupId,
+    this.crossPostId,
+    this.copies = const [],
   });
 
   final int id;
@@ -113,8 +115,31 @@ class Post {
   /// routed back to the right server in the multi-group views.
   final String? groupId;
 
+  /// Shared id tying this copy to the same post shared to other groups at once. Server-set
+  /// (null for a single-group post). Used to collapse the copies into one card.
+  final String? crossPostId;
+
+  /// The copies of a collapsed cross-post, one per group the viewer can see it in
+  /// (including this one). Empty for an ordinary post; populated client-side in the merged
+  /// feed so likers/comments can fan out to each group's server.
+  final List<PostCopy> copies;
+
+  /// True once this post stands in for the same post shared to more than one shown group.
+  bool get isCrossPost => copies.length > 1;
+
+  /// Engagement across all copies (falls back to this copy's own counts when not collapsed).
+  int get totalLikes => isCrossPost ? copies.fold(0, (s, c) => s + c.likeCount) : likeCount;
+  int get totalComments =>
+      isCrossPost ? copies.fold(0, (s, c) => s + c.commentCount) : commentCount;
+  bool get likedByViewerAny => isCrossPost ? copies.any((c) => c.likedByViewer) : likedByViewer;
+
   /// Returns this post tagged with its origin group.
-  Post withGroup(String groupId) => Post(
+  Post withGroup(String groupId) => _copy(groupId: groupId);
+
+  /// Returns this post standing in for the given set of cross-post copies.
+  Post withCopies(List<PostCopy> copies) => _copy(copies: copies);
+
+  Post _copy({String? groupId, List<PostCopy>? copies}) => Post(
         id: id,
         authorId: authorId,
         authorName: authorName,
@@ -130,7 +155,9 @@ class Post {
         location: location,
         commentsPreview: commentsPreview,
         people: people,
-        groupId: groupId,
+        groupId: groupId ?? this.groupId,
+        crossPostId: crossPostId,
+        copies: copies ?? this.copies,
       );
 
   /// The post's images in order. Prefers the multi-photo set, falling back to the legacy
@@ -173,8 +200,19 @@ class Post {
                   name: e['name'] as String,
                 ))
             .toList(),
+        crossPostId: j['crossPostId'] as String?,
       );
 }
+
+/// One copy of a cross-post: which group's server holds it, that copy's post id, and its
+/// own engagement (each group counts only its own members). The merged card sums these.
+typedef PostCopy = ({
+  String groupId,
+  int postId,
+  int likeCount,
+  int commentCount,
+  bool likedByViewer,
+});
 
 /// A lightweight comment (author + body) shown inline as a preview on feed cards.
 class CommentPreview {
@@ -199,6 +237,7 @@ class Comment {
     required this.body,
     required this.createdAt,
     this.authorPhotoId,
+    this.groupId,
   });
 
   final int id;
@@ -207,6 +246,20 @@ class Comment {
   final String body;
   final DateTime createdAt;
   final int? authorPhotoId;
+
+  /// Which group's server this comment came from. Client-stamped (like [Post.groupId]) when
+  /// a cross-post's thread is merged, so each comment can show its group; null otherwise.
+  final String? groupId;
+
+  Comment withGroup(String? groupId) => Comment(
+        id: id,
+        authorId: authorId,
+        authorName: authorName,
+        body: body,
+        createdAt: createdAt,
+        authorPhotoId: authorPhotoId,
+        groupId: groupId,
+      );
 
   factory Comment.fromJson(Map<String, dynamic> j) => Comment(
         id: j['id'] as int,
