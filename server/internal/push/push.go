@@ -40,6 +40,17 @@ const mismatchAdvice = "push: FCM rejected a device token as belonging to a diff
 	"notification will ever arrive. See docs/self-hosting/configuration.md#push-notifications " +
 	"for the supported ways to get push working."
 
+// Notifier delivers a notification to a set of device tokens. Two implementations exist:
+// *Sender talks to FCM directly (a host with its own Firebase credentials), and
+// *RelaySender forwards to the maintainer's relay (the default for self-hosters running the
+// published apps). The server holds one as an interface so the notify* handlers and the
+// digest scheduler don't care which is in use; a nil Notifier means push is off.
+type Notifier interface {
+	// Send delivers title/body/data to every token, best-effort. It must never block the
+	// caller for long or panic, and must not log the notification content.
+	Send(ctx context.Context, tokens []string, title, body string, data map[string]string)
+}
+
 // Sender posts notifications to FCM. A nil *Sender is a no-op, so the server runs fine
 // when push isn't configured.
 type Sender struct {

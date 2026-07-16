@@ -35,9 +35,21 @@ type Config struct {
 	// who types "(415) 555-0148". Numbers entered with a leading '+' are taken as-is.
 	DefaultCountryCode string
 	// FCMCredentialsFile points to a Firebase service-account JSON used to send push
-	// notifications via FCM (reaches Android directly, iOS through APNs). Unset = no push.
+	// notifications via FCM directly (reaches Android directly, iOS through APNs). Set only
+	// by a host that built and ships its own app; the maintainer's own server uses it too.
 	FCMCredentialsFile string
+	// RelayURL is the base URL of the push relay this server forwards notifications through
+	// when it has no FCM credentials of its own. Defaults to the maintainer's relay so a
+	// self-hoster running the published apps gets working push with no setup. Clear it to
+	// turn push off (short of bringing your own Firebase). Ignored when FCMCredentialsFile
+	// is set, since that means the server can reach FCM directly.
+	RelayURL string
 }
+
+// DefaultRelayURL is the maintainer-run relay the published apps' Firebase project is
+// wired to. Baked in as the default so push works out of the box for self-hosters; a host
+// opts out by setting CHECKIN_RELAY_URL empty.
+const DefaultRelayURL = "https://checkin-relay.npc-server.top"
 
 // Load reads configuration from the environment, applying sensible defaults so the
 // server runs out of the box for local development.
@@ -53,11 +65,23 @@ func Load() (Config, error) {
 		DebugToken:         getenv("CHECKIN_DEBUG_TOKEN", ""),
 		DefaultCountryCode: getenv("CHECKIN_DEFAULT_COUNTRY_CODE", "1"),
 		FCMCredentialsFile: getenv("CHECKIN_FCM_CREDENTIALS_FILE", ""),
+		RelayURL:           relayURLFromEnv(),
 	}
 	if cfg.DatabaseURL == "" {
 		return cfg, fmt.Errorf("CHECKIN_DATABASE_URL is required")
 	}
 	return cfg, nil
+}
+
+// relayURLFromEnv resolves the relay URL with "present but empty means off" semantics: an
+// unset CHECKIN_RELAY_URL falls back to the maintainer relay (push on by default), while
+// setting it to an empty string is how a host opts out. The plain getenv helper can't
+// express this because it treats empty and unset the same.
+func relayURLFromEnv() string {
+	if v, ok := os.LookupEnv("CHECKIN_RELAY_URL"); ok {
+		return v
+	}
+	return DefaultRelayURL
 }
 
 func getenv(key, def string) string {

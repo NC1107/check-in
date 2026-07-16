@@ -19,17 +19,18 @@ type Server struct {
 	cfg     config.Config
 	db      *db.DB
 	store   *storage.Store
-	push    *push.Sender // nil when push isn't configured
-	authLim *rateLimiter // limits signup/login attempts
+	push    push.Notifier // nil when push isn't configured (direct FCM or relay)
+	authLim *rateLimiter  // limits signup/login attempts
 }
 
-// New constructs a Server.
-func New(cfg config.Config, database *db.DB, store *storage.Store, pushSender *push.Sender) *Server {
+// New constructs a Server. A nil notifier disables push; pass a genuinely nil interface
+// (not a typed-nil *push.Sender) so the notify* handlers' nil checks fire.
+func New(cfg config.Config, database *db.DB, store *storage.Store, notifier push.Notifier) *Server {
 	return &Server{
 		cfg:     cfg,
 		db:      database,
 		store:   store,
-		push:    pushSender,
+		push:    notifier,
 		authLim: newRateLimiter(20, 10), // 20/min, burst 10, per IP
 	}
 }

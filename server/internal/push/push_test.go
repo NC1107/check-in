@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -66,7 +67,7 @@ func captureLog(t *testing.T) *bytes.Buffer {
 	log.SetOutput(&buf)
 	log.SetFlags(0)
 	t.Cleanup(func() {
-		log.SetOutput(nil)
+		log.SetOutput(os.Stderr) // restore the real writer; nil would panic any later log call
 		log.SetFlags(flags)
 	})
 	return &buf

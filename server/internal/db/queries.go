@@ -81,6 +81,20 @@ func (d *DB) SetServerColor(ctx context.Context, color string) error {
 	return err
 }
 
+// GetRelayKey returns the push-relay key this server registered with, or "" if it hasn't
+// registered yet.
+func (d *DB) GetRelayKey(ctx context.Context) (string, error) {
+	var key string
+	err := d.Pool.QueryRow(ctx, `SELECT relay_key FROM server_config WHERE id = 1`).Scan(&key)
+	return key, err
+}
+
+// SetRelayKey stores the key issued by the push relay so it's reused across restarts.
+func (d *DB) SetRelayKey(ctx context.Context, key string) error {
+	_, err := d.Pool.Exec(ctx, `UPDATE server_config SET relay_key = $1 WHERE id = 1`, key)
+	return err
+}
+
 // SeedServerName copies the configured CHECKIN_SERVER_NAME into the database exactly
 // once, while the stored name is still the schema default. This migrates existing
 // env-configured installs to the DB-backed name without clobbering a name an admin has
