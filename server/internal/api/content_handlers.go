@@ -136,6 +136,9 @@ type createPostReq struct {
 	MediaIDs  []int64 `json:"mediaIds"`  // one or more images, ordered
 	Location  *string `json:"location"`  // optional coarse "City, Country" from the photo
 	PeopleIDs []int64 `json:"peopleIds"` // members tagged as appearing in the post
+	// CrossPostID ties this copy to the same post shared to other groups. Client-generated
+	// and opaque; the server only stores it so the multi-group client can collapse copies.
+	CrossPostID *string `json:"crossPostId"`
 }
 
 func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
@@ -179,6 +182,15 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Opaque client-generated group id; bound its length and drop it if blank so a stray
+	// empty string doesn't create a one-member "cross-post".
+	var crossPostID *string
+	if req.CrossPostID != nil {
+		if id := strings.TrimSpace(*req.CrossPostID); id != "" && len(id) <= 64 {
+			crossPostID = &id
+		}
+	}
+
 	// Coarse, optional, image-only place label. Trim, cap length, and drop if blank.
 	var location *string
 	if req.Location != nil && req.Kind == "image" {
@@ -191,7 +203,7 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	me := userFrom(r)
-	post, err := s.db.CreatePost(r.Context(), me.ID, req.Kind, req.Body, mediaIDs, location, req.PeopleIDs)
+	post, err := s.db.CreatePost(r.Context(), me.ID, req.Kind, req.Body, mediaIDs, location, req.PeopleIDs, crossPostID)
 	if errors.Is(err, db.ErrNotOwned) {
 		writeErr(w, http.StatusBadRequest, "one or more images are not yours")
 		return

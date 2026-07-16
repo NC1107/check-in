@@ -233,13 +233,15 @@ class ApiClient {
       required String body,
       List<int>? mediaIds,
       String? location,
-      List<int>? peopleIds}) async {
+      List<int>? peopleIds,
+      String? crossPostId}) async {
     final r = await _dio.post('/api/posts', data: {
       'kind': kind,
       'body': body,
       if (mediaIds != null && mediaIds.isNotEmpty) 'mediaIds': mediaIds,
       if (location != null && location.isNotEmpty) 'location': location,
       if (peopleIds != null && peopleIds.isNotEmpty) 'peopleIds': peopleIds,
+      if (crossPostId != null) 'crossPostId': crossPostId,
     });
     return Post.fromJson(r.data as Map<String, dynamic>);
   }

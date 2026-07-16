@@ -115,9 +115,15 @@ class PostCard extends ConsumerStatefulWidget {
 }
 
 class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMixin {
-  late bool _liked = widget.post.likedByViewer;
-  late int _likes = widget.post.likeCount;
-  late int _comments = widget.post.commentCount;
+  late bool _liked = _fullyLiked(widget.post);
+  late int _likes = widget.post.totalLikes;
+  late int _comments = widget.post.totalComments;
+  // For a collapsed cross-post: the groups the viewer currently likes it in, so the one
+  // heart can toggle their like across every group they share it with.
+  late Set<String> _likedGroups = {
+    for (final c in widget.post.copies)
+      if (c.likedByViewer) c.groupId
+  };
   final _commentCtrl = TextEditingController();
   bool _postingComment = false;
   // Comments added inline on this card since it was built, shown immediately so the
@@ -138,12 +144,21 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
   void didUpdateWidget(PostCard oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.post.id != widget.post.id) {
-      _liked = widget.post.likedByViewer;
-      _likes = widget.post.likeCount;
-      _comments = widget.post.commentCount;
+      _liked = _fullyLiked(widget.post);
+      _likes = widget.post.totalLikes;
+      _comments = widget.post.totalComments;
+      _likedGroups = {
+        for (final c in widget.post.copies)
+          if (c.likedByViewer) c.groupId
+      };
       _added.clear();
     }
   }
+
+  /// The heart reads as filled when the viewer likes this post everywhere they can see it:
+  /// their own like in a single group, or in every group of a collapsed cross-post.
+  static bool _fullyLiked(Post p) =>
+      p.isCrossPost ? p.copies.every((c) => c.likedByViewer) : p.likedByViewer;
 
   @override
   void dispose() {
@@ -224,19 +239,55 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
 
   Future<void> _toggleLike() async {
     HapticFeedback.lightImpact();
-    final api = ref.read(contentApiProvider(widget.post.groupId));
+    final post = widget.post;
+    if (post.isCrossPost) {
+      await _toggleLikeAcrossGroups(post);
+      return;
+    }
+    final api = ref.read(contentApiProvider(post.groupId));
     setState(() {
       _liked = !_liked;
       _likes += _liked ? 1 : -1;
     });
     if (_liked) _likePop.forward(from: 0);
     try {
-      _liked ? await api.like(widget.post.id) : await api.unlike(widget.post.id);
+      _liked ? await api.like(post.id) : await api.unlike(post.id);
     } catch (_) {
       setState(() {
         _liked = !_liked;
         _likes += _liked ? 1 : -1;
       });
+    }
+  }
+
+  /// One tap on the collapsed card likes (or unlikes) the post in every group the viewer
+  /// shares it with, since it stands in for all of them. Each group's like is a separate
+  /// call to that group's server; failures are left as-is rather than faked.
+  Future<void> _toggleLikeAcrossGroups(Post post) async {
+    final wantLike = !_liked;
+    final changed = [
+      for (final c in post.copies)
+        if (_likedGroups.contains(c.groupId) != wantLike) c,
+    ];
+    if (changed.isEmpty) return;
+    setState(() {
+      _liked = wantLike;
+      for (final c in changed) {
+        if (wantLike) {
+          _likedGroups.add(c.groupId);
+          _likes++;
+        } else {
+          _likedGroups.remove(c.groupId);
+          _likes--;
+        }
+      }
+    });
+    if (wantLike) _likePop.forward(from: 0);
+    for (final c in changed) {
+      try {
+        final api = ref.read(contentApiProvider(c.groupId));
+        wantLike ? await api.like(c.postId) : await api.unlike(c.postId);
+      } catch (_) {}
     }
   }
 
@@ -282,6 +333,37 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
     if (userId <= 0) return;
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => ProfileScreen(userId: userId, groupId: widget.post.groupId),
+    ));
+  }
+
+  /// "Shared to Family · Climbing" for a collapsed cross-post, so the single card makes
+  /// clear it reached several groups; null for an ordinary post.
+  String? _sharedToLabel() {
+    final p = widget.post;
+    if (!p.isCrossPost) return null;
+    final session = ref.read(multiSessionProvider);
+    final names = <String>[];
+    for (final c in p.copies) {
+      for (final a in session.signedIn) {
+        if (a.id == c.groupId) {
+          names.add(a.displayName);
+          break;
+        }
+      }
+    }
+    return names.isEmpty ? null : 'Shared to ${names.join(' · ')}';
+  }
+
+  /// Opens the post detail. For a collapsed cross-post it carries the copies so the thread
+  /// merges every group's comments (only groups the viewer is in), each tagged.
+  void _openDetail() {
+    final p = widget.post;
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => PostDetailScreen(
+        postId: p.id,
+        groupId: p.groupId,
+        copies: p.isCrossPost ? p.copies : null,
+      ),
     ));
   }
 
@@ -538,6 +620,22 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                 ),
               ],
             ),
+          // Cross-post: name the groups this single card stands in for.
+          if (_sharedToLabel() case final label?)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+              child: Row(
+                children: [
+                  const Icon(Icons.group_outlined, size: 13, color: _fgMuted),
+                  const SizedBox(width: 5),
+                  Flexible(
+                    child: Text(label,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: _fgMuted, fontSize: 12)),
+                  ),
+                ],
+              ),
+            ),
           // Actions row
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
@@ -550,9 +648,12 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                   semantic: _liked ? 'Unlike' : 'Like',
                   bump: _likePop,
                   onTap: _toggleLike,
-                  // The author can long-press their own post's like to see who liked it.
+                  // The author can long-press their own post's like to see who liked it -
+                  // merged across groups, each tagged, for a cross-post.
                   onLongPress: (me != null && me.id == p.authorId)
-                      ? () => showLikersSheet(context, postId: p.id, groupId: p.groupId)
+                      ? () => p.isCrossPost
+                          ? showLikersSheet(context, copies: p.copies)
+                          : showLikersSheet(context, postId: p.id, groupId: p.groupId)
                       : null,
                 ),
                 _action(
@@ -560,10 +661,7 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                   iconColor: _fgSecondary,
                   label: '$_comments',
                   semantic: 'Comments',
-                  onTap: () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                        builder: (_) => PostDetailScreen(postId: p.id, groupId: p.groupId)),
-                  ),
+                  onTap: _openDetail,
                 ),
               ],
             ),
@@ -578,9 +676,7 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                   if (_comments > p.commentsPreview.length + _added.length)
                     GestureDetector(
                       behavior: HitTestBehavior.opaque,
-                      onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                        builder: (_) => PostDetailScreen(postId: p.id, groupId: p.groupId),
-                      )),
+                      onTap: _openDetail,
                       child: Padding(
                         padding: const EdgeInsets.only(bottom: 4),
                         child: Text('View all $_comments comments',

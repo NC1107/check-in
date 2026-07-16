@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
@@ -22,6 +23,13 @@ import '../post/post_detail_screen.dart';
 import '../profile/profile_screen.dart';
 import '../whats_new/release_notes.dart';
 import 'feed_screen.dart';
+
+/// A short opaque id (16 random bytes, hex) that links a post's copies across groups. The
+/// servers never coordinate, so the client mints it; collisions are astronomically unlikely.
+String _newCrossPostId() {
+  final r = Random.secure();
+  return List.generate(16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+}
 
 const _bgMain = kBgMain;
 const _bgSurface = kBgSurface;
@@ -279,6 +287,9 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   // A picked photo is compressed once and the JPEG bytes reused for every target group
   // (each group still gets its own upload - media is per-server).
   final Map<String, List<int>> _compressedCache = {};
+  // Ties this compose's copies together across groups (and across partial-failure retries).
+  // Only applied when sharing to more than one group; a single-group post carries none.
+  late final String _crossPostId = _newCrossPostId();
 
   @override
   void initState() {
@@ -524,6 +535,8 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
       _busy = true;
       _error = null;
     });
+    // One shared id links the copies only when this post goes to more than one group.
+    final crossPostId = _targets.length > 1 ? _crossPostId : null;
     final failed = <ServerAccount>[];
     String? failMsg;
     for (final g in targets) {
@@ -540,9 +553,14 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
               body: _bodyCtrl.text.trim(),
               mediaIds: ids,
               location: _location,
-              peopleIds: peopleIds);
+              peopleIds: peopleIds,
+              crossPostId: crossPostId);
         } else {
-          await api.createPost(kind: 'text', body: _bodyCtrl.text.trim(), peopleIds: peopleIds);
+          await api.createPost(
+              kind: 'text',
+              body: _bodyCtrl.text.trim(),
+              peopleIds: peopleIds,
+              crossPostId: crossPostId);
         }
         _posted.add(g.id);
       } on DioException catch (e) {

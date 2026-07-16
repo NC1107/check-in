@@ -35,6 +35,7 @@ class PostDetailScreen extends ConsumerStatefulWidget {
     required this.postId,
     this.groupId,
     this.focusComments = false,
+    this.copies,
   });
 
   final int postId;
@@ -43,6 +44,11 @@ class PostDetailScreen extends ConsumerStatefulWidget {
   /// When true (e.g. opened from a "commented on your check-in" notification), the view
   /// scrolls straight to the comment thread once it loads instead of landing on the post.
   final bool focusComments;
+
+  /// The copies of a collapsed cross-post (one per group the viewer can see it in). When
+  /// set, the thread merges every group's comments and likers, each tagged with its group,
+  /// and a new comment is posted to a group the viewer picks. Null for an ordinary post.
+  final List<PostCopy>? copies;
 
   @override
   ConsumerState<PostDetailScreen> createState() => _PostDetailScreenState();
@@ -61,6 +67,12 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   bool _sending = false;
   bool _didFocusComments = false;
   bool? _likeOverride; // null = use the post's server value
+  // Cross-post only: which group a new comment posts to (defaults to the first copy), and
+  // the groups the viewer currently likes it in (so the header like toggles across all).
+  String? _composeGroupId;
+  final Set<String> _likedGroups = {};
+
+  bool get _isCrossPost => (widget.copies?.length ?? 0) > 1;
 
   Future<void> _savePhoto(int mediaId) async {
     try {
@@ -78,6 +90,28 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 
   Future<void> _toggleLike(Post post) async {
+    final copies = widget.copies;
+    if (_isCrossPost && copies != null) {
+      // Like (or unlike) in every group the viewer shares the post with, mirroring the card.
+      final wantLike = _likedGroups.length < copies.length;
+      final changed = [
+        for (final c in copies)
+          if (_likedGroups.contains(c.groupId) != wantLike) c,
+      ];
+      if (changed.isEmpty) return;
+      setState(() {
+        for (final c in changed) {
+          wantLike ? _likedGroups.add(c.groupId) : _likedGroups.remove(c.groupId);
+        }
+      });
+      for (final c in changed) {
+        try {
+          final api = ref.read(contentApiProvider(c.groupId));
+          wantLike ? await api.like(c.postId) : await api.unlike(c.postId);
+        } catch (_) {}
+      }
+      return;
+    }
     final current = _likeOverride ?? post.likedByViewer;
     final next = !current;
     setState(() => _likeOverride = next);
@@ -123,8 +157,33 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     });
     try {
       final api = ref.read(contentApiProvider(widget.groupId));
-      final post = await api.getPost(widget.postId);
-      final comments = await api.comments(widget.postId);
+      var post = await api.getPost(widget.postId);
+      final List<Comment> comments;
+      final copies = widget.copies;
+      if (_isCrossPost && copies != null) {
+        // Merge each group's own thread, tagging every comment with its group. Only groups
+        // the viewer can reach contribute, so a single-group member never sees the others.
+        final lists = await Future.wait([
+          for (final c in copies)
+            ref
+                .read(contentApiProvider(c.groupId))
+                .comments(c.postId)
+                .then((cs) => [for (final cm in cs) cm.withGroup(c.groupId)])
+                .catchError((_) => <Comment>[]),
+        ]);
+        comments = [for (final l in lists) ...l]
+          ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        post = post.withCopies(copies);
+        _composeGroupId ??= copies.first.groupId;
+        _likedGroups
+          ..clear()
+          ..addAll([
+            for (final c in copies)
+              if (c.likedByViewer) c.groupId
+          ]);
+      } else {
+        comments = await api.comments(widget.postId);
+      }
       if (!mounted) return;
       setState(() {
         _post = post;
@@ -146,9 +205,13 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     if (text.isEmpty || _sending) return;
     setState(() => _sending = true);
     FocusScope.of(context).unfocus();
+    // On a cross-post, a comment goes to exactly one group - the one the viewer picked. The
+    // members of the other groups never see it; only the poster, who is in every group, does.
+    final target = _sendTarget();
     try {
       final added =
-          await ref.read(contentApiProvider(widget.groupId)).addComment(widget.postId, text);
+          (await ref.read(contentApiProvider(target.groupId)).addComment(target.postId, text))
+              .withGroup(_isCrossPost ? target.groupId : null);
       _comment.clear();
       // Append in place - no re-fetch, so the post and existing comments don't flash.
       if (mounted) setState(() => _comments = [..._comments, added]);
@@ -161,6 +224,28 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     } finally {
       if (mounted) setState(() => _sending = false);
     }
+  }
+
+  /// Where a new comment is sent: the picked group's copy for a cross-post, else the post
+  /// itself. Falls back to the representative if the picked group somehow isn't a copy.
+  ({int postId, String? groupId}) _sendTarget() {
+    final copies = widget.copies;
+    if (_isCrossPost && copies != null) {
+      for (final c in copies) {
+        if (c.groupId == _composeGroupId) return (postId: c.postId, groupId: c.groupId);
+      }
+      final first = copies.first;
+      return (postId: first.postId, groupId: first.groupId);
+    }
+    return (postId: widget.postId, groupId: widget.groupId);
+  }
+
+  ServerAccount? _account(String? groupId) {
+    if (groupId == null) return null;
+    for (final a in ref.read(multiSessionProvider).signedIn) {
+      if (a.id == groupId) return a;
+    }
+    return null;
   }
 
   @override
@@ -283,8 +368,17 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
 
   /// Like + comment counts under the post, with a tappable (ripple) like button.
   Widget _actions(Post post, int commentCount) {
-    final liked = _likeOverride ?? post.likedByViewer;
-    final likes = post.likeCount + (liked == post.likedByViewer ? 0 : (liked ? 1 : -1));
+    final bool liked;
+    final int likes;
+    if (_isCrossPost && widget.copies != null) {
+      final copies = widget.copies!;
+      liked = _likedGroups.length == copies.length;
+      final initialLiked = copies.where((c) => c.likedByViewer).length;
+      likes = post.totalLikes + (_likedGroups.length - initialLiked);
+    } else {
+      liked = _likeOverride ?? post.likedByViewer;
+      likes = post.likeCount + (liked == post.likedByViewer ? 0 : (liked ? 1 : -1));
+    }
     final me = ref.read(contentAccountProvider(widget.groupId))?.user;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -294,9 +388,12 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
             color: Colors.transparent,
             child: InkResponse(
               onTap: () => _toggleLike(post),
-              // The author can long-press their own post's like to see who liked it.
+              // The author can long-press their own post's like to see who liked it -
+              // merged across groups for a cross-post.
               onLongPress: (me != null && me.id == post.authorId)
-                  ? () => showLikersSheet(context, postId: post.id, groupId: widget.groupId)
+                  ? () => _isCrossPost
+                      ? showLikersSheet(context, copies: widget.copies)
+                      : showLikersSheet(context, postId: post.id, groupId: widget.groupId)
                   : null,
               radius: 28,
               containedInkWell: true,
@@ -337,11 +434,97 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   }
 
   /// Opens a member's profile in this post's group (no-op for a missing id).
-  void _openProfile(int userId) {
+  void _openProfile(int userId) => _openProfileIn(userId, widget.groupId);
+
+  /// Opens a member's profile on a specific group's server (for merged-thread commenters).
+  void _openProfileIn(int userId, String? groupId) {
     if (userId <= 0) return;
     Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => ProfileScreen(userId: userId, groupId: widget.groupId),
+      builder: (_) => ProfileScreen(userId: userId, groupId: groupId),
     ));
+  }
+
+  /// A small "· Family" pill in the origin group's color, shown on merged-thread comments
+  /// so the poster can tell which group each comment came from.
+  Widget _groupBadge(String? groupId) {
+    final acct = _account(groupId);
+    if (acct == null) return const SizedBox.shrink();
+    final color = acct.displayColor;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+      decoration: BoxDecoration(
+        color: Color.alphaBlend(color.withValues(alpha: 0.16), kBgMain),
+        borderRadius: BorderRadius.circular(9999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 5,
+            height: 5,
+            margin: const EdgeInsets.only(right: 5),
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          Text(acct.displayName,
+              style: const TextStyle(color: kFgMuted, fontSize: 11, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+
+  /// Which group a new comment goes to on a cross-post: a row of selectable group chips.
+  Widget _groupPicker(List<PostCopy> copies) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8, left: 2),
+      child: Row(
+        children: [
+          const Text('To', style: TextStyle(color: kFgMuted, fontSize: 12)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(children: [for (final c in copies) _groupChip(c.groupId)]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _groupChip(String groupId) {
+    final acct = _account(groupId);
+    final selected = _composeGroupId == groupId;
+    final color = acct?.displayColor ?? context.accent;
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: GestureDetector(
+        onTap: () => setState(() => _composeGroupId = groupId),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+          decoration: BoxDecoration(
+            color: selected ? Color.alphaBlend(color.withValues(alpha: 0.20), kBgMain) : kBgSurface,
+            border: Border.all(color: selected ? color : kBorder),
+            borderRadius: BorderRadius.circular(9999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 6,
+                height: 6,
+                margin: const EdgeInsets.only(right: 6),
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              ),
+              Text(acct?.displayName ?? 'Group',
+                  style: TextStyle(
+                      color: selected ? kFgPrimary : kFgSecondary,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _postHeader(Post post) {
@@ -404,19 +587,21 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   }
 
   Widget _commentRow(Comment c) {
+    // A merged comment opens the commenter's profile on its own group's server.
+    final gid = c.groupId ?? widget.groupId;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           GestureDetector(
-            onTap: () => _openProfile(c.authorId),
+            onTap: () => _openProfileIn(c.authorId, gid),
             child: UserAvatar(
                 name: c.authorName,
                 mediaId: c.authorPhotoId,
                 size: 32,
                 colorSeed: c.id,
-                groupId: widget.groupId),
+                groupId: gid),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -427,7 +612,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   children: [
                     Flexible(
                       child: GestureDetector(
-                        onTap: () => _openProfile(c.authorId),
+                        onTap: () => _openProfileIn(c.authorId, gid),
                         behavior: HitTestBehavior.opaque,
                         child: Text(c.authorName,
                             maxLines: 1,
@@ -446,6 +631,10 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                             style: const TextStyle(color: kFgMuted, fontSize: 11)),
                       ),
                     ),
+                    if (_isCrossPost && c.groupId != null) ...[
+                      const SizedBox(width: 8),
+                      _groupBadge(c.groupId),
+                    ],
                   ],
                 ),
                 const SizedBox(height: 2),
@@ -468,53 +657,63 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
           border: Border(top: BorderSide(color: kBorder)),
         ),
         padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: TextField(
-                controller: _comment,
-                onSubmitted: (_) => _send(),
-                textInputAction: TextInputAction.send,
-                style: const TextStyle(color: kFgPrimary, fontSize: 14),
-                cursorColor: context.accent,
-                decoration: InputDecoration(
-                  hintText: 'Add a comment…',
-                  hintStyle: const TextStyle(color: kFgMuted),
-                  filled: true,
-                  fillColor: kBgSurface,
-                  isDense: true,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(9999),
-                    borderSide: const BorderSide(color: kBorder),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(9999),
-                    borderSide: BorderSide(color: context.accent),
+            // Cross-post: a comment goes to exactly one group. Let the poster pick which -
+            // the others never see it. Defaults to the first group shared to.
+            if (_isCrossPost && widget.copies != null) _groupPicker(widget.copies!),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _comment,
+                    onSubmitted: (_) => _send(),
+                    textInputAction: TextInputAction.send,
+                    style: const TextStyle(color: kFgPrimary, fontSize: 14),
+                    cursorColor: context.accent,
+                    decoration: InputDecoration(
+                      hintText: 'Add a comment…',
+                      hintStyle: const TextStyle(color: kFgMuted),
+                      filled: true,
+                      fillColor: kBgSurface,
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(9999),
+                        borderSide: const BorderSide(color: kBorder),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(9999),
+                        borderSide: BorderSide(color: context.accent),
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 6),
-            ValueListenableBuilder<TextEditingValue>(
-              valueListenable: _comment,
-              builder: (_, val, __) {
-                final canSend = val.text.trim().isNotEmpty && !_sending;
-                return IconButton(
-                  onPressed: canSend ? _send : null,
-                  icon: _sending
-                      ? SizedBox(
-                          height: 18,
-                          width: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: context.accent))
-                      : Icon(Icons.arrow_upward_rounded,
-                          color: canSend ? context.accent : kFgMuted),
-                  style: IconButton.styleFrom(
-                    backgroundColor: canSend ? context.accentLight : kBgSurface,
-                    shape: const CircleBorder(),
-                  ),
-                );
-              },
+                const SizedBox(width: 6),
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: _comment,
+                  builder: (_, val, __) {
+                    final canSend = val.text.trim().isNotEmpty && !_sending;
+                    return IconButton(
+                      onPressed: canSend ? _send : null,
+                      icon: _sending
+                          ? SizedBox(
+                              height: 18,
+                              width: 18,
+                              child:
+                                  CircularProgressIndicator(strokeWidth: 2, color: context.accent))
+                          : Icon(Icons.arrow_upward_rounded,
+                              color: canSend ? context.accent : kFgMuted),
+                      style: IconButton.styleFrom(
+                        backgroundColor: canSend ? context.accentLight : kBgSurface,
+                        shape: const CircleBorder(),
+                      ),
+                    );
+                  },
+                ),
+              ],
             ),
           ],
         ),

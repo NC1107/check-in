@@ -678,7 +678,7 @@ func (d *DB) SetUserProfileMedia(ctx context.Context, userID, mediaID int64) err
 // ---- posts ----
 
 // CreatePost inserts a post.
-func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, mediaIDs []int64, location *string, peopleIDs []int64) (Post, error) {
+func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, mediaIDs []int64, location *string, peopleIDs []int64, crossPostID *string) (Post, error) {
 	var p Post
 	tx, err := d.Pool.Begin(ctx)
 	if err != nil {
@@ -712,11 +712,11 @@ func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, 
 		cover = &mediaIDs[0]
 	}
 	err = tx.QueryRow(ctx, `
-		INSERT INTO posts (author_id, kind, body, media_id, location)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, author_id, kind, body, media_id, location, created_at`,
-		authorID, kind, body, cover, location,
-	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt)
+		INSERT INTO posts (author_id, kind, body, media_id, location, cross_post_id)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, author_id, kind, body, media_id, location, created_at, cross_post_id`,
+		authorID, kind, body, cover, location, crossPostID,
+	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID)
 	if err != nil {
 		return p, err
 	}
@@ -789,7 +789,7 @@ func dedupeExcluding(ids []int64, exclude int64) []int64 {
 // filtered to a single author and/or to posts created strictly before a cursor time.
 func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location *string, before *time.Time, beforeID *int64, limit int) ([]Post, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at,
+		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id,
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
@@ -815,7 +815,7 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 	for rows.Next() {
 		var p Post
 		var preview, people []byte
-		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt,
+		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID,
 			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &p.MediaIDs, &people); err != nil {
 			return nil, err
 		}
@@ -865,7 +865,7 @@ func (d *DB) Locations(ctx context.Context) ([]LocationCount, error) {
 // (case-insensitive substring), newest first — powering full-content feed search.
 func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limit int) ([]Post, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at,
+		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id,
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
@@ -890,7 +890,7 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 	for rows.Next() {
 		var p Post
 		var preview, people []byte
-		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt,
+		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID,
 			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &p.MediaIDs, &people); err != nil {
 			return nil, err
 		}
@@ -910,7 +910,7 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 	var p Post
 	var preview, people []byte
 	err := d.Pool.QueryRow(ctx, `
-		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at,
+		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id,
 		       u.name, u.profile_media_id,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
@@ -919,7 +919,7 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 		FROM posts p JOIN users u ON u.id = p.author_id
 		WHERE p.id = $2 AND u.status = 'active'
 		  AND p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)`, viewerID, postID,
-	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt,
+	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID,
 		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &p.MediaIDs, &people)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, ErrNotFound
