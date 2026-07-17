@@ -436,12 +436,13 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   /// Opens a member's profile in this post's group (no-op for a missing id).
   void _openProfile(int userId) => _openProfileIn(userId, widget.groupId);
 
-  /// Opens a member's profile on a specific group's server (for merged-thread commenters).
+  /// Opens a member's profile on a specific group's server (for merged-thread
+  /// commenters) - the viewer's own editable profile if it's their own account,
+  /// otherwise a read-only view.
   void _openProfileIn(int userId, String? groupId) {
     if (userId <= 0) return;
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => ProfileScreen(userId: userId, groupId: groupId),
-    ));
+    final screen = ProfileScreen.resolve(context, userId: userId, groupId: groupId);
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
   }
 
   /// A small "· Family" pill in the origin group's color, shown on merged-thread comments

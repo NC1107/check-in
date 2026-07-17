@@ -227,6 +227,23 @@ class ProfileScreen extends ConsumerStatefulWidget {
   final int userId;
   final String? groupId;
 
+  /// Picks the right screen for tapping a (userId, groupId) pair: [MyProfileScreen] when
+  /// it's the viewer's own account in that group, otherwise the read-only [ProfileScreen].
+  /// Every "tap a person" site in the app should push through here rather than
+  /// constructing [ProfileScreen] directly - tapping your own avatar (e.g. on your own
+  /// post cross-posted to another group) must land on your editable profile, not a
+  /// stranger view of yourself with no settings access.
+  ///
+  /// Resolve this *before* any dismiss/close/pop step that might invalidate [context]
+  /// (see the search delegate and the likers sheet call sites), then push the result.
+  static Widget resolve(BuildContext context, {required int userId, String? groupId}) {
+    final me = ProviderScope.containerOf(context, listen: false)
+        .read(contentAccountProvider(groupId))
+        ?.user;
+    if (me != null && me.id == userId) return const MyProfileScreen();
+    return ProfileScreen(userId: userId, groupId: groupId);
+  }
+
   @override
   ConsumerState<ProfileScreen> createState() => _ProfileScreenState();
 }

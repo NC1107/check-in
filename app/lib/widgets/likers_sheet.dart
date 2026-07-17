@@ -75,10 +75,10 @@ class _LikersSheetState extends ConsumerState<_LikersSheet> {
 
   void _openProfile(int userId, String? groupId) {
     if (userId <= 0) return;
+    // Resolve while context is still valid (i.e. before popping this sheet away).
+    final screen = ProfileScreen.resolve(context, userId: userId, groupId: groupId);
     Navigator.of(context).pop();
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => ProfileScreen(userId: userId, groupId: groupId),
-    ));
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
   }
 
   @override
