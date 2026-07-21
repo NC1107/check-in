@@ -2,30 +2,48 @@ import 'package:flutter/material.dart';
 
 import 'auth_image.dart';
 
-/// Full-screen, pinch-to-zoom viewer for a single media id (e.g. a profile photo or a
-/// post image). Opened by tapping the image. Dismissed by swiping the photo up or down,
-/// the close button, or the system back gesture; double-tap toggles between fit-to-screen
-/// and a 2.5x zoom centred on the tap. Swipe-to-dismiss is disabled while zoomed, so a
-/// drag then pans the enlarged image instead.
+/// Full-screen, pinch-to-zoom viewer for one or more media ids (e.g. a profile photo, or
+/// all the photos on a multi-image check-in). Opened by tapping an image. Swipe left/right
+/// pages between photos (disabled while the current photo is zoomed, so panning a zoomed
+/// photo doesn't also flip the page); swiping up or down dismisses, the close button, or
+/// the system back gesture; double-tap toggles between fit-to-screen and a 2.5x zoom
+/// centred on the tap. Swipe-to-dismiss is disabled while zoomed, so a drag then pans the
+/// enlarged image instead.
 class PhotoViewerScreen extends StatefulWidget {
-  const PhotoViewerScreen({super.key, required this.mediaId, this.groupId});
+  const PhotoViewerScreen({
+    super.key,
+    required this.mediaIds,
+    this.initialIndex = 0,
+    this.groupId,
+  });
 
-  final int mediaId;
+  /// Every photo reachable from this viewer (e.g. all of a post's images). A single-photo
+  /// context (a profile picture) passes a one-element list.
+  final List<int> mediaIds;
 
-  /// The connected group the media id belongs to (null = the current group), so the
+  /// Which photo to open on, as an index into [mediaIds].
+  final int initialIndex;
+
+  /// The connected group the media ids belong to (null = the current group), so the
   /// authenticated request and cache key resolve to the right server. See [AuthImage].
   final String? groupId;
 
   /// Pushes the viewer over everything (above the bottom nav). The backdrop is painted by
   /// the viewer itself so it can fade as the photo is dragged away, so the route barrier
   /// stays transparent.
-  static Future<void> open(BuildContext context, {required int mediaId, String? groupId}) {
+  static Future<void> open(
+    BuildContext context, {
+    required List<int> mediaIds,
+    int initialIndex = 0,
+    String? groupId,
+  }) {
     return Navigator.of(context, rootNavigator: true).push(
       PageRouteBuilder(
         opaque: false,
         barrierColor: Colors.transparent,
         transitionDuration: const Duration(milliseconds: 180),
-        pageBuilder: (_, __, ___) => PhotoViewerScreen(mediaId: mediaId, groupId: groupId),
+        pageBuilder: (_, __, ___) =>
+            PhotoViewerScreen(mediaIds: mediaIds, initialIndex: initialIndex, groupId: groupId),
         transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
       ),
     );
@@ -36,11 +54,15 @@ class PhotoViewerScreen extends StatefulWidget {
 }
 
 class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTickerProviderStateMixin {
-  final _controller = TransformationController();
-  late final AnimationController _reset =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 200));
-
-  Offset? _doubleTapPos;
+  late final _pageCtrl = PageController(initialPage: widget.initialIndex);
+  // Constructed eagerly in initState (not a lazy `late final = expr`): its vsync ticker
+  // does an ancestor lookup, which is only safe while the element is mounted. A session
+  // that closes the viewer without ever dragging would otherwise touch this for the first
+  // time from dispose() - after the element has started unmounting - and crash.
+  late final AnimationController _reset;
+  late int _page = widget.initialIndex;
+  // Whether the currently-visible photo is zoomed - gates both page-swiping (so panning a
+  // zoomed photo doesn't also flip to the next one) and swipe-to-dismiss.
   bool _zoomed = false;
   double _dragDy = 0;
 
@@ -52,40 +74,14 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTicker
   @override
   void initState() {
     super.initState();
-    _controller.addListener(_onTransform);
+    _reset = AnimationController(vsync: this, duration: const Duration(milliseconds: 200));
   }
 
   @override
   void dispose() {
-    _controller.removeListener(_onTransform);
-    _controller.dispose();
+    _pageCtrl.dispose();
     _reset.dispose();
     super.dispose();
-  }
-
-  void _onTransform() {
-    final zoomed = _controller.value.getMaxScaleOnAxis() > 1.01;
-    if (zoomed != _zoomed) setState(() => _zoomed = zoomed);
-  }
-
-  void _handleDoubleTap() {
-    const scale = 2.5;
-    final zoomed = _controller.value.getMaxScaleOnAxis() > 1.01;
-    final pos = _doubleTapPos;
-    if (zoomed || pos == null) {
-      _controller.value = Matrix4.identity();
-    } else {
-      // Scale about the tapped point: map p -> scale*p + t, with t chosen so the tap
-      // stays put. Built column-major to avoid the deprecated Matrix4.translate/scale.
-      final tx = -pos.dx * (scale - 1);
-      final ty = -pos.dy * (scale - 1);
-      _controller.value = Matrix4(
-        scale, 0, 0, 0, //
-        0, scale, 0, 0, //
-        0, 0, 1, 0, //
-        tx, ty, 0, 1, //
-      );
-    }
   }
 
   void _onDragStart(DragStartDetails _) => _reset.stop();
@@ -110,6 +106,7 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTicker
   @override
   Widget build(BuildContext context) {
     final height = MediaQuery.of(context).size.height;
+    final multi = widget.mediaIds.length > 1;
     // Fade the backdrop and ease the photo down as it is dragged, but never below 0.35 so
     // the photo stays legible until release.
     final progress = (_dragDy.abs() / (height * 0.5)).clamp(0.0, 1.0);
@@ -123,8 +120,6 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTicker
           Positioned.fill(child: ColoredBox(color: Colors.black.withValues(alpha: backdrop))),
           Positioned.fill(
             child: GestureDetector(
-              onDoubleTapDown: (d) => _doubleTapPos = d.localPosition,
-              onDoubleTap: _handleDoubleTap,
               onVerticalDragStart: _zoomed ? null : _onDragStart,
               onVerticalDragUpdate: _zoomed ? null : _onDragUpdate,
               onVerticalDragEnd: _zoomed ? null : _onDragEnd,
@@ -132,13 +127,21 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTicker
                 offset: Offset(0, _dragDy),
                 child: Transform.scale(
                   scale: scale,
-                  child: InteractiveViewer(
-                    transformationController: _controller,
-                    minScale: 1,
-                    maxScale: 5,
-                    child: SizedBox.expand(
-                      child: AuthImage(
-                          mediaId: widget.mediaId, groupId: widget.groupId, fit: BoxFit.contain),
+                  child: PageView.builder(
+                    controller: _pageCtrl,
+                    physics:
+                        _zoomed ? const NeverScrollableScrollPhysics() : const PageScrollPhysics(),
+                    itemCount: widget.mediaIds.length,
+                    onPageChanged: (i) => setState(() {
+                      _page = i;
+                      _zoomed = false; // a freshly-shown page always starts unzoomed
+                    }),
+                    itemBuilder: (_, i) => _ZoomablePhoto(
+                      mediaId: widget.mediaIds[i],
+                      groupId: widget.groupId,
+                      onZoomChanged: (z) {
+                        if (i == _page) setState(() => _zoomed = z);
+                      },
                     ),
                   ),
                 ),
@@ -155,7 +158,103 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTicker
               ),
             ),
           ),
+          if (multi)
+            SafeArea(
+              child: Align(
+                alignment: Alignment.topRight,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(9999),
+                    ),
+                    child: Text('${_page + 1}/${widget.mediaIds.length}',
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                  ),
+                ),
+              ),
+            ),
         ],
+      ),
+    );
+  }
+}
+
+/// One pinch-to-zoom, double-tap-to-zoom photo inside the viewer's [PageView]. Owns its
+/// own transform so zoom resets when swiping to a different photo, and reports zoom
+/// changes up so the parent can gate page-swiping and swipe-to-dismiss.
+class _ZoomablePhoto extends StatefulWidget {
+  const _ZoomablePhoto({required this.mediaId, required this.onZoomChanged, this.groupId});
+
+  final int mediaId;
+  final String? groupId;
+  final ValueChanged<bool> onZoomChanged;
+
+  @override
+  State<_ZoomablePhoto> createState() => _ZoomablePhotoState();
+}
+
+class _ZoomablePhotoState extends State<_ZoomablePhoto> {
+  final _controller = TransformationController();
+  Offset? _doubleTapPos;
+  bool _zoomed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_onTransform);
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_onTransform);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onTransform() {
+    final zoomed = _controller.value.getMaxScaleOnAxis() > 1.01;
+    if (zoomed != _zoomed) {
+      _zoomed = zoomed;
+      widget.onZoomChanged(zoomed);
+    }
+  }
+
+  void _handleDoubleTap() {
+    const scale = 2.5;
+    final zoomed = _controller.value.getMaxScaleOnAxis() > 1.01;
+    final pos = _doubleTapPos;
+    if (zoomed || pos == null) {
+      _controller.value = Matrix4.identity();
+    } else {
+      // Scale about the tapped point: map p -> scale*p + t, with t chosen so the tap
+      // stays put. Built column-major to avoid the deprecated Matrix4.translate/scale.
+      final tx = -pos.dx * (scale - 1);
+      final ty = -pos.dy * (scale - 1);
+      _controller.value = Matrix4(
+        scale, 0, 0, 0, //
+        0, scale, 0, 0, //
+        0, 0, 1, 0, //
+        tx, ty, 0, 1, //
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onDoubleTapDown: (d) => _doubleTapPos = d.localPosition,
+      onDoubleTap: _handleDoubleTap,
+      child: InteractiveViewer(
+        transformationController: _controller,
+        minScale: 1,
+        maxScale: 5,
+        child: SizedBox.expand(
+          child: AuthImage(mediaId: widget.mediaId, groupId: widget.groupId, fit: BoxFit.contain),
+        ),
       ),
     );
   }

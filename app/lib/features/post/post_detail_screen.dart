@@ -339,8 +339,13 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                             child: PostImageCarousel(
                               mediaIds: post.images,
                               groupId: widget.groupId,
-                              onImageTap: (mediaId) => PhotoViewerScreen.open(context,
-                                  mediaId: mediaId, groupId: widget.groupId),
+                              onImageTap: (mediaId) => PhotoViewerScreen.open(
+                                context,
+                                mediaIds: post.images,
+                                initialIndex:
+                                    post.images.indexOf(mediaId).clamp(0, post.images.length - 1),
+                                groupId: widget.groupId,
+                              ),
                             ),
                           ),
                         ),

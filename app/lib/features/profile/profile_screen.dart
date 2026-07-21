@@ -181,7 +181,7 @@ class _MyProfileScreenState extends ConsumerState<MyProfileScreen> {
             onTap: user.profileMediaId == null
                 ? null
                 : () => PhotoViewerScreen.open(context,
-                    mediaId: user.profileMediaId!, groupId: groupId),
+                    mediaIds: [user.profileMediaId!], groupId: groupId),
             child: UserAvatar(
                 name: user.name,
                 mediaId: user.profileMediaId,
@@ -403,7 +403,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             onTap: user.profileMediaId == null
                 ? null
                 : () => PhotoViewerScreen.open(context,
-                    mediaId: user.profileMediaId!, groupId: widget.groupId),
+                    mediaIds: [user.profileMediaId!], groupId: widget.groupId),
             child: UserAvatar(
                 name: user.name,
                 mediaId: user.profileMediaId,
