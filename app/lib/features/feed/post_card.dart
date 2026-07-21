@@ -612,8 +612,12 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                   mediaIds: p.images,
                   groupId: p.groupId,
                   onDoubleTap: _doubleTapLike,
-                  onImageTap: (mediaId) =>
-                      PhotoViewerScreen.open(context, mediaId: mediaId, groupId: p.groupId),
+                  onImageTap: (mediaId) => PhotoViewerScreen.open(
+                    context,
+                    mediaIds: p.images,
+                    initialIndex: p.images.indexOf(mediaId).clamp(0, p.images.length - 1),
+                    groupId: p.groupId,
+                  ),
                 ),
                 Positioned.fill(
                   child: IgnorePointer(child: Center(child: _HeartBurst(_burst))),
