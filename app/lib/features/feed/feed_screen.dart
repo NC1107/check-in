@@ -1947,22 +1947,15 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
                 ),
               ),
               Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   const Text('Place',
                       style:
                           TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      _staged.isEmpty ? 'None selected' : '${_staged.length} selected',
-                      textAlign: TextAlign.right,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          color: _staged.isEmpty ? _fgMuted : context.accent,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 13.5),
-                    ),
-                  ),
+                  if (_staged.isNotEmpty)
+                    Text('${_staged.length} selected',
+                        style: const TextStyle(
+                            color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 13.5)),
                 ],
               ),
               if (widget.locations.length > 6) ...[
@@ -2037,8 +2030,10 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
       button: true,
       selected: on,
       label: l.location,
-      child: InkWell(
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
         onTap: () => setState(() {
+          HapticFeedback.selectionClick();
           if (on) {
             _staged.remove(l.location);
           } else {
@@ -2046,11 +2041,20 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
           }
         }),
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 9),
+          // 22 (checkbox) + 11 * 2 lands the row on the 44px minimum tap target.
+          padding: const EdgeInsets.symmetric(vertical: 11),
           child: Row(
             children: [
-              Icon(on ? Icons.check_box : Icons.check_box_outline_blank,
-                  size: 20, color: on ? context.accent : _fgMuted),
+              Container(
+                width: 22,
+                height: 22,
+                decoration: BoxDecoration(
+                  color: on ? context.accent : Colors.transparent,
+                  border: Border.all(color: on ? context.accent : _border, width: 1.5),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: on ? Icon(Icons.check, size: 15, color: context.onAccent) : null,
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(l.location,
@@ -2059,6 +2063,7 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
                         fontWeight: on ? FontWeight.w700 : FontWeight.w500,
                         fontSize: 14.5)),
               ),
+              const SizedBox(width: 10),
               Text('${l.count}', style: const TextStyle(color: _fgMuted, fontSize: 13)),
             ],
           ),
