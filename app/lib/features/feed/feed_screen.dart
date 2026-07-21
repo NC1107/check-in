@@ -278,6 +278,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   final List<Post> _morePosts = [];
   bool _loadingMore = false;
   bool _reachedEnd = false;
+  // Which shown groups have exhausted their own pages, so a merged ("All") view stops
+  // asking a group for more once it says there's nothing further back, while the others
+  // keep paging. Reset alongside _morePosts/_reachedEnd.
+  final Set<String> _groupsAtEnd = {};
 
   // Bulk "download all photos matching the current filter" progress.
   bool _downloading = false;
@@ -359,31 +363,95 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     await ref.read(feedProvider.future);
   }
 
-  /// Fetch the next page using the oldest loaded post as a composite (time,id) cursor.
-  /// Single-group view only - the All view is a first-page merge (cross-group cursor
-  /// pagination is a follow-up), so infinite scroll is disabled there.
+  /// Every (groupId, postId) pair already represented on screen. A cross-post's copies
+  /// each count on their own - so a copy fetched again via a different group's page is
+  /// recognised as already-known, not re-added as a duplicate card.
+  Set<String> _knownKeys(List<Post> posts) {
+    final out = <String>{};
+    for (final p in posts) {
+      if (p.copies.isNotEmpty) {
+        for (final c in p.copies) {
+          out.add('${c.groupId}:${c.postId}');
+        }
+      } else if (p.groupId != null) {
+        out.add('${p.groupId}:${p.id}');
+      }
+    }
+    return out;
+  }
+
+  /// The (time, id) cursor to resume paging each shown group from: the oldest loaded post
+  /// that came from it (a cross-post's copies each count toward their own group's cursor).
+  /// [posts] is newest-first, so later writes below overwrite with older ones, leaving
+  /// each group's *oldest* seen post once the loop finishes.
+  Map<String, (DateTime, int)> _cursorsByGroup(List<Post> posts) {
+    final out = <String, (DateTime, int)>{};
+    for (final p in posts) {
+      if (p.copies.isNotEmpty) {
+        for (final c in p.copies) {
+          out[c.groupId] = (p.createdAt, c.postId);
+        }
+      } else if (p.groupId != null) {
+        out[p.groupId!] = (p.createdAt, p.id);
+      }
+    }
+    return out;
+  }
+
+  /// Fetches the next page for every shown group at once, each from its own (time, id)
+  /// cursor, and merges the results - so infinite scroll works the same whether one group
+  /// is shown or several ("All"). Cross-posts are collapsed within each freshly-fetched
+  /// batch; one whose siblings straddle two groups' pages fetched in different calls to
+  /// this method (i.e. it sits at a different page depth in each group) can show as two
+  /// cards rather than one - a rare edge case, accepted the same way the single-group
+  /// version always accepted "no cross-group cursor" as a simplification.
   Future<void> _loadMore() async {
     if (_loadingMore || _reachedEnd || _allPosts.isEmpty) return;
-    final session = ref.read(multiSessionProvider);
-    final account = session.soleShown;
-    if (account == null) return; // merged view: no cross-group cursor pagination yet
+    final groups = ref.read(multiSessionProvider).shownGroups;
+    if (groups.isEmpty) return;
+    final cursors = _cursorsByGroup(_allPosts);
+    final pending = [
+      for (final g in groups)
+        if (!_groupsAtEnd.contains(g.id) && cursors[g.id] != null) g
+    ];
+    if (pending.isEmpty) {
+      // Every shown group either has no posts to page from, or already said so.
+      setState(() => _reachedEnd = true);
+      return;
+    }
     setState(() => _loadingMore = true);
-    final last = _allPosts.last;
     try {
-      final page = await ref.read(apiForGroupProvider(account.id)).feed(
-            location: _location,
-            before: last.createdAt,
-            beforeId: last.id,
-          );
-      final more = [for (final p in page) p.withGroup(account.id)];
+      final results = await Future.wait([
+        for (final g in pending)
+          ref
+              .read(apiForGroupProvider(g.id))
+              .feed(location: _location, before: cursors[g.id]!.$1, beforeId: cursors[g.id]!.$2)
+              .then<List<Post>?>((posts) => [for (final p in posts) p.withGroup(g.id)])
+              .catchError((_) => null), // unreachable this round; retried next scroll
+      ]);
       if (!mounted) return;
       setState(() {
-        if (more.isEmpty) {
-          _reachedEnd = true;
-        } else {
-          final known = _allPosts.map((p) => p.id).toSet();
-          _morePosts.addAll(more.where((p) => known.add(p.id)));
+        final known = _knownKeys(_allPosts);
+        final batch = <Post>[];
+        for (var i = 0; i < pending.length; i++) {
+          final page = results[i];
+          if (page == null) continue;
+          if (page.isEmpty) {
+            _groupsAtEnd.add(pending[i].id);
+          } else {
+            batch.addAll(page);
+          }
         }
+        final fresh = collapseCrossPosts(batch).where((p) {
+          final keys = p.copies.isNotEmpty
+              ? [for (final c in p.copies) '${c.groupId}:${c.postId}']
+              : ['${p.groupId}:${p.id}'];
+          // .map(...).toList() forces every key to be recorded, even once one is found
+          // new - .any's short-circuit would otherwise skip registering the rest.
+          return keys.map(known.add).toList().contains(true);
+        });
+        _morePosts.addAll(fresh);
+        if (groups.every((g) => _groupsAtEnd.contains(g.id))) _reachedEnd = true;
       });
     } catch (_) {
       // Leave _reachedEnd false so a later scroll retries.
@@ -859,6 +927,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       if (next is AsyncData<FeedResult>) {
         _morePosts.clear();
         _reachedEnd = false;
+        _groupsAtEnd.clear();
         // These posts are now on screen, so the member is caught up to them from the next
         // visit's point of view. The in-memory _seenAt is untouched, so the line they're
         // reading against stays where it is.

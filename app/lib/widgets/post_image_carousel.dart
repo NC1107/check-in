@@ -1,8 +1,5 @@
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../state/app_state.dart';
 import 'auth_image.dart';
 
 // Post images size to their own aspect ratio, clamped so a very tall or very wide photo
@@ -124,59 +121,29 @@ class _PostImageCarouselState extends State<PostImageCarousel> {
 }
 
 /// A single post image that adopts its own aspect ratio (clamped to [_minAspect] ..
-/// [_maxAspect]) so portrait photos aren't center-cropped to a fixed box. Resolves the
-/// image's intrinsic size from the shared cache, then re-lays out; until then it uses the
-/// default aspect so the card doesn't jump.
-class _AdaptiveImage extends ConsumerStatefulWidget {
+/// [_maxAspect]) so portrait photos aren't center-cropped to a fixed box. Reads the
+/// image's intrinsic size off [AuthImage] once it has actually decoded (see
+/// [AuthImage.onImageResolved]), then re-lays out; until then it uses the default aspect
+/// so the card doesn't jump. Sizing this way - rather than a second, separate resolve of
+/// the same url - means a fetch/decode hiccup can't leave the box silently and permanently
+/// stuck at the default: if the image fails, [AuthImage] shows its own error state instead
+/// of this ever being asked for a size at all.
+class _AdaptiveImage extends StatefulWidget {
   const _AdaptiveImage({required this.mediaId, this.groupId});
 
   final int mediaId;
   final String? groupId;
 
   @override
-  ConsumerState<_AdaptiveImage> createState() => _AdaptiveImageState();
+  State<_AdaptiveImage> createState() => _AdaptiveImageState();
 }
 
-class _AdaptiveImageState extends ConsumerState<_AdaptiveImage> {
+class _AdaptiveImageState extends State<_AdaptiveImage> {
   double? _ratio; // intrinsic width / height
-  ImageStream? _stream;
-  ImageStreamListener? _listener;
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _resolve();
-  }
-
-  void _resolve() {
-    final account = ref.read(contentAccountProvider(widget.groupId));
-    final api = ref.read(contentApiProvider(widget.groupId));
-    // Same url + cacheKey + headers as AuthImage, so this shares the cache (no re-fetch).
-    final provider = CachedNetworkImageProvider(
-      api.imageUrl(widget.mediaId),
-      cacheKey: 'media-${account?.id ?? ''}-${widget.mediaId}',
-      headers: api.authHeaders,
-    );
-    final stream = provider.resolve(ImageConfiguration.empty);
-    _detach();
-    final listener = ImageStreamListener((info, _) {
-      final r = info.image.width / info.image.height;
-      if (mounted && r != _ratio) setState(() => _ratio = r);
-    }, onError: (_, __) {});
-    _stream = stream..addListener(listener);
-    _listener = listener;
-  }
-
-  void _detach() {
-    if (_stream != null && _listener != null) _stream!.removeListener(_listener!);
-    _stream = null;
-    _listener = null;
-  }
-
-  @override
-  void dispose() {
-    _detach();
-    super.dispose();
+  void _onImage(ImageInfo info) {
+    final r = info.image.width / info.image.height;
+    if (mounted && r != _ratio) setState(() => _ratio = r);
   }
 
   @override
@@ -184,7 +151,7 @@ class _AdaptiveImageState extends ConsumerState<_AdaptiveImage> {
     final ratio = (_ratio ?? _defaultAspect).clamp(_minAspect, _maxAspect).toDouble();
     return AspectRatio(
       aspectRatio: ratio,
-      child: AuthImage(mediaId: widget.mediaId, groupId: widget.groupId),
+      child: AuthImage(mediaId: widget.mediaId, groupId: widget.groupId, onImageResolved: _onImage),
     );
   }
 }
