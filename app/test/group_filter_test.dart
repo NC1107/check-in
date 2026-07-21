@@ -23,7 +23,9 @@ void main() {
       id: 'beta.invalid', baseUrl: 'https://beta.invalid', serverName: 'Beta', token: 't2');
 
   Future<MultiSessionController> pump(WidgetTester tester, MultiSession seed,
-      {List<Post> posts = const [], Map<String, List<User>> members = const {}}) async {
+      {List<Post> posts = const [],
+      Map<String, List<User>> members = const {},
+      List<({String location, int count})> locations = const []}) async {
     final controller = MultiSessionController.seeded(seed);
     await tester.pumpWidget(
       ProviderScope(
@@ -37,7 +39,7 @@ void main() {
                 if (shown.contains(p.groupId)) p
             ]);
           }),
-          locationsProvider.overrideWith((ref, groupId) async => []),
+          locationsProvider.overrideWith((ref, groupId) async => locations),
           groupMembersProvider.overrideWith((ref, groupId) async => members[groupId] ?? []),
         ],
         child: const MaterialApp(home: FeedScreen()),
@@ -370,5 +372,86 @@ void main() {
     expect(find.text('Select dates'), findsOneWidget);
     expect(find.text('Apply'), findsOneWidget);
     expect(find.text('Select a start date'), findsOneWidget);
+  });
+
+  const places = [(location: 'Paris', count: 3), (location: 'Tokyo', count: 1)];
+
+  testWidgets('PLACE shows a compact field, not a wall of pills, and opens a picker on tap',
+      (tester) async {
+    await pump(tester, const MultiSession(groups: [alpha], restored: true), locations: places);
+
+    await openFilter(tester);
+    expect(find.text('PLACE'), findsOneWidget);
+    // The field, not a pill per place - place names aren't in the main sheet at all yet.
+    expect(find.text('All places'), findsOneWidget);
+    expect(find.text('Paris'), findsNothing);
+
+    await tester.tap(find.text('All places'));
+    await tester.pumpAndSettle();
+    // The picker sheet lists every place with its count.
+    expect(find.text('Paris'), findsOneWidget);
+    expect(find.text('Tokyo'), findsOneWidget);
+    expect(find.text('3'), findsOneWidget); // Paris's count
+  });
+
+  testWidgets('picking a place applies it as the field label; All places clears it',
+      (tester) async {
+    await pump(tester, const MultiSession(groups: [alpha], restored: true), locations: places);
+
+    await openFilter(tester);
+    await tester.tap(find.text('All places'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Paris'));
+    await tester.pumpAndSettle();
+    // Back in the filter sheet, the field now reads the chosen place.
+    expect(find.text('Paris'), findsOneWidget);
+    expect(find.text('All places'), findsNothing);
+    await tester.tap(find.text('Show results'));
+    await tester.pumpAndSettle();
+
+    // Reopening shows the applied place persisted through Show results (an active-filter
+    // chip for it now also sits on the feed itself, so scope to the sheet specifically).
+    await openFilter(tester);
+    final sheet = find.byType(BottomSheet);
+    expect(find.descendant(of: sheet, matching: find.text('Paris')), findsOneWidget);
+
+    // Clearing it goes back to "All places".
+    await tester.tap(find.descendant(of: sheet, matching: find.text('Paris')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('All places'));
+    await tester.pumpAndSettle();
+    expect(find.text('All places'), findsOneWidget);
+    await tester.tap(find.text('Show results'));
+    await tester.pumpAndSettle();
+
+    await openFilter(tester);
+    expect(find.text('All places'), findsOneWidget);
+  });
+
+  testWidgets('Clear and Show results stay reachable even when GROUPS fills the sheet',
+      (tester) async {
+    // A realistic phone height, not an oversized test viewport - the bug only shows up
+    // once content actually exceeds the visible area.
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final manyGroups = [
+      for (var i = 0; i < 20; i++)
+        ServerAccount(
+            id: 'g$i.invalid', baseUrl: 'https://g$i.invalid', serverName: 'Group $i', token: 't')
+    ];
+    await pump(tester, MultiSession(groups: manyGroups, restored: true));
+
+    await openFilter(tester);
+    // With 20 groups the GROUPS section alone is taller than the sheet's capped height, so
+    // if the footer were still inside the scrolling body (the reported bug) it would be
+    // scrolled out of the built range and undiscoverable here without manually scrolling to
+    // it first - finding it directly proves it is pinned outside the scrollable area.
+    expect(find.text('Clear'), findsOneWidget);
+    expect(find.text('Show results'), findsOneWidget);
+    await tester.tap(find.text('Show results'));
+    await tester.pumpAndSettle();
   });
 }
