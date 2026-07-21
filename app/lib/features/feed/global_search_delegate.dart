@@ -168,8 +168,10 @@ class GlobalSearchDelegate extends SearchDelegate<void> {
       title: Text(u.name, style: const TextStyle(color: kFgPrimary, fontWeight: FontWeight.w600)),
       onTap: () {
         final nav = Navigator.of(context);
+        // Resolve while context is still valid (i.e. before closing the search overlay).
+        final screen = ProfileScreen.resolve(context, userId: u.id, groupId: _groupId);
         close(context, null);
-        nav.push(MaterialPageRoute(builder: (_) => ProfileScreen(userId: u.id, groupId: _groupId)));
+        nav.push(MaterialPageRoute(builder: (_) => screen));
       },
     );
   }

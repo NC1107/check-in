@@ -68,9 +68,8 @@ class _TaggedPeopleLineState extends State<TaggedPeopleLine> {
 
   void _openProfile(int userId) {
     if (userId <= 0) return;
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => ProfileScreen(userId: userId, groupId: widget.groupId),
-    ));
+    final screen = ProfileScreen.resolve(context, userId: userId, groupId: widget.groupId);
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
   }
 
   void _showAll() {

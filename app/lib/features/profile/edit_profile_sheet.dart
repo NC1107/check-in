@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../api/api_client.dart';
 import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
@@ -51,11 +52,20 @@ class _EditProfileSheetState extends ConsumerState<EditProfileSheet> {
     if (cropped != null && mounted) setState(() => _photoBytes = cropped);
   }
 
-  Future<void> _save() async {
+  /// Applies the name fields to [base] on [api] if they actually changed, otherwise
+  /// returns [base] untouched. Shared by Save (this group only) and Sync (this group,
+  /// before fanning the photo out to the rest).
+  Future<User> _applyNameIfChanged(ApiClient api, User base) async {
     final name = _name.text.trim();
     final first = _firstName.text.trim();
     final last = _lastName.text.trim();
-    if (name.isEmpty) {
+    final changed = name != base.name || first != base.firstName || last != base.lastName;
+    if (!changed) return base;
+    return api.updateProfile(name: name, firstName: first, lastName: last);
+  }
+
+  Future<void> _save() async {
+    if (_name.text.trim().isEmpty) {
       setState(() => _error = 'Display name cannot be empty.');
       return;
     }
@@ -65,13 +75,7 @@ class _EditProfileSheetState extends ConsumerState<EditProfileSheet> {
     });
     try {
       final api = ref.read(contentApiProvider(widget.groupId));
-      var updated = widget.user;
-      final nameChanged = name != widget.user.name ||
-          first != widget.user.firstName ||
-          last != widget.user.lastName;
-      if (nameChanged) {
-        updated = await api.updateProfile(name: name, firstName: first, lastName: last);
-      }
+      var updated = await _applyNameIfChanged(api, widget.user);
       if (_photoBytes != null) {
         final mediaId = await api.uploadImageBytes(_photoBytes!, filename: 'profile.png');
         updated = await api.setProfilePhoto(mediaId);
@@ -84,9 +88,60 @@ class _EditProfileSheetState extends ConsumerState<EditProfileSheet> {
     }
   }
 
+  /// Saves this group's own edits (name + photo, same as Save), then pushes just the
+  /// photo - not the name, each group keeps its own - to every other signed-in group.
+  /// Media ids are per-server, so the same bytes are re-uploaded once per group.
+  Future<void> _syncEverywhere() async {
+    if (_name.text.trim().isEmpty) {
+      setState(() => _error = 'Display name cannot be empty.');
+      return;
+    }
+    if (_photoBytes == null && widget.user.profileMediaId == null) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final myApi = ref.read(contentApiProvider(widget.groupId));
+      var mine = await _applyNameIfChanged(myApi, widget.user);
+      final photoBytes = _photoBytes ?? await myApi.downloadMedia(widget.user.profileMediaId!);
+      final mediaId = await myApi.uploadImageBytes(photoBytes, filename: 'profile.png');
+      mine = await myApi.setProfilePhoto(mediaId);
+      final myGroupId = ref.read(contentAccountProvider(widget.groupId))?.id;
+      if (myGroupId != null) {
+        ref.read(multiSessionProvider.notifier).updateUser(myGroupId, mine);
+      }
+
+      final failed = <String>[];
+      for (final g in ref.read(multiSessionProvider).signedIn) {
+        if (g.id == myGroupId) continue;
+        try {
+          final api = ref.read(contentApiProvider(g.id));
+          final id = await api.uploadImageBytes(photoBytes, filename: 'profile.png');
+          final updated = await api.setProfilePhoto(id);
+          ref.read(multiSessionProvider.notifier).updateUser(g.id, updated);
+        } catch (_) {
+          failed.add(g.displayName);
+        }
+      }
+      if (!mounted) return;
+      if (failed.isEmpty) {
+        Navigator.of(context).pop(mine);
+      } else {
+        setState(() => _error = "Photo synced, but couldn't reach ${failed.join(', ')}.");
+      }
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Could not sync the photo. Try again.');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final multiGroup = ref.watch(multiSessionProvider.select((s) => s.signedIn.length)) > 1;
+    final hasPhoto = _photoBytes != null || widget.user.profileMediaId != null;
     return Padding(
       padding: EdgeInsets.only(left: 20, right: 20, top: 10, bottom: bottomInset + 20),
       child: Column(
@@ -204,6 +259,25 @@ class _EditProfileSheetState extends ConsumerState<EditProfileSheet> {
                 style: TextStyle(color: kFgMuted, fontSize: 12)),
             trailing: const Icon(Icons.chevron_right, size: 18, color: kFgMuted),
           ),
+          if (multiGroup) ...[
+            const SizedBox(height: 18),
+            OutlinedButton.icon(
+              onPressed: hasPhoto && !_busy ? _syncEverywhere : null,
+              icon: const Icon(Icons.sync, size: 18),
+              label: const Text('Sync photo to all groups'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: kFgPrimary,
+                disabledForegroundColor: kFgMuted,
+                side: const BorderSide(color: kBorder),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                minimumSize: const Size.fromHeight(0),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text("Copies this photo to every group you're signed into. Names stay separate.",
+                style: TextStyle(color: kFgMuted, fontSize: 12, height: 1.4)),
+          ],
           if (_error != null) ...[
             const SizedBox(height: 10),
             Text(_error!, style: const TextStyle(color: kLike, fontSize: 13)),

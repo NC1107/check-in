@@ -278,12 +278,13 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
     }
   }
 
-  /// Opens a member's profile in the post's own group (no-op for a missing id).
+  /// Opens a member's profile in the post's own group - the viewer's own editable
+  /// profile if it's their own account, otherwise a read-only view (no-op for a missing
+  /// id).
   void _openProfile(int userId) {
     if (userId <= 0) return;
-    Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => ProfileScreen(userId: userId, groupId: widget.post.groupId),
-    ));
+    final screen = ProfileScreen.resolve(context, userId: userId, groupId: widget.post.groupId);
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
   }
 
   /// "Shared to Family · Climbing" for a collapsed cross-post, so the single card makes
