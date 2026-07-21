@@ -815,8 +815,10 @@ func dedupeExcluding(ids []int64, exclude int64) []int64 {
 }
 
 // Feed returns posts in reverse-chronological order with engagement counts, optionally
-// filtered to a single author and/or to posts created strictly before a cursor time.
-func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location *string, before *time.Time, beforeID *int64, limit int) ([]Post, error) {
+// filtered to a single author, to one or more locations (a post matches if its location is
+// any of them; empty/nil means no location filter), and/or to posts created strictly before
+// a cursor time.
+func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, locations []string, before *time.Time, beforeID *int64, limit int) ([]Post, error) {
 	rows, err := d.Pool.Query(ctx, `
 		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id,
 		       u.name, u.profile_media_id,
@@ -827,7 +829,7 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
 		WHERE ($2::bigint IS NULL OR p.author_id = $2)
-		  AND ($3::text IS NULL OR p.location = $3)
+		  AND ($3::text[] IS NULL OR p.location = ANY($3::text[]))
 		  AND ($4::timestamptz IS NULL
 		       OR ($6::bigint IS NULL AND p.created_at < $4)
 		       OR ($6::bigint IS NOT NULL AND (p.created_at, p.id) < ($4, $6)))
@@ -835,7 +837,7 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 		  AND p.author_id NOT IN (
 		      SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)
 		ORDER BY p.created_at DESC, p.id DESC
-		LIMIT $5`, viewerID, authorID, location, before, limit, beforeID)
+		LIMIT $5`, viewerID, authorID, locations, before, limit, beforeID)
 	if err != nil {
 		return nil, err
 	}

@@ -15,7 +15,10 @@ class _FakeApi extends ApiClient {
 
   @override
   Future<List<Post>> feed(
-          {int? authorId, String? location, DateTime? before, int? beforeId}) async =>
+          {int? authorId,
+          Set<String> locations = const {},
+          DateTime? before,
+          int? beforeId}) async =>
       [];
 }
 

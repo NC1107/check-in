@@ -34,12 +34,15 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 			beforeID = &n
 		}
 	}
-	var location *string
-	if l := strings.TrimSpace(r.URL.Query().Get("location")); l != "" {
-		location = &l
+	// Repeated ?location=A&location=B selects posts matching any of them; absent = no filter.
+	var locations []string
+	for _, l := range r.URL.Query()["location"] {
+		if l = strings.TrimSpace(l); l != "" {
+			locations = append(locations, l)
+		}
 	}
 
-	posts, err := s.db.Feed(r.Context(), viewer.ID, authorID, location, before, beforeID, limit)
+	posts, err := s.db.Feed(r.Context(), viewer.ID, authorID, locations, before, beforeID, limit)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
