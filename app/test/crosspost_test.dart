@@ -38,8 +38,8 @@ void main() {
       final card = out.single;
       expect(card.isCrossPost, isTrue);
       expect(card.copies, hasLength(2));
-      // Aggregate engagement sums every group's own counts.
-      expect(card.totalLikes, 8);
+      // Comment engagement sums every group's own count (see likes_test.dart for the like
+      // aggregate, which needs a same-viewer correction totalComments does not).
       expect(card.totalComments, 3);
     });
 
@@ -50,7 +50,6 @@ void main() {
       ]);
       expect(out, hasLength(1));
       expect(out.single.isCrossPost, isFalse);
-      expect(out.single.totalLikes, 3);
     });
 
     test('posts without a cross-post id pass through untouched', () {
@@ -69,14 +68,6 @@ void main() {
       ]);
       expect(out.single.id, 17);
       expect(out.single.groupId, 'climbing');
-    });
-
-    test('likedByViewerAny is true when the viewer liked any copy', () {
-      final out = collapseCrossPosts([
-        _post(id: 42, group: 'family', crossPostId: 'x', liked: false),
-        _post(id: 17, group: 'climbing', crossPostId: 'x', liked: true),
-      ]);
-      expect(out.single.likedByViewerAny, isTrue);
     });
   });
 

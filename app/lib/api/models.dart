@@ -127,11 +127,14 @@ class Post {
   /// True once this post stands in for the same post shared to more than one shown group.
   bool get isCrossPost => copies.length > 1;
 
-  /// Engagement across all copies (falls back to this copy's own counts when not collapsed).
-  int get totalLikes => isCrossPost ? copies.fold(0, (s, c) => s + c.likeCount) : likeCount;
+  /// Comment engagement across all copies (falls back to this copy's own count when not
+  /// collapsed). Unlike likes, comments never need a same-viewer correction: a comment on a
+  /// cross-post is only ever posted to the one group the commenter picked (see
+  /// PostDetailScreen._send), so each comment is counted exactly once, on exactly one copy.
+  /// Likes work differently - liking a cross-post likes every copy the viewer can reach - so
+  /// their aggregate is computed by likeView, which corrects for that; see its doc comment.
   int get totalComments =>
       isCrossPost ? copies.fold(0, (s, c) => s + c.commentCount) : commentCount;
-  bool get likedByViewerAny => isCrossPost ? copies.any((c) => c.likedByViewer) : likedByViewer;
 
   /// Returns this post tagged with its origin group.
   Post withGroup(String groupId) => _copy(groupId: groupId);

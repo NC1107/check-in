@@ -91,10 +91,32 @@ void main() {
         expect(v.likes, 8);
       });
 
-      test('an overlay that likes the remaining copy flips it fully liked', () {
+      test(
+          'an overlay that likes the remaining copy flips it fully liked, without double '
+          'counting the viewer', () {
         final v = likeView(collapsed(aLiked: true, bLiked: false), const {'b:2': true});
         expect(v.liked, isTrue);
-        expect(v.likes, 9); // 3 (a, already liked) + 6 (b: 5 + 1)
+        // Raw sum would be 3 (a, already liked) + 6 (b: 5 + 1) = 9, but the viewer is one
+        // person liking across both copies of the same cross-post, not two - so their
+        // second appearance is subtracted: 9 - 1 = 8.
+        expect(v.likes, 8);
+      });
+
+      // The reported bug: someone posts to two groups, a viewer who is in both likes it
+      // once, and the count read 2 instead of 1. Server state already has the viewer as a
+      // liker on every copy here (no overlay needed) - exactly what happens once the toggle
+      // in _toggleLike, which likes every copy the viewer can reach, has landed everywhere.
+      test('liking every copy of a cross-post only counts the viewer once', () {
+        final v = likeView(collapsed(aLiked: true, bLiked: true), const {});
+        expect(v.liked, isTrue);
+        // Raw sum would be 3 + 5 = 8 (the viewer counted once per copy = twice); the real
+        // distinct likers are 2 others on a, 4 others on b, plus the viewer once = 7.
+        expect(v.likes, 7);
+      });
+
+      test('no correction applies when the viewer has not liked either copy', () {
+        final v = likeView(collapsed(aLiked: false, bLiked: false), const {});
+        expect(v.likes, 8); // 3 + 5, unchanged - nothing of the viewer's own to double count.
       });
     });
   });

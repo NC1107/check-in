@@ -565,16 +565,28 @@ final likesProvider = StateNotifierProvider<LikesController, Map<String, bool>>(
 /// The heart state and count to render for [post], applying the viewer's like overlay on
 /// top of the server counts. The count is carried as a delta from the server's own value,
 /// so a like landing from someone else (which raises the server count) still shows right.
-/// A cross-post reads as liked only when every copy is liked, and sums each copy's delta.
+/// A cross-post reads as liked only when every copy is liked, and sums each copy's delta -
+/// minus a correction for the viewer's own like: liking a cross-post likes every copy the
+/// viewer can reach (see _toggleLike), so a viewer who is in more than one group it was
+/// shared to is a real liker on each of those copies. They are still one person, so summing
+/// raw per-copy counts would count that one like once per group they happen to share with
+/// the poster. This corrects the viewer's own contribution precisely (their per-copy liked
+/// state is exact); it does not dedupe some *other* member who independently belongs to
+/// several of the same groups and liked in each - that would need cross-referencing every
+/// copy's full liker list against phone identity (PersonDirectory), which is unrelated in
+/// cost to just rendering a post and not done here.
 ({bool liked, int likes}) likeView(Post post, Map<String, bool> overlay) {
   if (post.isCrossPost) {
     var liked = true;
     var likes = 0;
+    var likedCopies = 0;
     for (final c in post.copies) {
       final l = overlay['${c.groupId}:${c.postId}'] ?? c.likedByViewer;
       if (!l) liked = false;
+      if (l) likedCopies++;
       likes += c.likeCount + (l ? 1 : 0) - (c.likedByViewer ? 1 : 0);
     }
+    if (likedCopies > 1) likes -= likedCopies - 1;
     return (liked: liked, likes: likes);
   }
   final l = overlay['${post.groupId}:${post.id}'] ?? post.likedByViewer;
