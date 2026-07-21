@@ -388,35 +388,43 @@ void main() {
 
     await tester.tap(find.text('All places'));
     await tester.pumpAndSettle();
-    // The picker sheet lists every place with its count.
+    // The picker sheet lists every place with its count, as checkable rows.
     expect(find.text('Paris'), findsOneWidget);
     expect(find.text('Tokyo'), findsOneWidget);
     expect(find.text('3'), findsOneWidget); // Paris's count
+    expect(find.text('Apply'), findsOneWidget);
   });
 
-  testWidgets('picking a place applies it as the field label; All places clears it',
+  testWidgets('selecting several places applies them as a count; All places clears them all',
       (tester) async {
     await pump(tester, const MultiSession(groups: [alpha], restored: true), locations: places);
 
     await openFilter(tester);
     await tester.tap(find.text('All places'));
     await tester.pumpAndSettle();
+    // Toggling both rows stages a count in the picker's own header before Apply.
     await tester.tap(find.text('Paris'));
+    await tester.pump();
+    await tester.tap(find.text('Tokyo'));
+    await tester.pump();
+    expect(find.text('2 selected'), findsOneWidget);
+    await tester.tap(find.text('Apply'));
     await tester.pumpAndSettle();
-    // Back in the filter sheet, the field now reads the chosen place.
-    expect(find.text('Paris'), findsOneWidget);
+    // Back in the filter sheet, the field now reads a count rather than either name.
+    expect(find.text('2 places'), findsOneWidget);
     expect(find.text('All places'), findsNothing);
     await tester.tap(find.text('Show results'));
     await tester.pumpAndSettle();
 
-    // Reopening shows the applied place persisted through Show results (an active-filter
-    // chip for it now also sits on the feed itself, so scope to the sheet specifically).
+    // Reopening shows both applied places persisted through Show results (active-filter
+    // chips for them now also sit on the feed itself, so scope to the sheet specifically).
     await openFilter(tester);
     final sheet = find.byType(BottomSheet);
-    expect(find.descendant(of: sheet, matching: find.text('Paris')), findsOneWidget);
+    expect(find.descendant(of: sheet, matching: find.text('2 places')), findsOneWidget);
 
-    // Clearing it goes back to "All places".
-    await tester.tap(find.descendant(of: sheet, matching: find.text('Paris')));
+    // The picker's own "All places" clears every selection at once, regardless of what was
+    // staged.
+    await tester.tap(find.descendant(of: sheet, matching: find.text('2 places')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('All places'));
     await tester.pumpAndSettle();

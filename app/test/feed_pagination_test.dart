@@ -21,7 +21,7 @@ class _PagedFakeApi extends ApiClient {
 
   @override
   Future<List<Post>> feed(
-      {int? authorId, String? location, DateTime? before, int? beforeId}) async {
+      {int? authorId, Set<String> locations = const {}, DateTime? before, int? beforeId}) async {
     if (calls >= pages.length) return [];
     return pages[calls++];
   }

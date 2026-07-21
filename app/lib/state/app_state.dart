@@ -620,7 +620,7 @@ final accentProvider = StateNotifierProvider<AccentController, AccentPalette>(
 
 /// The location filter applied to the home feed - null means all places. Only applies
 /// to a single group's feed (the filter is hidden in the All view).
-final feedLocationProvider = StateProvider<String?>((ref) => null);
+final feedLocationProvider = StateProvider<Set<String>>((ref) => const {});
 
 /// Bumped whenever the viewer creates a check-in. The profile tab lives in an always-alive
 /// IndexedStack, so it can't notice new posts on its own; it listens to this and reloads,
@@ -692,20 +692,21 @@ List<Post> collapseCrossPosts(List<Post> posts) {
 final feedProvider = FutureProvider.autoDispose<FeedResult>((ref) async {
   final session = ref.watch(multiSessionProvider);
   final groups = session.shownGroups;
-  final location = ref.watch(feedLocationProvider);
+  final locations = ref.watch(feedLocationProvider);
   if (groups.isEmpty) return const FeedResult(posts: []);
   if (groups.length == 1) {
     final acct = groups.first;
-    final posts = await ref.watch(apiForGroupProvider(acct.id)).feed(location: location);
+    final posts = await ref.watch(apiForGroupProvider(acct.id)).feed(locations: locations);
     return FeedResult(posts: [for (final p in posts) p.withGroup(acct.id)]);
   }
 
-  // The place filter applies per group; groups without that place just contribute nothing.
+  // The place filter applies per group; groups without any selected place just contribute
+  // nothing.
   final pages = await Future.wait([
     for (final g in groups)
       ref
           .watch(apiForGroupProvider(g.id))
-          .feed(location: location)
+          .feed(locations: locations)
           .then<List<Post>?>((posts) => [for (final p in posts) p.withGroup(g.id)])
           .catchError((_) => null),
   ]);

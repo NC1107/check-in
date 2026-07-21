@@ -255,7 +255,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   final Set<String> _people = {}; // selected person keys (PersonDirectory.keyFor)
   bool _includeTagged = true; // also match posts the selected people are tagged in
   _DateFilter? _dateFilter;
-  String? _location; // server-side place filter (mirrors feedLocationProvider)
+  Set<String> _locations = {}; // server-side place filter (mirrors feedLocationProvider)
 
   // The phone-based cross-group identity join, refreshed from each group's member list
   // when the filter opens. Empty until then - with no selected people it is never
@@ -288,7 +288,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   int _dlDone = 0;
   int _dlTotal = 0;
 
-  bool get _hasFilter => _people.isNotEmpty || _dateFilter != null || _location != null;
+  bool get _hasFilter => _people.isNotEmpty || _dateFilter != null || _locations.isNotEmpty;
 
   @override
   void initState() {
@@ -425,7 +425,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         for (final g in pending)
           ref
               .read(apiForGroupProvider(g.id))
-              .feed(location: _location, before: cursors[g.id]!.$1, beforeId: cursors[g.id]!.$2)
+              .feed(locations: _locations, before: cursors[g.id]!.$1, beforeId: cursors[g.id]!.$2)
               .then<List<Post>?>((posts) => [for (final p in posts) p.withGroup(g.id)])
               .catchError((_) => null), // unreachable this round; retried next scroll
       ]);
@@ -517,7 +517,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         if (_dateFilter?.isPastWindow(cursor.createdAt) ?? false) break;
         final more = [
           for (final p in await api.feed(
-            location: _location,
+            locations: _locations,
             before: cursor.createdAt,
             beforeId: cursor.id,
           ))
@@ -553,7 +553,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         if (range.isPastWindow(cursor.createdAt)) break;
         final more = [
           for (final p in await api.feed(
-            location: _location,
+            locations: _locations,
             before: cursor.createdAt,
             beforeId: cursor.id,
           ))
@@ -659,7 +659,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       final names = {for (final a in _authors()) a.key: a.name};
       parts.add('with ${_joinNames([for (final k in _people) names[k] ?? 'someone'])}');
     }
-    if (_location != null) parts.add('in $_location');
+    if (_locations.isNotEmpty) parts.add('in ${_joinNames(_locations.toList())}');
     return parts.join(', ');
   }
 
@@ -797,7 +797,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
           Set<String> people,
           bool includeTagged,
           _DateFilter? date,
-          String? location
+          Set<String> locations
         })>(
       context: context,
       isScrollControlled: true,
@@ -818,7 +818,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         includeTagged: _includeTagged,
         dateFilter: _dateFilter,
         locations: locs,
-        selectedLocation: _location,
+        selectedLocations: _locations,
       ),
     );
     if (result == null || !mounted) return;
@@ -829,11 +829,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         ..addAll(result.people);
       _includeTagged = result.includeTagged;
       _dateFilter = result.date;
-      _location = result.location;
+      _locations = result.locations;
     });
     // Group visibility and location both refetch the feed via their providers.
     ref.read(multiSessionProvider.notifier).setHiddenGroups(result.hidden);
-    ref.read(feedLocationProvider.notifier).state = _location;
+    ref.read(feedLocationProvider.notifier).state = _locations;
     // A past custom range can sit beyond the first page - walk back to it so the feed
     // isn't an empty dead-end.
     if (result.date is _RangeDate) _ensureRangeLoaded(result.date as _RangeDate);
@@ -1105,10 +1105,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         _filterChip(names[key] ?? 'Someone', () => setState(() => _people.remove(key))),
       if (_dateFilter != null)
         _filterChip(_dateFilter!.label, () => setState(() => _dateFilter = null)),
-      if (_location != null)
-        _filterChip(_location!, () {
-          setState(() => _location = null);
-          ref.read(feedLocationProvider.notifier).state = null;
+      for (final loc in _locations)
+        _filterChip(loc, () {
+          setState(() => _locations.remove(loc));
+          ref.read(feedLocationProvider.notifier).state = _locations;
         }),
     ];
     return Padding(
@@ -1300,7 +1300,7 @@ class _FilterSheet extends StatefulWidget {
     required this.includeTagged,
     required this.dateFilter,
     required this.locations,
-    required this.selectedLocation,
+    required this.selectedLocations,
   });
 
   /// Every connected group (signed-out ones offer re-login).
@@ -1313,7 +1313,7 @@ class _FilterSheet extends StatefulWidget {
   final bool includeTagged;
   final _DateFilter? dateFilter;
   final List<({String location, int count})> locations;
-  final String? selectedLocation;
+  final Set<String> selectedLocations;
 
   @override
   State<_FilterSheet> createState() => _FilterSheetState();
@@ -1324,7 +1324,7 @@ class _FilterSheetState extends State<_FilterSheet> {
   late final Set<String> _people = {...widget.selectedPeople};
   late bool _includeTagged = widget.includeTagged;
   late _DateFilter? _date = widget.dateFilter;
-  late String? _location = widget.selectedLocation;
+  late final Set<String> _locations = {...widget.selectedLocations};
   String _personQuery = '';
 
   List<ServerAccount> get _signedIn => [
@@ -1353,7 +1353,7 @@ class _FilterSheetState extends State<_FilterSheet> {
       people: _people,
       includeTagged: _includeTagged,
       date: _date,
-      location: _location,
+      locations: _locations,
     ));
   }
 
@@ -1439,7 +1439,7 @@ class _FilterSheetState extends State<_FilterSheet> {
                         _hidden.clear();
                         _people.clear();
                         _date = null;
-                        _location = null;
+                        _locations.clear();
                       }),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: _fgSecondary,
@@ -1832,11 +1832,10 @@ class _FilterSheetState extends State<_FilterSheet> {
   /// current selection and opens a picker sheet, rather than a Wrap of pills that grows
   /// with the group's place count and pushes the sheet's own Clear/Show results down.
   Widget _placeField(BuildContext context) {
-    final loc = _location;
-    final on = loc != null;
+    final on = _locations.isNotEmpty;
     return Semantics(
       button: true,
-      label: on ? 'Place filter, $loc selected' : 'Place filter, none selected',
+      label: on ? 'Place filter, $_placeLabel selected' : 'Place filter, none selected',
       child: GestureDetector(
         onTap: _pickPlace,
         child: Container(
@@ -1851,7 +1850,8 @@ class _FilterSheetState extends State<_FilterSheet> {
               Icon(Icons.place_outlined, size: 16, color: on ? context.onAccent : _fgSecondary),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(loc ?? 'All places',
+                child: Text(_placeLabel,
+                    overflow: TextOverflow.ellipsis,
                     style: TextStyle(
                         color: on ? context.onAccent : _fgSecondary,
                         fontWeight: FontWeight.w600,
@@ -1865,59 +1865,57 @@ class _FilterSheetState extends State<_FilterSheet> {
     );
   }
 
-  /// Opens the place picker sheet and applies the result: a chosen place, an explicit
-  /// clear, or (dismissed with no change) nothing.
+  /// The compact field's label: none selected reads as "All places", one names it
+  /// directly, several collapse to a count rather than overflowing the field.
+  String get _placeLabel {
+    if (_locations.isEmpty) return 'All places';
+    if (_locations.length == 1) return _locations.first;
+    return '${_locations.length} places';
+  }
+
+  /// Opens the multi-select place picker and applies whatever set it returns. A plain
+  /// null return (dismissed via the back gesture) means no change.
   Future<void> _pickPlace() async {
-    final choice = await showModalBottomSheet<_PlaceChoice>(
+    final result = await showModalBottomSheet<_PickPlaces>(
       context: context,
       isScrollControlled: true,
       backgroundColor: _bgSurface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
-      builder: (_) => _PlacePickerSheet(locations: widget.locations, selected: _location),
+      builder: (_) => _PlacePickerSheet(locations: widget.locations, selected: _locations),
     );
-    if (choice == null || !mounted) return;
+    if (result == null || !mounted) return;
     setState(() {
-      switch (choice) {
-        case _PickPlace(:final location):
-          _location = location;
-        case _ClearPlace():
-          _location = null;
-      }
+      _locations
+        ..clear()
+        ..addAll(result.locations);
     });
   }
 }
 
-/// Result of [_pickPlace]'s sheet: a chosen place, an explicit clear, or (a plain null
-/// return, e.g. dismissed via the back gesture) no change.
-sealed class _PlaceChoice {
-  const _PlaceChoice();
+/// Result of [_pickPlace]'s sheet: the applied set of places (empty means "All places").
+class _PickPlaces {
+  const _PickPlaces(this.locations);
+  final Set<String> locations;
 }
 
-class _PickPlace extends _PlaceChoice {
-  const _PickPlace(this.location);
-  final String location;
-}
-
-class _ClearPlace extends _PlaceChoice {
-  const _ClearPlace();
-}
-
-/// Bottom sheet listing every place with a search field once the list is long, mirroring
-/// the PEOPLE section's own >5 threshold. A place is picked with a single tap; Clear resets
-/// to no place filter.
+/// Bottom sheet listing every place as a checkable row, with a search field once the list
+/// is long (mirroring the PEOPLE section's own >5 threshold). Selections stage locally and
+/// only take effect on Apply - mirrors _DateRangeSheet's Clear/Apply footer, with "All
+/// places" as this picker's Clear.
 class _PlacePickerSheet extends StatefulWidget {
   const _PlacePickerSheet({required this.locations, required this.selected});
 
   final List<({String location, int count})> locations;
-  final String? selected;
+  final Set<String> selected;
 
   @override
   State<_PlacePickerSheet> createState() => _PlacePickerSheetState();
 }
 
 class _PlacePickerSheetState extends State<_PlacePickerSheet> {
+  late final Set<String> _staged = {...widget.selected};
   String _query = '';
 
   @override
@@ -1954,15 +1952,14 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
                   const Text('Place',
                       style:
                           TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(const _ClearPlace()),
-                    style: TextButton.styleFrom(foregroundColor: _fgSecondary),
-                    child: const Text('All places'),
-                  ),
+                  if (_staged.isNotEmpty)
+                    Text('${_staged.length} selected',
+                        style: const TextStyle(
+                            color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 13.5)),
                 ],
               ),
               if (widget.locations.length > 6) ...[
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 TextField(
                   autofocus: false,
                   onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
@@ -1996,25 +1993,78 @@ class _PlacePickerSheetState extends State<_PlacePickerSheet> {
                     : ListView.builder(
                         shrinkWrap: true,
                         itemCount: filtered.length,
-                        itemBuilder: (_, i) {
-                          final l = filtered[i];
-                          final on = widget.selected == l.location;
-                          return ListTile(
-                            onTap: () => Navigator.of(context).pop(_PickPlace(l.location)),
-                            contentPadding: EdgeInsets.zero,
-                            leading:
-                                Icon(Icons.place_outlined, color: on ? context.accent : _fgMuted),
-                            title: Text(l.location,
-                                style: TextStyle(
-                                    color: on ? context.accent : _fgPrimary,
-                                    fontWeight: on ? FontWeight.w700 : FontWeight.w500,
-                                    fontSize: 14.5)),
-                            trailing: Text('${l.count}',
-                                style: const TextStyle(color: _fgMuted, fontSize: 13)),
-                          );
-                        },
+                        itemBuilder: (_, i) => _placeRow(filtered[i]),
                       ),
               ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(const _PickPlaces({})),
+                    style: TextButton.styleFrom(foregroundColor: _fgSecondary),
+                    child: const Text('All places'),
+                  ),
+                  const Spacer(),
+                  FilledButton(
+                    onPressed: () => Navigator.of(context).pop(_PickPlaces(_staged)),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: context.accent,
+                      foregroundColor: context.onAccent,
+                      padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Text('Apply', style: TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _placeRow(({String location, int count}) l) {
+    final on = _staged.contains(l.location);
+    return Semantics(
+      button: true,
+      selected: on,
+      label: l.location,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => setState(() {
+          HapticFeedback.selectionClick();
+          if (on) {
+            _staged.remove(l.location);
+          } else {
+            _staged.add(l.location);
+          }
+        }),
+        child: Padding(
+          // 22 (checkbox) + 11 * 2 lands the row on the 44px minimum tap target.
+          padding: const EdgeInsets.symmetric(vertical: 11),
+          child: Row(
+            children: [
+              Container(
+                width: 22,
+                height: 22,
+                decoration: BoxDecoration(
+                  color: on ? context.accent : Colors.transparent,
+                  border: Border.all(color: on ? context.accent : _border, width: 1.5),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: on ? Icon(Icons.check, size: 15, color: context.onAccent) : null,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(l.location,
+                    style: TextStyle(
+                        color: on ? context.accent : _fgPrimary,
+                        fontWeight: on ? FontWeight.w700 : FontWeight.w500,
+                        fontSize: 14.5)),
+              ),
+              const SizedBox(width: 10),
+              Text('${l.count}', style: const TextStyle(color: _fgMuted, fontSize: 13)),
             ],
           ),
         ),
