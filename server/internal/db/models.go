@@ -136,15 +136,18 @@ type CommentPreview struct {
 	Body       string `json:"body"`
 }
 
-// Comment is a reply on a post.
+// Comment is a reply on a post. ParentCommentID, when set, points at the comment this one
+// answers (both live on the same server), so the client can thread it and the author of the
+// parent comment gets notified.
 type Comment struct {
-	ID            int64     `json:"id"`
-	PostID        int64     `json:"postId"`
-	UserID        int64     `json:"userId"`
-	Body          string    `json:"body"`
-	CreatedAt     time.Time `json:"createdAt"`
-	AuthorName    string    `json:"authorName,omitempty"`
-	AuthorPhotoID *int64    `json:"authorPhotoId,omitempty"`
+	ID              int64     `json:"id"`
+	PostID          int64     `json:"postId"`
+	UserID          int64     `json:"userId"`
+	Body            string    `json:"body"`
+	CreatedAt       time.Time `json:"createdAt"`
+	ParentCommentID *int64    `json:"parentCommentId,omitempty"`
+	AuthorName      string    `json:"authorName,omitempty"`
+	AuthorPhotoID   *int64    `json:"authorPhotoId,omitempty"`
 }
 
 // Birthday is a lightweight projection used by the upcoming-birthdays endpoint that

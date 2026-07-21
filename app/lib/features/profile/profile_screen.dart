@@ -59,6 +59,14 @@ class _MyProfileScreenState extends ConsumerState<MyProfileScreen> {
 
   void _reload() => setState(() => _future = _load());
 
+  /// Reloads and completes when the fetch settles, so pull-to-refresh keeps the spinner up
+  /// until the timeline is actually refreshed (errors surface via the FutureBuilder).
+  Future<void> _refresh() async {
+    final f = _load();
+    setState(() => _future = f);
+    await f.then((_) {}).catchError((_) {});
+  }
+
   @override
   Widget build(BuildContext context) {
     // Adding/removing/re-logging a group changes what "my profile" covers.
@@ -66,6 +74,8 @@ class _MyProfileScreenState extends ConsumerState<MyProfileScreen> {
       multiSessionProvider.select((s) => [for (final g in s.signedIn) g.id].join(',')),
       (_, __) => _reload(),
     );
+    // A new check-in (created from the feed tab) reloads the profile so it appears here.
+    ref.listen(profileRefreshProvider, (_, __) => _reload());
     final session = ref.watch(multiSessionProvider);
     final multi = session.signedIn.length > 1;
     final isHost = session.signedIn.any((g) => g.user?.isAdmin ?? false);
@@ -107,50 +117,54 @@ class _MyProfileScreenState extends ConsumerState<MyProfileScreen> {
             );
           }
           final (user, posts, unreachable) = snap.data!;
-          return ListView(
-            children: [
-              _header(user, posts.length, isHost),
-              const Divider(color: kBorder, height: 1),
-              if (unreachable.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
-                  child: Text(
-                    "Couldn't reach ${unreachable.join(', ')} - showing the rest.",
-                    style: const TextStyle(color: kFgMuted, fontSize: 12.5),
-                  ),
-                ),
-              if (posts.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(40),
-                  child:
-                      Center(child: Text('No check-ins yet.', style: TextStyle(color: kFgMuted))),
-                ),
-              ...posts.map((p) => Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(18, 6, 16, 6),
-                          child: Text(
-                            DateFormat.yMMMMd().format(p.createdAt.toLocal()),
-                            style: TextStyle(
-                                color: context.accent, fontWeight: FontWeight.w600, fontSize: 12),
-                          ),
-                        ),
-                        PostCard(
-                          key: ValueKey('${p.groupId}-${p.id}'),
-                          post: p,
-                          onDeleted: _reload,
-                          groupColor: multi
-                              ? ref.read(multiSessionProvider).byId(p.groupId)?.displayColor
-                              : null,
-                        ),
-                      ],
+          return RefreshIndicator(
+            onRefresh: _refresh,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: [
+                _header(user, posts.length, isHost),
+                const Divider(color: kBorder, height: 1),
+                if (unreachable.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
+                    child: Text(
+                      "Couldn't reach ${unreachable.join(', ')} - showing the rest.",
+                      style: const TextStyle(color: kFgMuted, fontSize: 12.5),
                     ),
-                  )),
-              const SizedBox(height: 24),
-            ],
+                  ),
+                if (posts.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(40),
+                    child:
+                        Center(child: Text('No check-ins yet.', style: TextStyle(color: kFgMuted))),
+                  ),
+                ...posts.map((p) => Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(18, 6, 16, 6),
+                            child: Text(
+                              DateFormat.yMMMMd().format(p.createdAt.toLocal()),
+                              style: TextStyle(
+                                  color: context.accent, fontWeight: FontWeight.w600, fontSize: 12),
+                            ),
+                          ),
+                          PostCard(
+                            key: ValueKey('${p.groupId}-${p.id}'),
+                            post: p,
+                            onDeleted: _reload,
+                            groupColor: multi
+                                ? ref.read(multiSessionProvider).byId(p.groupId)?.displayColor
+                                : null,
+                          ),
+                        ],
+                      ),
+                    )),
+                const SizedBox(height: 24),
+              ],
+            ),
           );
         },
       ),
@@ -259,6 +273,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
 
   void _reload() => setState(() => _future = _load());
 
+  Future<void> _refresh() async {
+    final f = _load();
+    setState(() => _future = f);
+    await f.then((_) {}).catchError((_) {});
+  }
+
   Future<void> _toggleBlock() async {
     final currently = _isBlocked ?? false;
     final api = ref.read(contentApiProvider(widget.groupId));
@@ -318,35 +338,39 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
             );
           }
           final (user, posts) = snap.data!;
-          return ListView(
-            children: [
-              _header(user, posts.length),
-              const Divider(color: kBorder, height: 1),
-              if (posts.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(40),
-                  child:
-                      Center(child: Text('No check-ins yet.', style: TextStyle(color: kFgMuted))),
-                ),
-              ...posts.map((p) => Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(18, 6, 16, 6),
-                          child: Text(
-                            DateFormat.yMMMMd().format(p.createdAt.toLocal()),
-                            style: TextStyle(
-                                color: context.accent, fontWeight: FontWeight.w600, fontSize: 12),
+          return RefreshIndicator(
+            onRefresh: _refresh,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              children: [
+                _header(user, posts.length),
+                const Divider(color: kBorder, height: 1),
+                if (posts.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(40),
+                    child:
+                        Center(child: Text('No check-ins yet.', style: TextStyle(color: kFgMuted))),
+                  ),
+                ...posts.map((p) => Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(18, 6, 16, 6),
+                            child: Text(
+                              DateFormat.yMMMMd().format(p.createdAt.toLocal()),
+                              style: TextStyle(
+                                  color: context.accent, fontWeight: FontWeight.w600, fontSize: 12),
+                            ),
                           ),
-                        ),
-                        PostCard(key: ValueKey(p.id), post: p, onDeleted: _reload),
-                      ],
-                    ),
-                  )),
-              const SizedBox(height: 24),
-            ],
+                          PostCard(key: ValueKey(p.id), post: p, onDeleted: _reload),
+                        ],
+                      ),
+                    )),
+                const SizedBox(height: 24),
+              ],
+            ),
           );
         },
       ),

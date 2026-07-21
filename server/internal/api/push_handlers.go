@@ -150,6 +150,28 @@ func (s *Server) notifyReply(commenterName string, postID, commenterID int64) {
 		s.pushData("comment", postID))
 }
 
+// notifyCommentReply pushes a reply notification to the author of the comment being replied
+// to. The parent comment lives on this same server, so its author resolves with a local
+// join — no cross-group coordination even when the post is a cross-post.
+func (s *Server) notifyCommentReply(replierName string, postID, parentCommentID, replierID int64) {
+	if s.push == nil {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			log.Printf("notifyCommentReply: recovered: %v", rec)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	tokens, err := s.db.TokensForCommentReply(ctx, parentCommentID, replierID)
+	if err != nil || len(tokens) == 0 {
+		return
+	}
+	s.push.Send(ctx, tokens, s.serverName(ctx), replierName+" replied to your comment",
+		s.pushData("reply", postID))
+}
+
 // notifyLike pushes a like notification to the post's author.
 func (s *Server) notifyLike(likerName string, postID, likerID int64) {
 	if s.push == nil {

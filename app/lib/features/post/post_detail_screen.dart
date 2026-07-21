@@ -56,6 +56,7 @@ class PostDetailScreen extends ConsumerStatefulWidget {
 
 class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   final _comment = TextEditingController();
+  final _commentFocus = FocusNode();
   final _scroll = ScrollController();
   final _commentsKey = GlobalKey();
   // Loaded post + thread held in state so sending a comment appends to the list in place
@@ -66,13 +67,37 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   Object? _error;
   bool _sending = false;
   bool _didFocusComments = false;
-  bool? _likeOverride; // null = use the post's server value
-  // Cross-post only: which group a new comment posts to (defaults to the first copy), and
-  // the groups the viewer currently likes it in (so the header like toggles across all).
+  // Cross-post only: which group a new comment posts to (defaults to the first copy). Like
+  // state is read from the app-wide likesProvider, so it stays in step with the feed card.
   String? _composeGroupId;
-  final Set<String> _likedGroups = {};
+  // The comment being replied to, or null for a top-level comment. A reply always goes to
+  // the parent's own group, so replying pins the compose target to it.
+  Comment? _replyTo;
 
   bool get _isCrossPost => (widget.copies?.length ?? 0) > 1;
+
+  /// Starts a reply to [c]: pins the compose group to the parent's (so it lands on the right
+  /// server) and focuses the field. Tapping "Reply" on another comment just re-targets.
+  void _startReply(Comment c) {
+    setState(() {
+      _replyTo = c;
+      if (_isCrossPost && c.groupId != null) _composeGroupId = c.groupId;
+    });
+    _commentFocus.requestFocus();
+  }
+
+  void _cancelReply() => setState(() => _replyTo = null);
+
+  /// The display name of the comment [c] is replying to, resolved from the loaded thread
+  /// (same id, and same group for a merged cross-post thread). Null if it can't be found.
+  String? _parentAuthorName(Comment c) {
+    final pid = c.parentCommentId;
+    if (pid == null) return null;
+    for (final other in _comments) {
+      if (other.id == pid && other.groupId == c.groupId) return other.authorName;
+    }
+    return null;
+  }
 
   Future<void> _savePhoto(int mediaId) async {
     try {
@@ -89,37 +114,20 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   void _snack(String msg) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 
-  Future<void> _toggleLike(Post post) async {
+  /// Toggles the like through the shared likesProvider so the feed card and this screen
+  /// always agree. A cross-post's one heart brings every copy to the same state.
+  void _toggleLike(Post post) {
+    final overlay = ref.read(likesProvider);
+    final want = !likeView(post, overlay).liked;
+    final likes = ref.read(likesProvider.notifier);
     final copies = widget.copies;
     if (_isCrossPost && copies != null) {
-      // Like (or unlike) in every group the viewer shares the post with, mirroring the card.
-      final wantLike = _likedGroups.length < copies.length;
-      final changed = [
-        for (final c in copies)
-          if (_likedGroups.contains(c.groupId) != wantLike) c,
-      ];
-      if (changed.isEmpty) return;
-      setState(() {
-        for (final c in changed) {
-          wantLike ? _likedGroups.add(c.groupId) : _likedGroups.remove(c.groupId);
-        }
-      });
-      for (final c in changed) {
-        try {
-          final api = ref.read(contentApiProvider(c.groupId));
-          wantLike ? await api.like(c.postId) : await api.unlike(c.postId);
-        } catch (_) {}
+      for (final c in copies) {
+        final cur = overlay['${c.groupId}:${c.postId}'] ?? c.likedByViewer;
+        if (cur != want) likes.setLiked(c.groupId, c.postId, want);
       }
-      return;
-    }
-    final current = _likeOverride ?? post.likedByViewer;
-    final next = !current;
-    setState(() => _likeOverride = next);
-    try {
-      final api = ref.read(contentApiProvider(widget.groupId));
-      next ? await api.like(post.id) : await api.unlike(post.id);
-    } catch (_) {
-      if (mounted) setState(() => _likeOverride = current);
+    } else {
+      likes.setLiked(widget.groupId, post.id, want);
     }
   }
 
@@ -132,6 +140,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   @override
   void dispose() {
     _comment.dispose();
+    _commentFocus.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -175,14 +184,11 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
           ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
         post = post.withCopies(copies);
         _composeGroupId ??= copies.first.groupId;
-        _likedGroups
-          ..clear()
-          ..addAll([
-            for (final c in copies)
-              if (c.likedByViewer) c.groupId
-          ]);
       } else {
         comments = await api.comments(widget.postId);
+        // Tag the post with its group so the like overlay keys it the same way the feed
+        // card does (getPost doesn't stamp the origin group itself).
+        if (widget.groupId != null) post = post.withGroup(widget.groupId!);
       }
       if (!mounted) return;
       setState(() {
@@ -207,14 +213,23 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     FocusScope.of(context).unfocus();
     // On a cross-post, a comment goes to exactly one group - the one the viewer picked. The
     // members of the other groups never see it; only the poster, who is in every group, does.
+    // A reply is pinned to its parent's group (see _startReply), so the parent id it carries
+    // always refers to a comment on the same server.
     final target = _sendTarget();
+    final replyToId = _replyTo?.id;
     try {
-      final added =
-          (await ref.read(contentApiProvider(target.groupId)).addComment(target.postId, text))
-              .withGroup(_isCrossPost ? target.groupId : null);
+      final added = (await ref
+              .read(contentApiProvider(target.groupId))
+              .addComment(target.postId, text, parentCommentId: replyToId))
+          .withGroup(_isCrossPost ? target.groupId : null);
       _comment.clear();
       // Append in place - no re-fetch, so the post and existing comments don't flash.
-      if (mounted) setState(() => _comments = [..._comments, added]);
+      if (mounted) {
+        setState(() {
+          _comments = [..._comments, added];
+          _replyTo = null;
+        });
+      }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -368,17 +383,9 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
 
   /// Like + comment counts under the post, with a tappable (ripple) like button.
   Widget _actions(Post post, int commentCount) {
-    final bool liked;
-    final int likes;
-    if (_isCrossPost && widget.copies != null) {
-      final copies = widget.copies!;
-      liked = _likedGroups.length == copies.length;
-      final initialLiked = copies.where((c) => c.likedByViewer).length;
-      likes = post.totalLikes + (_likedGroups.length - initialLiked);
-    } else {
-      liked = _likeOverride ?? post.likedByViewer;
-      likes = post.likeCount + (liked == post.likedByViewer ? 0 : (liked ? 1 : -1));
-    }
+    final view = likeView(post, ref.watch(likesProvider));
+    final liked = view.liked;
+    final likes = view.likes;
     final me = ref.read(contentAccountProvider(widget.groupId))?.user;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -637,9 +644,31 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                     ],
                   ],
                 ),
+                if (_parentAuthorName(c) case final parent?) ...[
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      const Icon(Icons.subdirectory_arrow_right, size: 13, color: kFgMuted),
+                      const SizedBox(width: 3),
+                      Flexible(
+                        child: Text('Replying to $parent',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: kFgMuted, fontSize: 11.5)),
+                      ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 2),
                 Text(c.body,
                     style: const TextStyle(color: kFgSecondary, fontSize: 14, height: 1.35)),
+                const SizedBox(height: 4),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _startReply(c),
+                  child: const Text('Reply',
+                      style: TextStyle(color: kFgMuted, fontSize: 12, fontWeight: FontWeight.w600)),
+                ),
               ],
             ),
           ),
@@ -661,20 +690,25 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (_replyTo case final r?) _replyBanner(r),
             // Cross-post: a comment goes to exactly one group. Let the poster pick which -
-            // the others never see it. Defaults to the first group shared to.
-            if (_isCrossPost && widget.copies != null) _groupPicker(widget.copies!),
+            // the others never see it. Defaults to the first group shared to. While replying
+            // the group is pinned to the parent's, so the picker is hidden.
+            if (_isCrossPost && widget.copies != null && _replyTo == null)
+              _groupPicker(widget.copies!),
             Row(
               children: [
                 Expanded(
                   child: TextField(
                     controller: _comment,
+                    focusNode: _commentFocus,
                     onSubmitted: (_) => _send(),
                     textInputAction: TextInputAction.send,
                     style: const TextStyle(color: kFgPrimary, fontSize: 14),
                     cursorColor: context.accent,
                     decoration: InputDecoration(
-                      hintText: 'Add a comment…',
+                      hintText:
+                          _replyTo != null ? 'Reply to ${_replyTo!.authorName}…' : 'Add a comment…',
                       hintStyle: const TextStyle(color: kFgMuted),
                       filled: true,
                       fillColor: kBgSurface,
@@ -720,4 +754,29 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       ),
     );
   }
+
+  /// The "Replying to X ✕" strip shown above the field while composing a reply.
+  Widget _replyBanner(Comment c) => Padding(
+        padding: const EdgeInsets.only(bottom: 8, left: 2),
+        child: Row(
+          children: [
+            const Icon(Icons.reply, size: 15, color: kFgMuted),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text('Replying to ${c.authorName}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: kFgSecondary, fontSize: 13)),
+            ),
+            GestureDetector(
+              onTap: _cancelReply,
+              behavior: HitTestBehavior.opaque,
+              child: const Padding(
+                padding: EdgeInsets.all(4),
+                child: Icon(Icons.close, size: 16, color: kFgMuted),
+              ),
+            ),
+          ],
+        ),
+      );
 }

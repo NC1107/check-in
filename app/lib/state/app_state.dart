@@ -520,6 +520,67 @@ final contentApiProvider = Provider.family<ApiClient, String?>((ref, groupId) {
   return ref.watch(apiForGroupProvider(acct.id));
 });
 
+/// The viewer's like on each post, held app-wide so it survives navigation and is the one
+/// source of truth every screen reads. Keyed "$groupId:$postId"; the value is the viewer's
+/// intended liked-state, and an absent key means "use whatever the server last returned".
+/// Before this, the feed card and the post screen each kept their own like state, so a like
+/// made in one place was invisible in the other and was lost the moment a widget rebuilt.
+class LikesController extends StateNotifier<Map<String, bool>> {
+  LikesController(this._ref) : super(const {});
+
+  final Ref _ref;
+
+  static String _key(String? groupId, int postId) => '$groupId:$postId';
+
+  /// The overlay's view of one post, falling back to the server's value when untouched.
+  bool likedFor(String? groupId, int postId, bool serverLiked) =>
+      state[_key(groupId, postId)] ?? serverLiked;
+
+  /// Optimistically records the like, then tells the server; on failure it rolls the entry
+  /// back to what it was so a dropped request can't leave a wrong heart on screen.
+  Future<void> setLiked(String? groupId, int postId, bool wantLike) async {
+    final key = _key(groupId, postId);
+    final prev = state[key];
+    if (prev == wantLike) return;
+    state = {...state, key: wantLike};
+    try {
+      final api = _ref.read(contentApiProvider(groupId));
+      wantLike ? await api.like(postId) : await api.unlike(postId);
+    } catch (_) {
+      final next = {...state};
+      if (prev == null) {
+        next.remove(key);
+      } else {
+        next[key] = prev;
+      }
+      state = next;
+    }
+  }
+}
+
+final likesProvider = StateNotifierProvider<LikesController, Map<String, bool>>(
+  (ref) => LikesController(ref),
+);
+
+/// The heart state and count to render for [post], applying the viewer's like overlay on
+/// top of the server counts. The count is carried as a delta from the server's own value,
+/// so a like landing from someone else (which raises the server count) still shows right.
+/// A cross-post reads as liked only when every copy is liked, and sums each copy's delta.
+({bool liked, int likes}) likeView(Post post, Map<String, bool> overlay) {
+  if (post.isCrossPost) {
+    var liked = true;
+    var likes = 0;
+    for (final c in post.copies) {
+      final l = overlay['${c.groupId}:${c.postId}'] ?? c.likedByViewer;
+      if (!l) liked = false;
+      likes += c.likeCount + (l ? 1 : 0) - (c.likedByViewer ? 1 : 0);
+    }
+    return (liked: liked, likes: likes);
+  }
+  final l = overlay['${post.groupId}:${post.id}'] ?? post.likedByViewer;
+  return (liked: l, likes: post.likeCount + (l ? 1 : 0) - (post.likedByViewer ? 1 : 0));
+}
+
 const _kAccentId = 'accent_id';
 
 /// The user's chosen accent palette, persisted per-device. Drives the whole app
@@ -548,6 +609,11 @@ final accentProvider = StateNotifierProvider<AccentController, AccentPalette>(
 /// The location filter applied to the home feed - null means all places. Only applies
 /// to a single group's feed (the filter is hidden in the All view).
 final feedLocationProvider = StateProvider<String?>((ref) => null);
+
+/// Bumped whenever the viewer creates a check-in. The profile tab lives in an always-alive
+/// IndexedStack, so it can't notice new posts on its own; it listens to this and reloads,
+/// which is why a just-posted check-in now shows up when you switch to your profile.
+final profileRefreshProvider = StateProvider<int>((ref) => 0);
 
 /// What the feed shows: the merged posts plus which groups couldn't be reached (All
 /// view only), so the feed can degrade gracefully instead of failing whole.

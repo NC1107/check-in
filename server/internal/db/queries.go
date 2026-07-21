@@ -606,6 +606,21 @@ func (d *DB) TokensForReply(ctx context.Context, postID, commenterID int64) ([]s
 		  AND u.notify_replies = TRUE AND p.author_id <> $2`, postID, commenterID)
 }
 
+// TokensForCommentReply returns the parent comment author's device tokens when someone
+// replies to their comment. It reuses the notify_replies opt-out, skips the replier, and
+// skips the post's author because notifyReply already pings them for any new comment — so a
+// reply to your own post's comment doesn't double-buzz.
+func (d *DB) TokensForCommentReply(ctx context.Context, parentCommentID, replierID int64) ([]string, error) {
+	return d.scanTokens(ctx, `
+		SELECT dt.token FROM device_tokens dt
+		JOIN comments pc ON pc.id = $1
+		JOIN posts p ON p.id = pc.post_id
+		JOIN users u ON u.id = pc.user_id
+		WHERE dt.user_id = pc.user_id AND u.status = 'active'
+		  AND u.notify_replies = TRUE AND pc.user_id <> $2 AND pc.user_id <> p.author_id`,
+		parentCommentID, replierID)
+}
+
 // TokensForLike returns the post author's device tokens when they want like
 // notifications and aren't the one who just liked.
 func (d *DB) TokensForLike(ctx context.Context, postID, likerID int64) ([]string, error) {
@@ -1143,28 +1158,29 @@ func (d *DB) UnlikePost(ctx context.Context, postID, userID int64) error {
 
 // ---- comments ----
 
-// AddComment inserts a comment and returns it.
-func (d *DB) AddComment(ctx context.Context, postID, userID int64, body string) (Comment, error) {
+// AddComment inserts a comment and returns it. parentID, when non-nil, links it to the
+// comment it replies to (validated by the caller to belong to the same post).
+func (d *DB) AddComment(ctx context.Context, postID, userID int64, body string, parentID *int64) (Comment, error) {
 	var c Comment
 	// Return the author's name + photo alongside the new row (via CTE) so the response
 	// matches ListComments — otherwise the client renders the just-posted comment with an
 	// empty name and a placeholder avatar.
 	err := d.Pool.QueryRow(ctx, `
 		WITH ins AS (
-			INSERT INTO comments (post_id, user_id, body) VALUES ($1, $2, $3)
-			RETURNING id, post_id, user_id, body, created_at
+			INSERT INTO comments (post_id, user_id, body, parent_comment_id) VALUES ($1, $2, $3, $4)
+			RETURNING id, post_id, user_id, body, created_at, parent_comment_id
 		)
-		SELECT ins.id, ins.post_id, ins.user_id, ins.body, ins.created_at, u.name, u.profile_media_id
+		SELECT ins.id, ins.post_id, ins.user_id, ins.body, ins.created_at, ins.parent_comment_id, u.name, u.profile_media_id
 		FROM ins JOIN users u ON u.id = ins.user_id`,
-		postID, userID, body,
-	).Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.AuthorName, &c.AuthorPhotoID)
+		postID, userID, body, parentID,
+	).Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.ParentCommentID, &c.AuthorName, &c.AuthorPhotoID)
 	return c, err
 }
 
 // ListComments returns comments on a post in chronological order with author info.
 func (d *DB) ListComments(ctx context.Context, postID, viewerID int64) ([]Comment, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT c.id, c.post_id, c.user_id, c.body, c.created_at, u.name, u.profile_media_id
+		SELECT c.id, c.post_id, c.user_id, c.body, c.created_at, c.parent_comment_id, u.name, u.profile_media_id
 		FROM comments c JOIN users u ON u.id = c.user_id
 		WHERE c.post_id = $1
 		  AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $2)
@@ -1176,12 +1192,28 @@ func (d *DB) ListComments(ctx context.Context, postID, viewerID int64) ([]Commen
 	var comments []Comment
 	for rows.Next() {
 		var c Comment
-		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.AuthorName, &c.AuthorPhotoID); err != nil {
+		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.ParentCommentID, &c.AuthorName, &c.AuthorPhotoID); err != nil {
 			return nil, err
 		}
 		comments = append(comments, c)
 	}
 	return comments, rows.Err()
+}
+
+// ParentCommentForPost returns the post a comment belongs to and its author, so a reply
+// handler can check the parent is real and on the same post before threading to it. found
+// is false (with a nil error) when no such comment exists.
+func (d *DB) ParentCommentForPost(ctx context.Context, commentID int64) (postID, authorID int64, found bool, err error) {
+	err = d.Pool.QueryRow(ctx,
+		`SELECT post_id, user_id FROM comments WHERE id = $1`, commentID,
+	).Scan(&postID, &authorID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, 0, false, nil
+	}
+	if err != nil {
+		return 0, 0, false, err
+	}
+	return postID, authorID, true, nil
 }
 
 // ---- blocks ----
