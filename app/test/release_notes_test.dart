@@ -53,7 +53,10 @@ void main() {
       expect(find.text("What's New"), findsOneWidget);
       expect(find.text('Got it'), findsOneWidget);
 
-      // Dismiss; the latest version is now remembered so it won't show again.
+      // Dismiss; the latest version is now remembered so it won't show again. The combined
+      // highlights across every unseen version can scroll "Got it" below the fold, so bring
+      // it into view first rather than assume the surface is tall enough to show it already.
+      await tester.ensureVisible(find.text('Got it'));
       await tester.tap(find.text('Got it'));
       await tester.pumpAndSettle();
       final prefs = await SharedPreferences.getInstance();

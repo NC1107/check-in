@@ -19,6 +19,19 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.3',
+    highlights: [
+      'Share one check-in to several groups at once - it shows up as a single card, not a separate copy in each feed.',
+      'Reply directly to a comment, and that person gets notified - not just whoever wrote the check-in.',
+      "Sync your profile picture across every group you're in with one tap, instead of setting it separately in each one.",
+      'Tapping your own check-in - even one shared to another group - now opens your real profile, with full settings.',
+      'Swipe between every photo on a check-in in full screen, not just the one you tapped into.',
+      'Wide and tall photos show at their own shape now instead of getting cropped into a square.',
+      'Scrolling the combined feed all the way down keeps loading older check-ins, instead of stopping after the first page.',
+      'Picking a place to filter by is now one dropdown instead of a long row of buttons.',
+    ],
+  ),
+  ReleaseNote(
     version: '1.2',
     highlights: [
       'Get one daily summary of new check-ins instead of a notification for each - at a time you pick.',
@@ -73,69 +86,88 @@ class _WhatsNewSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final highlights = [for (final n in notes) ...n.highlights];
+    // Capped well below full screen height (same technique as the feed's filter sheet) so
+    // there's always room above for the status bar, and so "Got it" stays reachable without
+    // scrolling past a long highlight list - only the list itself scrolls in the middle.
+    final maxHeight = MediaQuery.of(context).size.height * 0.82;
     return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(22, 14, 22, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 38,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 18),
-                decoration:
-                    BoxDecoration(color: kBorder, borderRadius: BorderRadius.circular(9999)),
-              ),
-            ),
-            Row(
-              children: [
-                Icon(Icons.auto_awesome, size: 20, color: context.accent),
-                const SizedBox(width: 9),
-                const Text("What's New",
-                    style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 19)),
-              ],
-            ),
-            const SizedBox(height: 16),
-            for (final h in highlights)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      margin: const EdgeInsets.only(top: 6, right: 11),
-                      width: 6,
-                      height: 6,
-                      decoration: BoxDecoration(color: context.accent, shape: BoxShape.circle),
-                    ),
-                    Expanded(
-                      child: Text(h,
-                          style:
-                              const TextStyle(color: kFgSecondary, fontSize: 14.5, height: 1.35)),
-                    ),
-                  ],
+      top: false,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(22, 14, 22, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 38,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 18),
+                  decoration:
+                      BoxDecoration(color: kBorder, borderRadius: BorderRadius.circular(9999)),
                 ),
               ),
-            const SizedBox(height: 10),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: () {
-                  HapticFeedback.selectionClick();
-                  Navigator.of(context).pop();
-                },
-                style: FilledButton.styleFrom(
-                  backgroundColor: context.accent,
-                  foregroundColor: context.onAccent,
-                  padding: const EdgeInsets.symmetric(vertical: 13),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                ),
-                child: const Text('Got it', style: TextStyle(fontWeight: FontWeight.w700)),
+              Row(
+                children: [
+                  Icon(Icons.auto_awesome, size: 20, color: context.accent),
+                  const SizedBox(width: 9),
+                  const Text("What's New",
+                      style:
+                          TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 19)),
+                ],
               ),
-            ),
-          ],
+              const SizedBox(height: 16),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final h in highlights)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                margin: const EdgeInsets.only(top: 6, right: 11),
+                                width: 6,
+                                height: 6,
+                                decoration:
+                                    BoxDecoration(color: context.accent, shape: BoxShape.circle),
+                              ),
+                              Expanded(
+                                child: Text(h,
+                                    style: const TextStyle(
+                                        color: kFgSecondary, fontSize: 14.5, height: 1.35)),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: () {
+                    HapticFeedback.selectionClick();
+                    Navigator.of(context).pop();
+                  },
+                  style: FilledButton.styleFrom(
+                    backgroundColor: context.accent,
+                    foregroundColor: context.onAccent,
+                    padding: const EdgeInsets.symmetric(vertical: 13),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: const Text('Got it', style: TextStyle(fontWeight: FontWeight.w700)),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
