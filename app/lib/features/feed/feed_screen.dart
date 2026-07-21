@@ -1361,191 +1361,128 @@ class _FilterSheetState extends State<_FilterSheet> {
   Widget build(BuildContext context) {
     // Reacts live to the pending group pills: deselect a group and its people vanish.
     final people = _visiblePeople;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 10, 18, 22),
-      // Scrolls so the sheet can never overflow a compact screen (the EULA lesson).
-      child: SingleChildScrollView(
+    // Capped well below full screen height so there's always clear room above for the
+    // status bar/notch - matching showDateRangeSheet's own sheet, which uses the same
+    // fixed-cap-instead-of-SafeArea-top approach. Without a cap, a long filter list (many
+    // groups/people) could grow the sheet tall enough to slide its header up underneath
+    // the status bar.
+    final maxHeight = MediaQuery.of(context).size.height * 0.82;
+    return SafeArea(
+      top: false,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 10, 18, 22),
           child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Center(
-            child: Container(
-              width: 38,
-              height: 4,
-              margin: const EdgeInsets.only(bottom: 14),
-              decoration: BoxDecoration(color: _border, borderRadius: BorderRadius.circular(9999)),
-            ),
-          ),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Filter',
-                  style: TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
-              Semantics(
-                button: true,
-                label: 'Close',
-                child: GestureDetector(
-                  onTap: () => Navigator.of(context).pop(),
-                  behavior: HitTestBehavior.opaque,
-                  child: SizedBox(
-                    width: 44,
-                    height: 44,
-                    child: Center(
-                      child: Container(
-                        width: 30,
-                        height: 30,
-                        decoration:
-                            const BoxDecoration(color: _bgSurfaceHover, shape: BoxShape.circle),
-                        child: const Icon(Icons.close, size: 18, color: _fgSecondary),
+              Center(
+                child: Container(
+                  width: 38,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 14),
+                  decoration:
+                      BoxDecoration(color: _border, borderRadius: BorderRadius.circular(9999)),
+                ),
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Filter',
+                      style:
+                          TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
+                  Semantics(
+                    button: true,
+                    label: 'Close',
+                    child: GestureDetector(
+                      onTap: () => Navigator.of(context).pop(),
+                      behavior: HitTestBehavior.opaque,
+                      child: SizedBox(
+                        width: 44,
+                        height: 44,
+                        child: Center(
+                          child: Container(
+                            width: 30,
+                            height: 30,
+                            decoration:
+                                const BoxDecoration(color: _bgSurfaceHover, shape: BoxShape.circle),
+                            child: const Icon(Icons.close, size: 18, color: _fgSecondary),
+                          ),
+                        ),
                       ),
                     ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              // Only this middle section scrolls - the header above and Clear/Show results
+              // below stay pinned, so a long filter list never pushes the buttons off
+              // screen or behind a scroll.
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _filterSections(context, people),
+                    ],
                   ),
                 ),
               ),
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => setState(() {
+                        // Clearing everything includes the group scope: back to All.
+                        _hidden.clear();
+                        _people.clear();
+                        _date = null;
+                        _location = null;
+                      }),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: _fgSecondary,
+                        side: const BorderSide(color: _border),
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child: const Text('Clear'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    flex: 2,
+                    child: FilledButton(
+                      onPressed: _apply,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: context.accent,
+                        foregroundColor: context.onAccent,
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                      child:
+                          const Text('Show results', style: TextStyle(fontWeight: FontWeight.w700)),
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
-          const SizedBox(height: 18),
-          // With a single connected group there is nothing to scope, so the whole GROUPS
-          // section disappears - a one-group member never sees multi-group machinery.
-          if (widget.groups.length > 1) ...[
-            const Text('GROUPS',
-                style: TextStyle(
-                    color: _fgMuted,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 12,
-                    letterSpacing: 0.4)),
-            const SizedBox(height: 11),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                if (_signedIn.length > 1)
-                  _groupPill(
-                    label: 'All',
-                    on: _hidden.isEmpty,
-                    // A real toggle: everything on, or - when already all on - everything
-                    // off (the feed then shows its "no groups shown" state).
-                    onTap: () => setState(() {
-                      if (_hidden.isEmpty) {
-                        _hidden.addAll([for (final g in _signedIn) g.id]);
-                      } else {
-                        _hidden.clear();
-                      }
-                    }),
-                  ),
-                for (final g in widget.groups)
-                  if (g.isSignedIn)
-                    _groupPill(
-                      label: g.displayName,
-                      dot: g.displayColor,
-                      on: !_hidden.contains(g.id),
-                      onTap: () => setState(() {
-                        if (!_hidden.remove(g.id)) _hidden.add(g.id);
-                      }),
-                    )
-                  else
-                    _groupPill(
-                      label: g.displayName,
-                      locked: true,
-                      on: false,
-                      onTap: () {
-                        // Session expired there - run the (additive) login flow again.
-                        Navigator.of(context).pop();
-                        widget.onRelogin(g);
-                      },
-                    ),
-              ],
-            ),
-            const SizedBox(height: 22),
-          ],
-          // The section stays put as long as anyone exists at all - scoping it empty
-          // swaps in a hint instead of collapsing the whole block, and the size change
-          // animates so the sheet never jumps.
-          if (widget.authors.isNotEmpty) ...[
-            const Text('PEOPLE',
-                style: TextStyle(
-                    color: _fgMuted,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 12,
-                    letterSpacing: 0.4)),
-            const SizedBox(height: 10),
-            AnimatedSize(
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeOutCubic,
-              alignment: Alignment.topLeft,
-              child: people.isEmpty
-                  ? const SizedBox(
-                      width: double.infinity,
-                      child: Padding(
-                        padding: EdgeInsets.only(top: 2, bottom: 4),
-                        child: Text('Select a group to filter by people.',
-                            style: TextStyle(color: _fgMuted, fontSize: 13)),
-                      ),
-                    )
-                  : Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (people.length > 5) ...[
-                          TextField(
-                            onChanged: (v) => setState(() => _personQuery = v.trim().toLowerCase()),
-                            style: const TextStyle(color: _fgPrimary, fontSize: 14),
-                            cursorColor: context.accent,
-                            decoration: InputDecoration(
-                              isDense: true,
-                              prefixIcon: const Icon(Icons.search, size: 18, color: _fgMuted),
-                              hintText: 'Search people',
-                              hintStyle: const TextStyle(color: _fgMuted, fontSize: 14),
-                              filled: true,
-                              fillColor: _bgMain,
-                              contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                              enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                  borderSide: const BorderSide(color: _border)),
-                              focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                  borderSide: BorderSide(color: context.accent)),
-                            ),
-                          ),
-                          const SizedBox(height: 11),
-                        ],
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            for (final a in people.where((a) =>
-                                _personQuery.isEmpty ||
-                                a.name.toLowerCase().contains(_personQuery)))
-                              _personChip(a),
-                          ],
-                        ),
-                        if (_people.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 6),
-                            child: GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onTap: () => setState(() => _includeTagged = !_includeTagged),
-                              child: Row(
-                                children: [
-                                  const Expanded(
-                                    child: Text("Also show posts they're tagged in",
-                                        style: TextStyle(color: _fgSecondary, fontSize: 13.5)),
-                                  ),
-                                  Switch.adaptive(
-                                    value: _includeTagged,
-                                    onChanged: (v) => setState(() => _includeTagged = v),
-                                    activeThumbColor: context.accent,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
-            ),
-            const SizedBox(height: 22),
-          ],
-          const Text('DATE',
+        ),
+      ),
+    );
+  }
+
+  /// Everything that scrolls in the middle of the sheet: groups, people, date, place.
+  Widget _filterSections(BuildContext context, List<_FilterPerson> people) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // With a single connected group there is nothing to scope, so the whole GROUPS
+        // section disappears - a one-group member never sees multi-group machinery.
+        if (widget.groups.length > 1) ...[
+          const Text('GROUPS',
               style: TextStyle(
                   color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 12, letterSpacing: 0.4)),
           const SizedBox(height: 11),
@@ -1553,69 +1490,148 @@ class _FilterSheetState extends State<_FilterSheet> {
             spacing: 8,
             runSpacing: 8,
             children: [
-              for (final d in _datePresets) _datePill(d),
-              _customRangePill(context),
-            ],
-          ),
-          if (widget.locations.isNotEmpty) ...[
-            const SizedBox(height: 22),
-            const Text('PLACES',
-                style: TextStyle(
-                    color: _fgMuted,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 12,
-                    letterSpacing: 0.4)),
-            const SizedBox(height: 11),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 180),
-              child: SingleChildScrollView(
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [for (final l in widget.locations) _placePill(l)],
-                ),
-              ),
-            ),
-          ],
-          const SizedBox(height: 26),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => setState(() {
-                    // Clearing everything includes the group scope: back to All.
-                    _hidden.clear();
-                    _people.clear();
-                    _date = null;
-                    _location = null;
+              if (_signedIn.length > 1)
+                _groupPill(
+                  label: 'All',
+                  on: _hidden.isEmpty,
+                  // A real toggle: everything on, or - when already all on - everything
+                  // off (the feed then shows its "no groups shown" state).
+                  onTap: () => setState(() {
+                    if (_hidden.isEmpty) {
+                      _hidden.addAll([for (final g in _signedIn) g.id]);
+                    } else {
+                      _hidden.clear();
+                    }
                   }),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: _fgSecondary,
-                    side: const BorderSide(color: _border),
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                  child: const Text('Clear'),
                 ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                flex: 2,
-                child: FilledButton(
-                  onPressed: _apply,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: context.accent,
-                    foregroundColor: context.onAccent,
-                    padding: const EdgeInsets.symmetric(vertical: 13),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              for (final g in widget.groups)
+                if (g.isSignedIn)
+                  _groupPill(
+                    label: g.displayName,
+                    dot: g.displayColor,
+                    on: !_hidden.contains(g.id),
+                    onTap: () => setState(() {
+                      if (!_hidden.remove(g.id)) _hidden.add(g.id);
+                    }),
+                  )
+                else
+                  _groupPill(
+                    label: g.displayName,
+                    locked: true,
+                    on: false,
+                    onTap: () {
+                      // Session expired there - run the (additive) login flow again.
+                      Navigator.of(context).pop();
+                      widget.onRelogin(g);
+                    },
                   ),
-                  child: const Text('Show results', style: TextStyle(fontWeight: FontWeight.w700)),
-                ),
-              ),
             ],
           ),
+          const SizedBox(height: 22),
         ],
-      )),
+        // The section stays put as long as anyone exists at all - scoping it empty
+        // swaps in a hint instead of collapsing the whole block, and the size change
+        // animates so the sheet never jumps.
+        if (widget.authors.isNotEmpty) ...[
+          const Text('PEOPLE',
+              style: TextStyle(
+                  color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 12, letterSpacing: 0.4)),
+          const SizedBox(height: 10),
+          AnimatedSize(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topLeft,
+            child: people.isEmpty
+                ? const SizedBox(
+                    width: double.infinity,
+                    child: Padding(
+                      padding: EdgeInsets.only(top: 2, bottom: 4),
+                      child: Text('Select a group to filter by people.',
+                          style: TextStyle(color: _fgMuted, fontSize: 13)),
+                    ),
+                  )
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (people.length > 5) ...[
+                        TextField(
+                          onChanged: (v) => setState(() => _personQuery = v.trim().toLowerCase()),
+                          style: const TextStyle(color: _fgPrimary, fontSize: 14),
+                          cursorColor: context.accent,
+                          decoration: InputDecoration(
+                            isDense: true,
+                            prefixIcon: const Icon(Icons.search, size: 18, color: _fgMuted),
+                            hintText: 'Search people',
+                            hintStyle: const TextStyle(color: _fgMuted, fontSize: 14),
+                            filled: true,
+                            fillColor: _bgMain,
+                            contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                            enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(10),
+                                borderSide: const BorderSide(color: _border)),
+                            focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(10),
+                                borderSide: BorderSide(color: context.accent)),
+                          ),
+                        ),
+                        const SizedBox(height: 11),
+                      ],
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final a in people.where((a) =>
+                              _personQuery.isEmpty || a.name.toLowerCase().contains(_personQuery)))
+                            _personChip(a),
+                        ],
+                      ),
+                      if (_people.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () => setState(() => _includeTagged = !_includeTagged),
+                            child: Row(
+                              children: [
+                                const Expanded(
+                                  child: Text("Also show posts they're tagged in",
+                                      style: TextStyle(color: _fgSecondary, fontSize: 13.5)),
+                                ),
+                                Switch.adaptive(
+                                  value: _includeTagged,
+                                  onChanged: (v) => setState(() => _includeTagged = v),
+                                  activeThumbColor: context.accent,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+          ),
+          const SizedBox(height: 22),
+        ],
+        const Text('DATE',
+            style: TextStyle(
+                color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 12, letterSpacing: 0.4)),
+        const SizedBox(height: 11),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final d in _datePresets) _datePill(d),
+            _customRangePill(context),
+          ],
+        ),
+        if (widget.locations.isNotEmpty) ...[
+          const SizedBox(height: 22),
+          const Text('PLACE',
+              style: TextStyle(
+                  color: _fgMuted, fontWeight: FontWeight.w600, fontSize: 12, letterSpacing: 0.4)),
+          const SizedBox(height: 11),
+          _placeField(context),
+        ],
+      ],
     );
   }
 
@@ -1812,31 +1828,193 @@ class _FilterSheetState extends State<_FilterSheet> {
     });
   }
 
-  Widget _placePill(({String location, int count}) l) {
-    final on = _location == l.location;
+  /// A compact field standing in for the (potentially long) list of places: shows the
+  /// current selection and opens a picker sheet, rather than a Wrap of pills that grows
+  /// with the group's place count and pushes the sheet's own Clear/Show results down.
+  Widget _placeField(BuildContext context) {
+    final loc = _location;
+    final on = loc != null;
     return Semantics(
       button: true,
-      selected: on,
-      label: l.location,
+      label: on ? 'Place filter, $loc selected' : 'Place filter, none selected',
       child: GestureDetector(
-        onTap: () => setState(() => _location = on ? null : l.location),
+        onTap: _pickPlace,
         child: Container(
-          padding: const EdgeInsets.fromLTRB(11, 8, 13, 8),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
           decoration: BoxDecoration(
             color: on ? context.accent : Colors.transparent,
             border: Border.all(color: on ? context.accent : _border),
-            borderRadius: BorderRadius.circular(9999),
+            borderRadius: BorderRadius.circular(12),
           ),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.place_outlined, size: 14, color: on ? context.onAccent : _fgMuted),
-              const SizedBox(width: 5),
-              Text(l.location,
-                  style: TextStyle(
-                      color: on ? context.onAccent : _fgSecondary,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13)),
+              Icon(Icons.place_outlined, size: 16, color: on ? context.onAccent : _fgSecondary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(loc ?? 'All places',
+                    style: TextStyle(
+                        color: on ? context.onAccent : _fgSecondary,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13.5)),
+              ),
+              Icon(Icons.expand_more, size: 18, color: on ? context.onAccent : _fgMuted),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Opens the place picker sheet and applies the result: a chosen place, an explicit
+  /// clear, or (dismissed with no change) nothing.
+  Future<void> _pickPlace() async {
+    final choice = await showModalBottomSheet<_PlaceChoice>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _bgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (_) => _PlacePickerSheet(locations: widget.locations, selected: _location),
+    );
+    if (choice == null || !mounted) return;
+    setState(() {
+      switch (choice) {
+        case _PickPlace(:final location):
+          _location = location;
+        case _ClearPlace():
+          _location = null;
+      }
+    });
+  }
+}
+
+/// Result of [_pickPlace]'s sheet: a chosen place, an explicit clear, or (a plain null
+/// return, e.g. dismissed via the back gesture) no change.
+sealed class _PlaceChoice {
+  const _PlaceChoice();
+}
+
+class _PickPlace extends _PlaceChoice {
+  const _PickPlace(this.location);
+  final String location;
+}
+
+class _ClearPlace extends _PlaceChoice {
+  const _ClearPlace();
+}
+
+/// Bottom sheet listing every place with a search field once the list is long, mirroring
+/// the PEOPLE section's own >5 threshold. A place is picked with a single tap; Clear resets
+/// to no place filter.
+class _PlacePickerSheet extends StatefulWidget {
+  const _PlacePickerSheet({required this.locations, required this.selected});
+
+  final List<({String location, int count})> locations;
+  final String? selected;
+
+  @override
+  State<_PlacePickerSheet> createState() => _PlacePickerSheetState();
+}
+
+class _PlacePickerSheetState extends State<_PlacePickerSheet> {
+  String _query = '';
+
+  @override
+  Widget build(BuildContext context) {
+    // Same fixed-cap approach as the filter sheet itself and showDateRangeSheet, so the
+    // header never slides up under the status bar.
+    final maxHeight = MediaQuery.of(context).size.height * 0.7;
+    final filtered = [
+      for (final l in widget.locations)
+        if (_query.isEmpty || l.location.toLowerCase().contains(_query)) l
+    ];
+    return SafeArea(
+      top: false,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 10, 18, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 38,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 14),
+                  decoration:
+                      BoxDecoration(color: _border, borderRadius: BorderRadius.circular(9999)),
+                ),
+              ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text('Place',
+                      style:
+                          TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(const _ClearPlace()),
+                    style: TextButton.styleFrom(foregroundColor: _fgSecondary),
+                    child: const Text('All places'),
+                  ),
+                ],
+              ),
+              if (widget.locations.length > 6) ...[
+                const SizedBox(height: 8),
+                TextField(
+                  autofocus: false,
+                  onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
+                  style: const TextStyle(color: _fgPrimary, fontSize: 14),
+                  cursorColor: context.accent,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.search, size: 18, color: _fgMuted),
+                    hintText: 'Search places',
+                    hintStyle: const TextStyle(color: _fgMuted, fontSize: 14),
+                    filled: true,
+                    fillColor: _bgMain,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                    enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: const BorderSide(color: _border)),
+                    focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        borderSide: BorderSide(color: context.accent)),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 6),
+              Flexible(
+                child: filtered.isEmpty
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 20),
+                        child: Center(
+                            child: Text('No places match.', style: TextStyle(color: _fgMuted))),
+                      )
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: filtered.length,
+                        itemBuilder: (_, i) {
+                          final l = filtered[i];
+                          final on = widget.selected == l.location;
+                          return ListTile(
+                            onTap: () => Navigator.of(context).pop(_PickPlace(l.location)),
+                            contentPadding: EdgeInsets.zero,
+                            leading:
+                                Icon(Icons.place_outlined, color: on ? context.accent : _fgMuted),
+                            title: Text(l.location,
+                                style: TextStyle(
+                                    color: on ? context.accent : _fgPrimary,
+                                    fontWeight: on ? FontWeight.w700 : FontWeight.w500,
+                                    fontSize: 14.5)),
+                            trailing: Text('${l.count}',
+                                style: const TextStyle(color: _fgMuted, fontSize: 13)),
+                          );
+                        },
+                      ),
+              ),
             ],
           ),
         ),
