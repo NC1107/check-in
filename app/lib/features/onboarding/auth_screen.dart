@@ -18,6 +18,7 @@ import '../../widgets/app_widgets.dart';
 import '../profile/photo_crop_screen.dart';
 import 'invite_links.dart';
 import 'phone_field.dart';
+import 'profile_prefill.dart';
 import 'reset_password_screen.dart';
 import '../admin/contacts_picker_screen.dart';
 
@@ -54,10 +55,11 @@ class AuthScreen extends ConsumerStatefulWidget {
   /// address. Null starts blank in the pushed add-group flow.
   final String? initialServer;
 
-  /// Builds the unauthenticated client for a probed server. Only widget tests pass one,
-  /// so they can drive the flow past the server probe without reaching the network.
+  /// Builds every client this screen talks to, authed or not. Only widget tests pass one,
+  /// so they can drive the whole flow - probe, signup, and the post-signup photo upload -
+  /// without reaching the network.
   @visibleForTesting
-  final ApiClient Function(String baseUrl)? clientFactory;
+  final ApiClient Function(String baseUrl, {String? token})? clientFactory;
 
   @override
   ConsumerState<AuthScreen> createState() => _AuthScreenState();
@@ -86,6 +88,17 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   // step rather than watched live: the picker persists on tap, so a live check would make
   // the section vanish under the user's finger the moment they chose a color.
   bool _askAccent = false;
+  // What the last [_applyPrefill] wrote into the form, so a later pass can tell its own
+  // handiwork (safe to overwrite or clear) from anything the user typed. Also drives the
+  // "filled in from your <group> profile" note.
+  _Prefill? _applied;
+  // The date the birthday picker opens on when no birthday is filled in.
+  DateTime? _birthdaySeed;
+  // The exact bytes a prefill put in [_photoBytes], by identity.
+  Uint8List? _prefilledPhoto;
+  // Bumped on every prefill pass so a slow photo download for a number the user has
+  // since changed can recognise itself as stale and drop its result.
+  int _prefillSeq = 0;
   AuthResult? _pendingAuth; // captured from signup, applied on "Enter Check-In"
   int? _invited; // number of invitees added on the host invite step (null = not done)
   // The server URL we've successfully reached. Null until the first successful probe;
@@ -269,8 +282,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     }
   }
 
-  ApiClient _newClient(String baseUrl) =>
-      widget.clientFactory?.call(baseUrl) ?? ApiClient(baseUrl: baseUrl);
+  ApiClient _newClient(String baseUrl, {String? token}) =>
+      widget.clientFactory?.call(baseUrl, token: token) ??
+      ApiClient(baseUrl: baseUrl, token: token);
 
   /// An unauthenticated client for the probed server (only valid after [_ensureServer]).
   ApiClient get _client => _newClient(_connectedUrl ?? '');
@@ -310,12 +324,15 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         final askAccent = await shouldPromptForAccent(
           hasGroups: ref.read(multiSessionProvider).groups.isNotEmpty,
         );
+        final prefill = await _buildPrefill();
         if (!mounted) return;
         setState(() {
           _isFirstAdmin = res.isFirstAdmin;
           _askAccent = askAccent;
+          _applyPrefill(prefill);
           _step = _Step.profile;
         });
+        _fetchPrefillPhoto(prefill, _prefillSeq);
       } else {
         setState(() => _phoneError =
             "This number isn't on the invite list. Ask the host to add it, then try again.");
@@ -325,6 +342,89 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  // --- profile prefill ---
+
+  /// What an existing account on this device can contribute to this signup, or null when
+  /// no account matches the typed number (see [prefillSourceFor]).
+  Future<_Prefill?> _buildPrefill() async {
+    final source = prefillSourceFor(ref.read(multiSessionProvider), _fullPhone);
+    if (source == null) return null;
+    final user = source.user!;
+    final birthday = resolveBirthday(
+      stored: await lastSignupBirthday(_fullPhone),
+      month: user.birthdayMonth,
+      day: user.birthdayDay,
+      now: DateTime.now(),
+    );
+    final fullName = '${user.firstName} ${user.lastName}'.trim();
+    return _Prefill(
+      groupId: source.id,
+      groupName: source.displayName,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      // The server defaults a blank display name to the full name, so copying one that
+      // already matches would turn that default into an explicit choice.
+      displayName: user.name.trim() == fullName ? '' : user.name.trim(),
+      birthday: birthday.value,
+      birthdaySeed: birthday.seed,
+      photoMediaId: user.profileMediaId,
+    );
+  }
+
+  /// Puts [next] (null = nothing to prefill) into the form. Must be called from inside
+  /// setState.
+  ///
+  /// [_back] leaves the profile step without clearing anything, so this runs again on
+  /// every re-entry and has to reconcile rather than overwrite: a field moves only when
+  /// it is empty or still holds exactly what the last prefill put there. That way a real
+  /// edit is never clobbered, and a prefill belonging to a number the user has since
+  /// changed is cleared rather than left sitting in someone else's signup.
+  void _applyPrefill(_Prefill? next) {
+    // Any photo download still in flight belongs to the prefill being replaced.
+    _prefillSeq++;
+    final prev = _applied;
+    _fill(_firstName, prev?.firstName ?? '', next?.firstName ?? '');
+    _fill(_lastName, prev?.lastName ?? '', next?.lastName ?? '');
+    _fill(_displayName, prev?.displayName ?? '', next?.displayName ?? '');
+    if (_birthday == null || _birthday == prev?.birthday) _birthday = next?.birthday;
+    _birthdaySeed = next?.birthdaySeed;
+    // A picture the user chose is theirs; one a prefill fetched is dropped and re-fetched
+    // by [_fetchPrefillPhoto] if the new source still has one.
+    if (identical(_photoBytes, _prefilledPhoto)) {
+      _photoBytes = null;
+      _prefilledPhoto = null;
+    }
+    _applied = next;
+  }
+
+  void _fill(TextEditingController controller, String previous, String next) {
+    if (controller.text.isEmpty || controller.text == previous) controller.text = next;
+  }
+
+  /// Carries the source account's picture over as raw bytes. Media ids are per-server, so
+  /// only the bytes are portable - the same cross-server copy the "sync photo to all
+  /// groups" action already does.
+  ///
+  /// Deliberately not awaited by [_continue]: the source server may be slow or down, and a
+  /// picture is never worth stalling a join for.
+  Future<void> _fetchPrefillPhoto(_Prefill? prefill, int seq) async {
+    final mediaId = prefill?.photoMediaId;
+    if (mediaId == null) return;
+    final Uint8List bytes;
+    try {
+      bytes = await ref.read(contentApiProvider(prefill!.groupId)).downloadMedia(mediaId);
+    } catch (_) {
+      return; // No photo carried over; the user can still pick one.
+    }
+    // A response for a number (or a step) the user has since moved on from must not land.
+    if (!mounted || seq != _prefillSeq || _step != _Step.profile) return;
+    if (_photoBytes != null) return;
+    setState(() {
+      _photoBytes = bytes;
+      _prefilledPhoto = bytes;
+    });
   }
 
   Future<void> _login() async {
@@ -381,11 +481,15 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         birthday: DateFormat('yyyy-MM-dd').format(_birthday!),
         password: _password.text,
       );
+      // The server marshals birthdays without the year, so this is the only place the
+      // full date exists. Remember it against this number so the next group join can fill
+      // it in exactly instead of asking for a year the API can never give back.
+      await rememberSignupBirthday(_fullPhone, _birthday!);
       // Now that we have a token, upload the photo and attach it. Best-effort: the account
       // already exists, so a photo failure shouldn't block finishing signup.
       if (_photoBytes != null) {
         try {
-          final authed = ApiClient(baseUrl: _connectedUrl ?? '', token: res.token);
+          final authed = _newClient(_connectedUrl ?? '', token: res.token);
           final mediaId = await authed.uploadImageBytes(_photoBytes!, filename: 'profile.png');
           final updatedUser = await authed.setProfilePhoto(mediaId);
           res = AuthResult(token: res.token, user: updatedUser);
@@ -420,7 +524,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     if (phones == null || phones.isEmpty || !mounted) return;
     setState(() => _busy = true);
     try {
-      final api = ApiClient(baseUrl: _connectedUrl ?? '', token: _pendingAuth!.token);
+      final api = _newClient(_connectedUrl ?? '', token: _pendingAuth!.token);
       final result = await api.uploadContacts(phones);
       if (!mounted) return;
       setState(() => _invited = (result['added'] as int?) ?? phones.length);
@@ -461,7 +565,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   Future<void> _pickBirthday() async {
     final now = DateTime.now();
-    var temp = _birthday ?? DateTime(now.year - 25, 1, 1);
+    var temp = _birthday ?? _birthdaySeed ?? DateTime(now.year - 25, 1, 1);
     final picked = await showModalBottomSheet<DateTime>(
       context: context,
       backgroundColor: _bgSurface,
@@ -685,6 +789,23 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         const SizedBox(height: 6),
         const Text('This is how your circle will see you.',
             style: TextStyle(color: _fgSecondary, fontSize: 14, height: 1.5)),
+        // Say where the pre-filled details came from. Without it, a form that fills itself
+        // in reads as the app knowing things about you that it shouldn't.
+        if (_applied != null) ...[
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              const Icon(Icons.person_outline, size: 16, color: _fgMuted),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Filled in from your ${_applied!.groupName} profile - change anything you like.',
+                  style: const TextStyle(color: _fgMuted, fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+        ],
         if (_isFirstAdmin) ...[
           const SizedBox(height: 14),
           Container(
@@ -956,6 +1077,43 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 }
 
 // ---- shared pieces ----
+
+/// One pass of the profile prefill: everything an existing account on this device offered
+/// the signup form, kept whole so the next pass can tell field by field what it wrote.
+class _Prefill {
+  const _Prefill({
+    required this.groupId,
+    required this.groupName,
+    required this.firstName,
+    required this.lastName,
+    required this.displayName,
+    required this.birthday,
+    required this.birthdaySeed,
+    required this.photoMediaId,
+  });
+
+  final String groupId;
+
+  /// Named in the note on the profile step, so the user knows what was copied and from
+  /// where.
+  final String groupName;
+
+  final String firstName;
+  final String lastName;
+
+  /// Empty when the source account's display name is just its full name, which the server
+  /// fills in by default.
+  final String displayName;
+
+  /// The exact date, known only when this device remembers a previous signup.
+  final DateTime? birthday;
+
+  /// Where the picker opens when [birthday] is unknown but the day is not.
+  final DateTime? birthdaySeed;
+
+  /// Per-server, so only useful for fetching the bytes to re-upload.
+  final int? photoMediaId;
+}
 
 /// Scrollable content area with a pinned footer button, matching the design's
 /// flex column (scroll body + fixed bottom action).
