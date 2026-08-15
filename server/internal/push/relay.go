@@ -42,6 +42,14 @@ type relayMessage struct {
 	Title string            `json:"title"`
 	Body  string            `json:"body"`
 	Data  map[string]string `json:"data,omitempty"`
+
+	// CollapseID is omitted when empty. The relay decodes send bodies with
+	// DisallowUnknownFields, so a field it does not know turns the whole batch into a 400
+	// and nobody gets a notification. Only the maintainer runs a relay, and that one
+	// accepts collapseId, so sending it is safe once the relay is deployed - but leaving
+	// it out when there is nothing to collapse keeps the request byte-identical to what
+	// every relay has always accepted.
+	CollapseID string `json:"collapseId,omitempty"`
 }
 
 type relaySendReq struct {
@@ -59,7 +67,7 @@ type relaySendResp struct {
 
 // Send forwards a notification for every token to the relay in batches. It is best-effort:
 // failures are logged, never fatal, and never include the token or the message content.
-func (r *RelaySender) Send(ctx context.Context, tokens []string, title, body string, data map[string]string) {
+func (r *RelaySender) Send(ctx context.Context, tokens []string, title, body string, data map[string]string, collapseID string) {
 	if r == nil || len(tokens) == 0 {
 		return
 	}
@@ -68,14 +76,14 @@ func (r *RelaySender) Send(ctx context.Context, tokens []string, title, body str
 		if end > len(tokens) {
 			end = len(tokens)
 		}
-		r.sendBatch(ctx, tokens[start:end], title, body, data)
+		r.sendBatch(ctx, tokens[start:end], title, body, data, collapseID)
 	}
 }
 
-func (r *RelaySender) sendBatch(ctx context.Context, tokens []string, title, body string, data map[string]string) {
+func (r *RelaySender) sendBatch(ctx context.Context, tokens []string, title, body string, data map[string]string, collapseID string) {
 	msgs := make([]relayMessage, len(tokens))
 	for i, t := range tokens {
-		msgs[i] = relayMessage{Token: t, Title: title, Body: body, Data: data}
+		msgs[i] = relayMessage{Token: t, Title: title, Body: body, Data: data, CollapseID: collapseID}
 	}
 	payload, err := json.Marshal(relaySendReq{Messages: msgs})
 	if err != nil {

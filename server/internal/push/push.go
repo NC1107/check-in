@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +29,11 @@ const (
 	// senderIDMismatch is FCM's verdict when a token was minted against a different
 	// Firebase project than the one the credentials belong to.
 	senderIDMismatch = "SENDER_ID_MISMATCH"
+
+	// collapseIDMax is APNs' hard limit on the apns-collapse-id header. A longer value
+	// makes APNs reject the notification outright, so an over-long id is trimmed rather
+	// than sent. Cross-post ids are UUIDs and fit; this only guards a future caller.
+	collapseIDMax = 64
 )
 
 // mismatchAdvice names the one push failure a self-hoster cannot diagnose from the
@@ -48,7 +54,12 @@ const mismatchAdvice = "push: FCM rejected a device token as belonging to a diff
 type Notifier interface {
 	// Send delivers title/body/data to every token, best-effort. It must never block the
 	// caller for long or panic, and must not log the notification content.
-	Send(ctx context.Context, tokens []string, title, body string, data map[string]string)
+	//
+	// collapseID names the event the notification is about, when several notifications can
+	// describe the same one: a device shows a single entry per id instead of one per
+	// notification. Empty means no collapsing, which is right for anything already unique
+	// per member.
+	Send(ctx context.Context, tokens []string, title, body string, data map[string]string, collapseID string)
 }
 
 // Sender posts notifications to FCM. A nil *Sender is a no-op, so the server runs fine
@@ -94,6 +105,23 @@ func (s *Sender) ProjectID() string {
 	return s.projectID
 }
 
+// applyCollapse threads a collapse id onto an FCM v1 message so both platforms fold repeat
+// deliveries of one event into a single entry: APNs replaces a pending notification carrying
+// the same apns-collapse-id, Android replaces one posted under the same tag. An empty id
+// leaves the message exactly as it was before collapsing existed.
+func applyCollapse(message map[string]any, collapseID string) {
+	if collapseID == "" {
+		return
+	}
+	if len(collapseID) > collapseIDMax {
+		// Dropping a rune the cut split keeps the header valid UTF-8. Every copy of one
+		// event trims identically, so a trimmed id still collapses them together.
+		collapseID = strings.ToValidUTF8(collapseID[:collapseIDMax], "")
+	}
+	message["apns"] = map[string]any{"headers": map[string]string{"apns-collapse-id": collapseID}}
+	message["android"] = map[string]any{"notification": map[string]string{"tag": collapseID}}
+}
+
 // fcmErrorCode pulls FCM v1's machine-readable code out of an error response, preferring
 // the specific code in details (e.g. SENDER_ID_MISMATCH, UNREGISTERED) over the generic
 // status. Returns "" when the body isn't the shape we expect.
@@ -120,7 +148,7 @@ func fcmErrorCode(body []byte) string {
 // Send delivers a notification to every token, best-effort and one request per token
 // (FCM v1 has no multicast). Payloads are kept minimal so the providers only ever see a
 // short title/body, never post content. Failures are logged, never fatal.
-func (s *Sender) Send(ctx context.Context, tokens []string, title, body string, data map[string]string) {
+func (s *Sender) Send(ctx context.Context, tokens []string, title, body string, data map[string]string, collapseID string) {
 	if s == nil || len(tokens) == 0 {
 		return
 	}
@@ -131,13 +159,13 @@ func (s *Sender) Send(ctx context.Context, tokens []string, title, body string, 
 	}
 	url := fmt.Sprintf("%s/v1/projects/%s/messages:send", s.endpoint, s.projectID)
 	for _, t := range tokens {
-		payload, _ := json.Marshal(map[string]any{
-			"message": map[string]any{
-				"token":        t,
-				"notification": map[string]string{"title": title, "body": body},
-				"data":         data,
-			},
-		})
+		message := map[string]any{
+			"token":        t,
+			"notification": map[string]string{"title": title, "body": body},
+			"data":         data,
+		}
+		applyCollapse(message, collapseID)
+		payload, _ := json.Marshal(map[string]any{"message": message})
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 		if err != nil {
 			continue
