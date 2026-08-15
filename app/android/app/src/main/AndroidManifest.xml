@@ -33,28 +33,26 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- Let the Flutter framework route incoming links (InviteLinkListener) rather
+                 than the native side. On by default today; stated outright so a future
+                 engine default can't quietly break invites. -->
+            <meta-data
+              android:name="flutter_deeplinking_enabled"
+              android:value="true"
+              />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-            <!-- Invite deep link fallback: checkin://join?server=... from a group's
-                 /join landing page. Works without domain verification. -->
+            <!-- Invite deep link: checkin://join?server=... , the button on a group's /join
+                 landing page. Every group is self-hosted on a domain unknown at build time,
+                 so a verified https App Link can never cover them all - this custom scheme
+                 is the one filter that works for any group, forever. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW"/>
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
                 <data android:scheme="checkin" android:host="join"/>
-            </intent-filter>
-            <!-- Android App Links for https://<group-domain>/join. autoVerify needs the
-                 group domains to serve .well-known/assetlinks.json with the app-signing
-                 cert (see docs/self-hosting/multiple-groups.md); until then the
-                 checkin:// filter above still handles invites. -->
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW"/>
-                <category android:name="android.intent.category.DEFAULT"/>
-                <category android:name="android.intent.category.BROWSABLE"/>
-                <data android:scheme="https" android:host="*.check-in.npc-server.top" android:pathPrefix="/join"/>
-                <data android:scheme="https" android:host="check-in.npc-server.top" android:pathPrefix="/join"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
