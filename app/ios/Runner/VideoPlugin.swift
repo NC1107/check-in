@@ -53,12 +53,15 @@ class VideoPlugin: NSObject, FlutterPlugin {
     export.timeRange = CMTimeRange(start: start, end: end)
     export.shouldOptimizeForNetworkUse = true
     export.exportAsynchronously {
-      switch export.status {
-      case .completed:
-        result(outURL.path)
-      default:
-        let message = export.error?.localizedDescription ?? "export failed"
-        result(FlutterError(code: "export_failed", message: message, details: nil))
+      // The completion fires on a background queue; a FlutterResult must go back on main.
+      DispatchQueue.main.async {
+        switch export.status {
+        case .completed:
+          result(outURL.path)
+        default:
+          let message = export.error?.localizedDescription ?? "export failed"
+          result(FlutterError(code: "export_failed", message: message, details: nil))
+        }
       }
     }
   }
