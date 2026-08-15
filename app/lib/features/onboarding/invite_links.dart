@@ -42,4 +42,21 @@ String joinLinkFor(String baseUrl) {
 
 /// An invite that arrived before the app could route it (EULA not yet accepted, or a
 /// cold start straight from the link). The auth screen picks it up as its prefill.
-final pendingInviteServerProvider = StateProvider<String?>((ref) => null);
+class PendingInviteServer extends Notifier<String?> {
+  PendingInviteServer({String? initial}) : _initial = initial;
+
+  final String? _initial;
+
+  @override
+  String? build() => _initial;
+
+  /// Parks an invite until a screen is ready to take it.
+  void park(String server) => state = server;
+
+  /// Drops the parked invite once a screen has taken it, so backing out of that screen
+  /// can't resurrect it over the next group the user joins.
+  void consume() => state = null;
+}
+
+final pendingInviteServerProvider =
+    NotifierProvider<PendingInviteServer, String?>(PendingInviteServer.new);

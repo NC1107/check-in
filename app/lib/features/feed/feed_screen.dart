@@ -20,7 +20,14 @@ import 'post_card.dart';
 /// Bumped when the user taps the Home tab while already on the feed; the feed listens and
 /// animates back to the top. Tapping the status-bar strip does the same (see the tap-strip
 /// in build) - we handle it explicitly rather than relying on iOS's native status-bar tap.
-final feedScrollToTopProvider = StateProvider<int>((ref) => 0);
+class FeedScrollToTop extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  void bump() => state++;
+}
+
+final feedScrollToTopProvider = NotifierProvider<FeedScrollToTop, int>(FeedScrollToTop.new);
 
 // Theme tokens (centralized in theme/tokens.dart).
 const _bgMain = kBgMain;
@@ -833,7 +840,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     });
     // Group visibility and location both refetch the feed via their providers.
     ref.read(multiSessionProvider.notifier).setHiddenGroups(result.hidden);
-    ref.read(feedLocationProvider.notifier).state = _locations;
+    ref.read(feedLocationProvider.notifier).apply(_locations);
     // A past custom range can sit beyond the first page - walk back to it so the feed
     // isn't an empty dead-end.
     if (result.date is _RangeDate) _ensureRangeLoaded(result.date as _RangeDate);
@@ -1108,7 +1115,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       for (final loc in _locations)
         _filterChip(loc, () {
           setState(() => _locations.remove(loc));
-          ref.read(feedLocationProvider.notifier).state = _locations;
+          ref.read(feedLocationProvider.notifier).apply(_locations);
         }),
     ];
     return Padding(

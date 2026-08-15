@@ -2,6 +2,7 @@ import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 
 import '../../state/app_state.dart';
 import 'auth_screen.dart';
@@ -65,7 +66,7 @@ class _InviteLinkListenerState extends ConsumerState<InviteLinkListener>
     // that silently does nothing looks the same as one the OS never delivered. This is what
     // tells those two apart during a device test.
     debugPrint('[CHECKIN] invite link: $server');
-    ref.read(pendingInviteServerProvider.notifier).state = server;
+    ref.read(pendingInviteServerProvider.notifier).park(server);
 
     // Every other state already routes through AuthScreen, which takes the parked invite as
     // its prefill: the EULA gate that App Review signed off on comes first, the blank frame
@@ -99,5 +100,5 @@ List<Override> inviteLinkOverrides({String? initialRoute}) {
   final uri = Uri.tryParse(route);
   final server = uri == null ? null : inviteServerFromUri(uri);
   if (server == null) return const [];
-  return [pendingInviteServerProvider.overrideWith((ref) => server)];
+  return [pendingInviteServerProvider.overrideWith(() => PendingInviteServer(initial: server))];
 }
