@@ -53,8 +53,7 @@ class EditGroupsScreen extends ConsumerWidget {
                 MaterialPageRoute(builder: (_) => AuthScreen(initialServer: g.baseUrl)),
               ),
               leading: const Icon(Icons.lock_outline, size: 18, color: kFgMuted),
-              title: Text(g.displayName,
-                  style: const TextStyle(color: kFgSecondary, fontSize: 15)),
+              title: Text(g.displayName, style: const TextStyle(color: kFgSecondary, fontSize: 15)),
               subtitle: Text('Signed out · ${g.id}',
                   style: const TextStyle(color: kFgMuted, fontSize: 12)),
               trailing: IconButton(
