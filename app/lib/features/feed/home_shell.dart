@@ -10,9 +10,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:native_exif/native_exif.dart';
+import 'package:video_compress/video_compress.dart';
+import 'package:video_player/video_player.dart';
 
 import '../../api/api_client.dart';
 import '../../api/models.dart';
+import '../../media/video_native.dart';
 import '../../notifications/birthday_notifier.dart';
 import '../../notifications/push_messaging.dart';
 import '../../state/app_state.dart';
@@ -32,11 +35,68 @@ import 'feed_screen.dart';
 bool needsReencodeBeforeUpload(String path) => fileExtension(path) != 'gif';
 
 /// Whether a picked file is a clip. The gallery picker can hand one back even when asked
-/// for images, and this build has nowhere to put it: it would be flattened to a still of
-/// the first frame and posted as a photo. Checking the extension here is cheaper than
-/// per-platform picker filtering and behaves the same everywhere.
+/// for images, and it takes the video pipeline (trim/encode/poster) rather than the photo
+/// one. Checking the extension here is cheaper than per-platform picker filtering and
+/// behaves the same everywhere.
 bool isVideoPick(String path) =>
     const {'mp4', 'mov', 'm4v', '3gp', 'avi', 'webm', 'mkv'}.contains(fileExtension(path));
+
+/// The longest clip that can be posted without trimming. The server caps clips too (a hair
+/// higher, for encoder slop); this is the user-facing window the trim sheet enforces.
+const kMaxClipMs = 10000;
+
+/// Which upload path a picked file takes. A clip is encoded and gets a poster; an animated
+/// gif is uploaded raw so it keeps moving; everything else is a photo re-encoded to jpeg.
+/// One selector so no call site can disagree about what a given file is.
+enum UploadKind { video, rawImage, reencodeImage }
+
+UploadKind uploadKindFor(String path) {
+  if (isVideoPick(path)) return UploadKind.video;
+  return needsReencodeBeforeUpload(path) ? UploadKind.reencodeImage : UploadKind.rawImage;
+}
+
+/// Whether a clip picked at [durationMs] is over the cap and must be trimmed first.
+bool clipNeedsTrim(int durationMs) => durationMs > kMaxClipMs;
+
+/// The <=[maxMs] window the trim sheet hands back, made safe: the start never goes negative
+/// or past the clip, and the end is min(start + maxMs, duration) so the window can never
+/// exceed the cap or run off the end. Dropping that cap is exactly what would let a clip
+/// longer than the limit through.
+({int startMs, int endMs}) clampTrimWindow(int startMs, int durationMs, {int maxMs = kMaxClipMs}) {
+  final duration = durationMs < 0 ? 0 : durationMs;
+  final start = startMs < 0 ? 0 : (startMs > duration ? duration : startMs);
+  final uncapped = start + maxMs;
+  final end = uncapped < duration ? uncapped : duration;
+  return (startMs: start, endMs: end);
+}
+
+/// Whether a group's server accepts video, so compose can offer a clip only where it would
+/// be stored rather than uploading into a rejection. A server predating typed media reports
+/// images-only (see [ServerInfo.mediaTypes]).
+bool mediaTypesSupportsVideo(List<String> mediaTypes) => mediaTypes.contains('video');
+
+/// Whether compose may offer the clip option for the current selection: at least one target
+/// group is chosen and every one of them can store video. A clip is a single attachment
+/// shared to all targets, so one non-video group in the selection takes the option away.
+bool clipComposeAllowed(Iterable<ServerAccount> selectedTargets) {
+  final list = selectedTargets.toList();
+  return list.isNotEmpty && list.every((g) => mediaTypesSupportsVideo(g.mediaTypes));
+}
+
+/// The native trim/location seam, overridable in tests with a fake so the clip flow can be
+/// exercised without a device.
+final videoNativeProvider = Provider<VideoNative>((ref) => const VideoNative());
+
+/// Runs a clip's poster upload, swallowing any failure. A poster is only the pre-play still;
+/// the feed renders and plays a posterless clip fine, so attaching it must never be able to
+/// fail the post it belongs to.
+Future<void> attachPosterBestEffort(Future<void> Function() attach) async {
+  try {
+    await attach();
+  } catch (_) {
+    // Intentionally ignored: the clip still posts and plays without a stored poster.
+  }
+}
 
 /// A short opaque id (16 random bytes, hex) that links a post's copies across groups. The
 /// servers never coordinate, so the client mints it; collisions are astronomically unlikely.
@@ -286,6 +346,14 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   static const _maxImages = 10;
   final _bodyCtrl = TextEditingController();
   final List<XFile> _images = [];
+  // A single clip is exclusive with photos: a post is either a set of photos or one clip.
+  // Held pre-encode (already trimmed to <=10s if it needed it); the size encode and poster
+  // are computed once at submit and memoized for reuse across cross-post targets.
+  XFile? _clip;
+  int _clipDurationMs = 0;
+  String? _clipEncodedPath;
+  List<int>? _clipPoster;
+  bool _processingClip = false;
   // Members the author tags as appearing in the post (id + name + photo for chip display).
   final List<({int id, String name, int? photoId})> _tagged = [];
   String? _location; // coarse "City, Country" read from the photos, if any
@@ -323,6 +391,15 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
 
   void _toggleTarget(String groupId) {
     if (_posted.contains(groupId)) return; // already posted there (retry state)
+    // A clip can't cross-post into a group whose server has no video support; say so rather
+    // than let the upload fail there after the fact.
+    if (_clip != null && !_targets.contains(groupId)) {
+      final g = ref.read(multiSessionProvider).byId(groupId);
+      if (g != null && !mediaTypesSupportsVideo(g.mediaTypes)) {
+        _toast('${g.displayName} can\'t receive clips yet.');
+        return;
+      }
+    }
     HapticFeedback.selectionClick();
     setState(() {
       if (!_targets.remove(groupId)) _targets.add(groupId);
@@ -338,30 +415,80 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   Future<void> _pickFromGallery() async {
     final picked = await ImagePicker().pickMultiImage();
     if (picked.isEmpty || !mounted) return;
-    final photos = [
-      for (final x in picked)
-        if (!isVideoPick(x.path)) x
-    ];
     setState(() {
-      for (final x in photos) {
-        if (_images.length < _maxImages) _images.add(x);
+      for (final x in picked) {
+        // The image picker can still hand back a clip; it belongs to the Video button's
+        // flow, not the photo strip, so skip it here rather than post it as a still.
+        if (!isVideoPick(x.path) && _images.length < _maxImages) _images.add(x);
       }
     });
-    if (photos.length != picked.length) _toast('Video posts are coming soon.');
     await _resolveLocation();
   }
 
   Future<void> _takePhoto() async {
     final x = await ImagePicker().pickImage(source: ImageSource.camera);
     if (x == null || !mounted) return;
-    if (isVideoPick(x.path)) {
-      _toast('Video posts are coming soon.');
-      return;
-    }
+    if (isVideoPick(x.path)) return; // camera handed back a clip: not this button's job
     setState(() {
       if (_images.length < _maxImages) _images.add(x);
     });
     await _resolveLocation();
+  }
+
+  /// Picks or records a clip, then runs it through the compose pipeline: read its duration,
+  /// trim it down to the cap if it is over, read its recording location (before the encode
+  /// drops the metadata), and hold it for upload. A clip is exclusive with photos.
+  Future<void> _pickClip(ImageSource source) async {
+    final x = await ImagePicker().pickVideo(source: source);
+    if (x == null || !mounted) return;
+    setState(() => _processingClip = true);
+    try {
+      final info = await VideoCompress.getMediaInfo(x.path);
+      final durationMs = (info.duration ?? 0).round();
+      var path = x.path;
+      var dur = durationMs;
+      if (clipNeedsTrim(durationMs)) {
+        final window = await _openTrimSheet(x.path, durationMs);
+        if (window == null) {
+          if (mounted) setState(() => _processingClip = false);
+          return; // trim sheet cancelled
+        }
+        path = await ref.read(videoNativeProvider).trim(x.path, window.startMs, window.endMs);
+        dur = window.endMs - window.startMs;
+      }
+      if (!mounted) return;
+      setState(() {
+        _clip = XFile(path);
+        _clipDurationMs = dur;
+        _clipEncodedPath = null;
+        _clipPoster = null;
+        _images.clear(); // a clip replaces any photos: a post is one or the other
+        _processingClip = false;
+      });
+      // GPS must be read from the trimmed source, before the size encode strips it.
+      await _resolveClipLocation(path);
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _processingClip = false;
+          _error = "Couldn't prepare that clip. Try another.";
+        });
+      }
+    }
+  }
+
+  /// Opens the trim sheet for an over-length clip, returning the chosen <=10s window or null
+  /// if the user backed out.
+  Future<({int startMs, int endMs})?> _openTrimSheet(String path, int durationMs) {
+    return showModalBottomSheet<({int startMs, int endMs})>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: _bgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+      ),
+      builder: (_) => _TrimSheet(path: path, durationMs: durationMs),
+    );
   }
 
   void _toast(String msg) {
@@ -402,7 +529,18 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
       final coords = await exif.getLatLong();
       await exif.close();
       if (coords == null) return null;
-      final marks = await placemarkFromCoordinates(coords.latitude, coords.longitude);
+      return await _placeFromCoords(coords.latitude, coords.longitude);
+    } catch (_) {
+      return null; // no permission, no GPS, or geocoder unavailable → just skip it
+    }
+  }
+
+  /// Reverse-geocodes a coordinate to a coarse "City, Country". Shared by the photo EXIF
+  /// path and the clip's MP4-atom path so both post the same kind of label. Null when the
+  /// geocoder finds nothing. Raw coordinates never leave the phone.
+  Future<String?> _placeFromCoords(double lat, double lng) async {
+    try {
+      final marks = await placemarkFromCoordinates(lat, lng);
       if (marks.isEmpty) return null;
       final p = marks.first;
       final city = [p.locality, p.subAdministrativeArea, p.administrativeArea]
@@ -413,7 +551,29 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
       ];
       return parts.isEmpty ? null : parts.join(', ');
     } catch (_) {
-      return null; // no permission, no GPS, or geocoder unavailable → just skip it
+      return null;
+    }
+  }
+
+  /// Reads a clip's recording location from its MP4 atom (native, since native_exif is
+  /// photo-only) and reverse-geocodes it, offered as the post location exactly as a photo's
+  /// is. Skips when the user has cleared the location manually.
+  Future<void> _resolveClipLocation(String path) async {
+    if (_locationCleared) return;
+    setState(() => _resolvingLocation = true);
+    String? place;
+    try {
+      final coords = await ref.read(videoNativeProvider).location(path);
+      if (coords != null) place = await _placeFromCoords(coords.lat, coords.lng);
+    } catch (_) {
+      // No location atom, or geocoder unavailable: just post without a place.
+    }
+    if (mounted) {
+      setState(() {
+        _location = place;
+        _locationSource = place != null ? path : null;
+        _resolvingLocation = false;
+      });
     }
   }
 
@@ -553,7 +713,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   /// per-server, so images upload once per target. Partial failure keeps the sheet open
   /// with an honest report and turns Share into a retry of only the failed groups.
   Future<void> _submit() async {
-    if (_images.isEmpty && _bodyCtrl.text.trim().isEmpty) return;
+    if (_images.isEmpty && _clip == null && _bodyCtrl.text.trim().isEmpty) return;
     final session = ref.read(multiSessionProvider);
     final targets = [
       for (final g in session.signedIn)
@@ -567,6 +727,19 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
       _busy = true;
       _error = null;
     });
+    // Encode the clip and pull its poster once, up front, so every cross-post target reuses
+    // the same few-MB file and bytes (media is per-server, but the encode is not).
+    if (_clip != null) {
+      try {
+        await _ensureClipEncoded();
+      } catch (_) {
+        setState(() {
+          _busy = false;
+          _error = "Couldn't process the clip. Try again.";
+        });
+        return;
+      }
+    }
     // One shared id links the copies only when this post goes to more than one group.
     final crossPostId = _targets.length > 1 ? _crossPostId : null;
     final failed = <ServerAccount>[];
@@ -575,7 +748,24 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
       try {
         final api = ref.read(apiForGroupProvider(g.id));
         final peopleIds = [for (final t in _tagged) t.id];
-        if (_images.isNotEmpty) {
+        if (_clip != null) {
+          final mediaId = await api.uploadImage(_clipEncodedPath ?? _clip!.path);
+          final poster = _clipPoster;
+          if (poster != null) {
+            // Best-effort: a clip with no stored poster still renders and plays fine, so a
+            // failed poster upload must never fail the post.
+            await attachPosterBestEffort(() => api.setMediaPoster(mediaId, poster));
+          }
+          // Server derives the 'video' kind from the stored media; sending a new createPost
+          // field would 400 an old server (DisallowUnknownFields), so kind stays 'image'.
+          await api.createPost(
+              kind: 'image',
+              body: _bodyCtrl.text.trim(),
+              mediaIds: [mediaId],
+              location: _location,
+              peopleIds: peopleIds,
+              crossPostId: crossPostId);
+        } else if (_images.isNotEmpty) {
           final ids = <int>[];
           for (final x in _images) {
             ids.add(await _uploadCompressed(api, x));
@@ -652,14 +842,42 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     return api.uploadImage(x.path);
   }
 
+  /// Size-encodes the held clip to ~720p (a few MB) via the platform encoder and grabs a
+  /// poster frame, once, memoizing both so every cross-post target reuses the same file and
+  /// bytes. The poster is best-effort even here: a failure to grab it just means no
+  /// pre-play still. Falls back to the pre-encode file if the encoder yields nothing.
+  Future<void> _ensureClipEncoded() async {
+    final clip = _clip;
+    if (clip == null || _clipEncodedPath != null) return;
+    final info = await VideoCompress.compressVideo(
+      clip.path,
+      quality: VideoQuality.MediumQuality,
+    );
+    _clipEncodedPath = info?.path ?? clip.path;
+    try {
+      final bytes = await VideoCompress.getByteThumbnail(_clipEncodedPath!, quality: 80);
+      if (bytes != null) _clipPoster = bytes;
+    } catch (_) {
+      // No poster frame: the clip still posts and plays, the feed just has nothing to show
+      // for it until first play.
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final session = ref.watch(multiSessionProvider);
     final me = ref.watch(currentAccountProvider)?.user;
-    final hasContent =
-        (_bodyCtrl.text.trim().isNotEmpty || _images.isNotEmpty) && _targets.isNotEmpty;
+    final hasContent = (_bodyCtrl.text.trim().isNotEmpty || _images.isNotEmpty || _clip != null) &&
+        _targets.isNotEmpty;
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     final retrying = _posted.isNotEmpty;
+    // A clip may only go to groups whose server stores video. Offer the clip buttons only
+    // when every selected target supports it, so a clip is never composed for a group that
+    // would reject it.
+    final clipAllowed = clipComposeAllowed([
+      for (final g in session.signedIn)
+        if (_targets.contains(g.id)) g
+    ]);
 
     return Padding(
       padding: EdgeInsets.only(bottom: bottomInset),
@@ -774,8 +992,14 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                 itemBuilder: (_, i) => _thumb(i),
               ),
             ),
-          // Detected location (read from the photos, removable before posting)
-          if (_images.isNotEmpty && (_resolvingLocation || _location != null))
+          // Clip preview - one removable tile (a clip is exclusive with photos).
+          if (_clip != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Align(alignment: Alignment.centerLeft, child: _clipTile()),
+            ),
+          // Detected location (read from the photos or the clip, removable before posting)
+          if ((_images.isNotEmpty || _clip != null) && (_resolvingLocation || _location != null))
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
               child: Row(
@@ -875,25 +1099,136 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Text(_error!, style: const TextStyle(color: kLike, fontSize: 13)),
             ),
-          // Divider + media buttons (gallery + live camera)
+          // Divider + media buttons (photos, camera, and - where the server takes it - a clip)
           const Divider(color: _border, height: 24),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-            child: Row(
-              children: [
-                Expanded(
-                  child: _mediaButton(Icons.image_outlined, _images.isEmpty ? 'Photos' : 'Add more',
-                      _pickFromGallery),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _mediaButton(Icons.photo_camera_outlined, 'Camera', _takePhoto),
-                ),
-              ],
+          if (_processingClip)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: context.accent),
+                  ),
+                  const SizedBox(width: 10),
+                  const Text('Preparing clip…',
+                      style: TextStyle(color: _fgSecondary, fontSize: 13)),
+                ],
+              ),
+            )
+          // A clip is the whole post; remove it (via its tile) to switch back to photos.
+          else if (_clip == null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _mediaButton(Icons.image_outlined,
+                            _images.isEmpty ? 'Photos' : 'Add more', _pickFromGallery),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _mediaButton(Icons.photo_camera_outlined, 'Camera', _takePhoto),
+                      ),
+                    ],
+                  ),
+                  // Clips only where the selected group(s) can store them, and only as the
+                  // sole attachment (no mixing with the photo strip).
+                  if (clipAllowed && _images.isEmpty) ...[
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _mediaButton(
+                              Icons.movie_outlined, 'Video', () => _pickClip(ImageSource.gallery)),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _mediaButton(Icons.videocam_outlined, 'Record',
+                              () => _pickClip(ImageSource.camera)),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
             ),
-          ),
         ],
       ),
+    );
+  }
+
+  /// The clip preview tile: a play glyph and the clip's length over a dark backdrop, with a
+  /// remove control that clears the clip (and its detected location) back to an empty post.
+  Widget _clipTile() {
+    final label = PostMedia(id: 0, mime: 'video/mp4', durationMs: _clipDurationMs).durationLabel;
+    return Stack(
+      children: [
+        Container(
+          width: 140,
+          height: 100,
+          decoration: BoxDecoration(
+            color: const Color(0xFF14161A),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: const Center(
+            child: Icon(Icons.play_arrow_rounded, color: Colors.white, size: 34),
+          ),
+        ),
+        if (label.isNotEmpty)
+          Positioned(
+            bottom: 6,
+            left: 6,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(9999),
+              ),
+              child: Text(label,
+                  style: const TextStyle(
+                      color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
+            ),
+          ),
+        Positioned(
+          top: 0,
+          right: 0,
+          child: Semantics(
+            button: true,
+            label: 'Remove clip',
+            child: GestureDetector(
+              onTap: () => setState(() {
+                _clip = null;
+                _clipEncodedPath = null;
+                _clipPoster = null;
+                _clipDurationMs = 0;
+                _location = null;
+                _locationSource = null;
+              }),
+              behavior: HitTestBehavior.opaque,
+              child: SizedBox(
+                width: 44,
+                height: 44,
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Align(
+                    alignment: Alignment.topRight,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration:
+                          const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                      child: const Icon(Icons.close, size: 15, color: Colors.white),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1048,6 +1383,235 @@ class _TagPeopleSheetState extends State<_TagPeopleSheet> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Trims an over-length clip down to a <=10s window before it is posted. A filmstrip of
+/// frames spans the whole clip; two handles pick the window (slide the left/whole to move
+/// the start, drag the right to shorten the tail), and a preview shows the selected start
+/// frame. The window is clamped through [clampTrimWindow] so it can never exceed the cap or
+/// run off the clip. Returns (startMs, endMs) on Trim, or null on cancel.
+class _TrimSheet extends StatefulWidget {
+  const _TrimSheet({required this.path, required this.durationMs});
+
+  final String path;
+  final int durationMs;
+
+  @override
+  State<_TrimSheet> createState() => _TrimSheetState();
+}
+
+class _TrimSheetState extends State<_TrimSheet> {
+  static const _frames = 8;
+  late int _startMs;
+  late int _endMs;
+  final List<Uint8List?> _thumbs = List.filled(_frames, null);
+  VideoPlayerController? _preview;
+  bool _previewReady = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final window = clampTrimWindow(0, widget.durationMs);
+    _startMs = window.startMs;
+    _endMs = window.endMs;
+    _loadThumbs();
+    _initPreview();
+  }
+
+  @override
+  void dispose() {
+    _preview?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadThumbs() async {
+    for (var i = 0; i < _frames; i++) {
+      final at = (widget.durationMs * i / (_frames - 1)).round();
+      try {
+        final bytes = await VideoCompress.getByteThumbnail(widget.path, quality: 40, position: at);
+        if (!mounted) return;
+        setState(() => _thumbs[i] = bytes);
+      } catch (_) {
+        // A frame that will not decode just leaves a gap in the strip.
+      }
+    }
+  }
+
+  void _initPreview() {
+    final controller = VideoPlayerController.file(File(widget.path));
+    _preview = controller;
+    controller.initialize().then((_) {
+      if (!mounted) return;
+      controller.setVolume(0);
+      controller.seekTo(Duration(milliseconds: _startMs));
+      setState(() => _previewReady = true);
+    }).catchError((_) {
+      // No platform player (test/unsupported): the strip alone drives the selection.
+    });
+  }
+
+  void _seekPreview(int ms) {
+    final controller = _preview;
+    if (controller != null && _previewReady) controller.seekTo(Duration(milliseconds: ms));
+  }
+
+  // The whole window slides with the start; the end follows to keep a full <=10s span.
+  void _setStart(int ms) {
+    final window = clampTrimWindow(ms, widget.durationMs);
+    setState(() {
+      _startMs = window.startMs;
+      _endMs = window.endMs;
+    });
+    _seekPreview(_startMs);
+  }
+
+  // The right handle only shortens the tail: end stays within (start, start + cap].
+  void _setEnd(int ms) {
+    final maxEnd = (_startMs + kMaxClipMs).clamp(0, widget.durationMs);
+    final clamped = ms.clamp(_startMs + 500, maxEnd);
+    setState(() => _endMs = clamped);
+  }
+
+  int _dxToMs(double dx, double width) => width <= 0 ? 0 : (dx / width * widget.durationMs).round();
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedMs = _endMs - _startMs;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 38,
+              height: 4,
+              margin: const EdgeInsets.only(bottom: 14),
+              decoration: BoxDecoration(color: _border, borderRadius: BorderRadius.circular(9999)),
+            ),
+            Row(
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  style: TextButton.styleFrom(foregroundColor: _fgSecondary),
+                  child: const Text('Cancel'),
+                ),
+                Expanded(
+                  child: Text(
+                    'Trim to ${(selectedMs / 1000).toStringAsFixed(1)}s',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                        color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 15),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop((startMs: _startMs, endMs: _endMs)),
+                  style: TextButton.styleFrom(
+                    backgroundColor: context.accent,
+                    foregroundColor: context.onAccent,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9999)),
+                  ),
+                  child: const Text('Trim', style: TextStyle(fontWeight: FontWeight.w700)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            if (_previewReady && _preview != null)
+              AspectRatio(
+                aspectRatio: _preview!.value.aspectRatio,
+                child: VideoPlayer(_preview!),
+              )
+            else
+              const AspectRatio(
+                aspectRatio: 16 / 9,
+                child: ColoredBox(color: Color(0xFF14161A)),
+              ),
+            const SizedBox(height: 14),
+            SizedBox(height: 56, child: _filmstrip()),
+            const SizedBox(height: 8),
+            const Text(
+              'Drag the ends to pick up to 10 seconds.',
+              style: TextStyle(color: _fgMuted, fontSize: 12),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _filmstrip() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final startFrac = widget.durationMs == 0 ? 0.0 : _startMs / widget.durationMs;
+        final endFrac = widget.durationMs == 0 ? 1.0 : _endMs / widget.durationMs;
+        const handle = 12.0;
+        return Stack(
+          children: [
+            Row(
+              children: [
+                for (var i = 0; i < _frames; i++)
+                  Expanded(
+                    child: _thumbs[i] == null
+                        ? const ColoredBox(color: Color(0xFF14161A))
+                        : Image.memory(_thumbs[i]!, fit: BoxFit.cover, height: 56),
+                  ),
+              ],
+            ),
+            // The unselected ends dimmed so the chosen window reads clearly.
+            Positioned.fill(
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: startFrac * width,
+                    child: const ColoredBox(color: Colors.black54),
+                  ),
+                  const Expanded(child: SizedBox()),
+                  SizedBox(
+                    width: (1 - endFrac) * width,
+                    child: const ColoredBox(color: Colors.black54),
+                  ),
+                ],
+              ),
+            ),
+            // Left handle: slides the whole window's start.
+            Positioned(
+              left: (startFrac * width - handle).clamp(0.0, width - handle),
+              top: 0,
+              bottom: 0,
+              child: GestureDetector(
+                onHorizontalDragUpdate: (d) =>
+                    _setStart(_dxToMs(startFrac * width + d.delta.dx, width)),
+                child: _handleBar(context),
+              ),
+            ),
+            // Right handle: shortens the tail.
+            Positioned(
+              left: (endFrac * width).clamp(0.0, width - handle),
+              top: 0,
+              bottom: 0,
+              child: GestureDetector(
+                onHorizontalDragUpdate: (d) =>
+                    _setEnd(_dxToMs(endFrac * width + d.delta.dx, width)),
+                child: _handleBar(context),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _handleBar(BuildContext context) {
+    return Container(
+      width: 12,
+      decoration: BoxDecoration(
+        color: context.accent,
+        borderRadius: BorderRadius.circular(3),
+      ),
+      child: const Icon(Icons.drag_indicator, size: 12, color: Colors.white),
     );
   }
 }

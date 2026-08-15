@@ -24,6 +24,7 @@ class ServerAccount {
     this.color,
     this.token,
     this.user,
+    this.mediaTypes = const ['image'],
   });
 
   /// Stable id derived from the server's host (one subdomain per group). Used to key
@@ -47,6 +48,11 @@ class ServerAccount {
   /// null for a moment (or while the server is unreachable) even when signed in.
   final User? user;
 
+  /// What this group's server accepts as an attachment ('image', 'gif', 'video'), from its
+  /// server-info. A server predating typed media says nothing and only ever took stills, so
+  /// the default is images-only. Compose reads it to hide a clip option a group would reject.
+  final List<String> mediaTypes;
+
   bool get isSignedIn => token != null;
 
   /// What the UI calls this group: the local nickname when set, else the server's name.
@@ -68,6 +74,7 @@ class ServerAccount {
     String? token,
     User? user,
     bool clearAuth = false,
+    List<String>? mediaTypes,
   }) {
     return ServerAccount(
       id: id,
@@ -77,6 +84,7 @@ class ServerAccount {
       color: clearColor ? null : (color ?? this.color),
       token: clearAuth ? null : (token ?? this.token),
       user: clearAuth ? null : (user ?? this.user),
+      mediaTypes: mediaTypes ?? this.mediaTypes,
     );
   }
 }
@@ -220,7 +228,16 @@ class MultiSessionController extends Notifier<MultiSession> {
         if (legacyToken != null) {
           await _secure.write(key: _tokenKey(id), value: legacyToken);
         }
-        entries = [(id: id, baseUrl: legacyUrl, name: 'Check-In', nickname: null, color: null)];
+        entries = [
+          (
+            id: id,
+            baseUrl: legacyUrl,
+            name: 'Check-In',
+            nickname: null,
+            color: null,
+            mediaTypes: const ['image'],
+          )
+        ];
         await prefs.setString(_kGroups, _encodeGroups(entries));
         await prefs.remove(_kLegacyBaseUrl);
         await _secure.delete(key: _kLegacyToken);
@@ -236,6 +253,7 @@ class MultiSessionController extends Notifier<MultiSession> {
           serverName: e.name,
           nickname: e.nickname,
           color: e.color,
+          mediaTypes: e.mediaTypes,
           token: token));
     }
     final ids = {for (final g in accounts) g.id};
@@ -283,13 +301,15 @@ class MultiSessionController extends Notifier<MultiSession> {
       final info = await client.serverInfo();
       final nameChanged = info.name.isNotEmpty && info.name != g.serverName;
       final colorChanged = info.color != (g.color ?? '');
-      if (nameChanged || colorChanged) {
+      final mediaChanged = !listEquals(info.mediaTypes, g.mediaTypes);
+      if (nameChanged || colorChanged || mediaChanged) {
         _update(
             g.id,
             (a) => a.copyWith(
                   serverName: nameChanged ? info.name : null,
                   color: info.color,
                   clearColor: info.color.isEmpty,
+                  mediaTypes: info.mediaTypes,
                 ));
         await _persistGroups();
       }
@@ -321,6 +341,7 @@ class MultiSessionController extends Notifier<MultiSession> {
             name: g.serverName,
             nickname: g.nickname,
             color: g.color,
+            mediaTypes: g.mediaTypes,
           )
       ]),
     );
@@ -445,8 +466,15 @@ class MultiSessionController extends Notifier<MultiSession> {
     _update(groupId, (g) => g.copyWith(user: user));
   }
 
-  static List<({String id, String baseUrl, String name, String? nickname, String? color})>
-      _decodeGroups(String? raw) {
+  static List<
+      ({
+        String id,
+        String baseUrl,
+        String name,
+        String? nickname,
+        String? color,
+        List<String> mediaTypes
+      })> _decodeGroups(String? raw) {
     if (raw == null || raw.isEmpty) return const [];
     try {
       final list = jsonDecode(raw) as List;
@@ -458,6 +486,10 @@ class MultiSessionController extends Notifier<MultiSession> {
             name: e['name'] as String? ?? 'Check-In',
             nickname: e['nickname'] as String?,
             color: e['color'] as String?,
+            // Absent (an older stored entry) means the last-known types are unknown, so fall
+            // back to images-only; the next hydrate refreshes it from server-info.
+            mediaTypes:
+                (e['mediaTypes'] as List?)?.map((t) => t as String).toList() ?? const ['image'],
           )
       ];
     } catch (_) {
@@ -466,7 +498,16 @@ class MultiSessionController extends Notifier<MultiSession> {
   }
 
   static String _encodeGroups(
-      List<({String id, String baseUrl, String name, String? nickname, String? color})> entries) {
+      List<
+              ({
+                String id,
+                String baseUrl,
+                String name,
+                String? nickname,
+                String? color,
+                List<String> mediaTypes
+              })>
+          entries) {
     return jsonEncode([
       for (final e in entries)
         {
@@ -475,6 +516,7 @@ class MultiSessionController extends Notifier<MultiSession> {
           'name': e.name,
           if (e.nickname != null) 'nickname': e.nickname,
           if (e.color != null && e.color!.isNotEmpty) 'color': e.color,
+          'mediaTypes': e.mediaTypes,
         }
     ]);
   }
