@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:checkin/api/models.dart';
 import 'package:checkin/state/app_state.dart';
+import 'package:checkin/widgets/media_frame.dart';
 import 'package:checkin/widgets/photo_viewer.dart';
 
 /// A multi-image check-in's full-screen viewer must let the viewer swipe between every
@@ -86,5 +87,40 @@ void main() {
     await settle(tester);
 
     expect(find.byType(PhotoViewerScreen), findsNothing);
+  });
+
+  // The viewer branches on the media type: a photo is pinch-zoomable, a clip plays. A real
+  // controller cannot initialise in flutter_test (there is no platform player), so the clip
+  // page keeps showing its poster - which is exactly what is asserted: the branch, not the
+  // playback.
+  Future<void> pumpTyped(WidgetTester tester, PostMedia media) async {
+    final controller = MultiSessionController.seeded(
+      MultiSession(groups: [account], restored: true),
+    );
+    await tester.pumpWidget(ProviderScope(
+      overrides: [multiSessionProvider.overrideWith(() => controller)],
+      child: MaterialApp(
+        home: PhotoViewerScreen(media: [media], groupId: 'alpha.invalid'),
+      ),
+    ));
+    await settle(tester);
+  }
+
+  testWidgets('a photo page is a pinch-to-zoom InteractiveViewer', (tester) async {
+    await pumpTyped(tester, const PostMedia(id: 7, mime: 'image/jpeg', width: 1600, height: 1200));
+    expect(find.byType(InteractiveViewer), findsOneWidget);
+  });
+
+  testWidgets('a clip page is the video host over its poster, not an InteractiveViewer',
+      (tester) async {
+    await pumpTyped(
+      tester,
+      const PostMedia(id: 8, mime: 'video/mp4', width: 1080, height: 1920, durationMs: 8000),
+    );
+    // Not the photo branch...
+    expect(find.byType(InteractiveViewer), findsNothing);
+    // ...and the poster (a MediaFrame) is shown underneath until a frame decodes, which it
+    // never will here - so it stays put rather than flashing black.
+    expect(find.byType(MediaFrame), findsOneWidget);
   });
 }
