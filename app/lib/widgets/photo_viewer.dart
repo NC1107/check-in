@@ -226,6 +226,13 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> {
     }
   }
 
+  // The tapped feed photo flies in via a shared [photoHeroTag]. Only the initial page needs
+  // a matching source, but tagging every image page is harmless since each media id yields a
+  // distinct tag; a clip's poster stays a plain fade.
+  Widget _heroed(Widget child) => widget.media.isImage
+      ? Hero(tag: photoHeroTag(widget.groupId, widget.media.id), child: child)
+      : child;
+
   void _handleDoubleTap() {
     const scale = 2.5;
     final zoomed = _controller.value.getMaxScaleOnAxis() > 1.01;
@@ -256,7 +263,9 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> {
         minScale: 1,
         maxScale: 5,
         child: SizedBox.expand(
-          child: MediaFrame(media: widget.media, groupId: widget.groupId, fit: BoxFit.contain),
+          child: _heroed(
+            MediaFrame(media: widget.media, groupId: widget.groupId, fit: BoxFit.contain),
+          ),
         ),
       ),
     );
