@@ -48,11 +48,16 @@ enum _Step { entry, profile, invite, done }
 /// touching other connected groups. It serves both the first-launch entry point (rooted
 /// by main.dart) and the "Add group" / re-login flows pushed from the group switcher.
 class AuthScreen extends ConsumerStatefulWidget {
-  const AuthScreen({super.key, this.initialServer});
+  const AuthScreen({super.key, this.initialServer, this.clientFactory});
 
   /// Prefills (e.g. from an invite link or a signed-out group's entry) the server
   /// address. Null starts blank in the pushed add-group flow.
   final String? initialServer;
+
+  /// Builds the unauthenticated client for a probed server. Only widget tests pass one,
+  /// so they can drive the flow past the server probe without reaching the network.
+  @visibleForTesting
+  final ApiClient Function(String baseUrl)? clientFactory;
 
   @override
   ConsumerState<AuthScreen> createState() => _AuthScreenState();
@@ -249,7 +254,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     }
     if (url == _connectedUrl) return true;
     try {
-      final info = await ApiClient(baseUrl: url).serverInfo();
+      final info = await _newClient(url).serverInfo();
       _serverInfo = info;
       _connectedUrl = url;
       return true;
@@ -260,8 +265,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     }
   }
 
+  ApiClient _newClient(String baseUrl) =>
+      widget.clientFactory?.call(baseUrl) ?? ApiClient(baseUrl: baseUrl);
+
   /// An unauthenticated client for the probed server (only valid after [_ensureServer]).
-  ApiClient get _client => ApiClient(baseUrl: _connectedUrl ?? '');
+  ApiClient get _client => _newClient(_connectedUrl ?? '');
 
   /// Terminal step for every path (login, signup, password reset): append the group to
   /// the connected list, make it active, and - when this screen was pushed from the
