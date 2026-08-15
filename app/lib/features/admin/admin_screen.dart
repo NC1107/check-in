@@ -419,8 +419,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
               GestureDetector(
                 onTap: () {
                   Clipboard.setData(ClipboardData(text: res.code));
-                  ScaffoldMessenger.of(context)
-                      .showSnackBar(const SnackBar(content: Text('Code copied')));
+                  _snack('Code copied');
                 },
                 child: Container(
                   width: double.infinity,
@@ -455,10 +454,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
         ),
       );
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Could not generate code: $e')));
-      }
+      _snack('Could not generate code: $e');
     }
   }
 
