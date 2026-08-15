@@ -5,6 +5,32 @@ import 'package:http_parser/http_parser.dart';
 
 import 'models.dart';
 
+/// The build's version, sent on every request as X-Client-Version. Nothing consumes it
+/// yet; it exists so a server can eventually tell an old app from a new one (and gate a
+/// feature on it) without waiting a release cycle for the header to reach the field.
+///
+/// Hardcoded because the app carries no package_info_plus dependency - release tooling
+/// bumps it with pubspec's version, and a test fails the build when the two drift.
+const kClientVersion = '0.1.0';
+
+/// The content type to upload a file under, from its extension. The server sniffs the
+/// bytes anyway, so this only has to be honest enough not to be rejected out of hand -
+/// but it is the one place the app names its own upload types, and both upload paths read
+/// it so a raw and a re-encoded upload can never disagree.
+MediaType uploadContentType(String path) => switch (fileExtension(path)) {
+      'png' => MediaType('image', 'png'),
+      'gif' => MediaType('image', 'gif'),
+      'webp' => MediaType('image', 'webp'),
+      'mp4' => MediaType('video', 'mp4'),
+      _ => MediaType('image', 'jpeg'),
+    };
+
+/// A path's extension, lowercased and without the dot ('' when it has none).
+String fileExtension(String path) {
+  final dot = path.lastIndexOf('.');
+  return dot < 0 ? '' : path.substring(dot + 1).toLowerCase();
+}
+
 /// ApiClient wraps all HTTP calls to a Check-In server. The base URL (server address)
 /// and bearer token are injected after the user connects and logs in.
 class ApiClient {
@@ -18,7 +44,10 @@ class ApiClient {
           // actually succeeded, prompting a confusing retry.
           sendTimeout: const Duration(seconds: 60),
           receiveTimeout: const Duration(seconds: 60),
-          headers: token == null ? null : {'Authorization': 'Bearer $token'},
+          headers: {
+            'X-Client-Version': kClientVersion,
+            if (token != null) 'Authorization': 'Bearer $token',
+          },
         )) {
     if (onUnauthorized != null) {
       _dio.interceptors.add(InterceptorsWrapper(
@@ -35,12 +64,24 @@ class ApiClient {
   final Dio _dio;
 
   /// imageUrl builds the authenticated URL for a media id. The token is sent via header
-  /// by [cachedImageHeaders]; callers pass that to CachedNetworkImage.
-  String imageUrl(int mediaId) => '${_dio.options.baseUrl}/api/media/$mediaId';
+  /// by [authHeaders]; callers pass that to CachedNetworkImage.
+  ///
+  /// [variant] asks for a derived file instead of the stored one - 'poster' for a clip's
+  /// still frame. The server falls back to the main file for a variant it has nothing
+  /// for, so callers must only ask when they know one exists (see [PostMedia.hasPoster]).
+  String imageUrl(int mediaId, {String? variant}) {
+    final url = '${_dio.options.baseUrl}/api/media/$mediaId';
+    return variant == null ? url : '$url?variant=$variant';
+  }
 
+  /// The headers an image loader must send to fetch media itself. Those requests go out
+  /// through CachedNetworkImage rather than dio, so they only carry what is put here.
   Map<String, String> get authHeaders {
     final h = _dio.options.headers['Authorization'];
-    return h == null ? {} : {'Authorization': h as String};
+    return {
+      'X-Client-Version': kClientVersion,
+      if (h != null) 'Authorization': h as String,
+    };
   }
 
   // ---- onboarding / auth ----
@@ -292,17 +333,10 @@ class ApiClient {
     return Uint8List.fromList(r.data ?? const []);
   }
 
-  /// uploadImage sends a file and returns the new media id.
+  /// uploadImage sends a file as-is and returns the new media id.
   Future<int> uploadImage(String filePath) async {
-    final ext = filePath.split('.').last.toLowerCase();
-    final contentType = switch (ext) {
-      'png' => MediaType('image', 'png'),
-      'gif' => MediaType('image', 'gif'),
-      'webp' => MediaType('image', 'webp'),
-      _ => MediaType('image', 'jpeg'),
-    };
     final form = FormData.fromMap({
-      'file': await MultipartFile.fromFile(filePath, contentType: contentType),
+      'file': await MultipartFile.fromFile(filePath, contentType: uploadContentType(filePath)),
     });
     final r = await _dio.post('/api/media', data: form);
     return (r.data as Map<String, dynamic>)['id'] as int;
@@ -312,18 +346,24 @@ class ApiClient {
   /// transcode) and returns the new media id. Used so the server never has to decode a
   /// full-resolution photo or an iPhone HEIC it can't read.
   Future<int> uploadImageBytes(List<int> bytes, {String filename = 'upload.jpg'}) async {
-    final ext = filename.split('.').last.toLowerCase();
-    final contentType = switch (ext) {
-      'png' => MediaType('image', 'png'),
-      'gif' => MediaType('image', 'gif'),
-      'webp' => MediaType('image', 'webp'),
-      _ => MediaType('image', 'jpeg'),
-    };
     final form = FormData.fromMap({
-      'file': MultipartFile.fromBytes(bytes, filename: filename, contentType: contentType),
+      'file': MultipartFile.fromBytes(bytes,
+          filename: filename, contentType: uploadContentType(filename)),
     });
     final r = await _dio.post('/api/media', data: form);
     return (r.data as Map<String, dynamic>)['id'] as int;
+  }
+
+  /// setMediaPoster attaches a still frame to a clip the caller uploaded, so the feed has
+  /// something to show for it before there is a player. The frame goes through the server's
+  /// image pipeline. Only the media's owner may set it.
+  Future<void> setMediaPoster(int mediaId, List<int> bytes,
+      {String filename = 'poster.jpg'}) async {
+    final form = FormData.fromMap({
+      'file': MultipartFile.fromBytes(bytes,
+          filename: filename, contentType: uploadContentType(filename)),
+    });
+    await _dio.post('/api/media/$mediaId/poster', data: form);
   }
 
   // ---- admin ----
