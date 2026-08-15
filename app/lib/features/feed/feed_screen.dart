@@ -597,7 +597,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       final posts = await _collectFilteredForDownload();
       items = [
         for (final p in posts)
-          for (final mediaId in p.images) (groupId: p.groupId, mediaId: mediaId)
+          // Clips are left out rather than downloaded as unopenable files; a bulk save is
+          // the one place a member cannot see what each item was.
+          for (final m in p.savableImages) (groupId: p.groupId, mediaId: m.id)
       ];
     } catch (_) {
       if (mounted) setState(() => _downloading = false);

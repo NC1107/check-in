@@ -467,8 +467,8 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                     ),
                   ),
                 ),
-                // ⋯ menu: always shown. Save photo on image posts; Report for others;
-                // Delete only for the author.
+                // ⋯ menu: always shown. Save photo when a photo is attached; Report for
+                // others; Delete only for the author.
                 SizedBox(
                   height: 44,
                   width: 44,
@@ -483,11 +483,13 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                     ),
                     onSelected: (v) {
                       if (v == 'delete') _confirmDelete();
-                      if (v == 'save') _savePhoto(p.mediaId!);
+                      if (v == 'save') _savePhoto(p.savableImages.first.id);
                       if (v == 'report') _reportPost();
                     },
                     itemBuilder: (_) => [
-                      if (p.kind == 'image' && p.mediaId != null)
+                      // Only a real image: Gal writes the bytes as they arrive, so saving a
+                      // clip would put a file in the gallery that will not open.
+                      if (p.savableImages.isNotEmpty)
                         const PopupMenuItem(
                           value: 'save',
                           child: Row(
