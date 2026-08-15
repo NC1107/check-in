@@ -76,7 +76,7 @@ func (s *Server) runDigest(ctx context.Context) {
 		if err != nil || len(tokens) == 0 {
 			continue
 		}
-		s.push.Send(ctx, tokens, name, digestBody(n), map[string]string{"type": "digest"})
+		s.push.Send(ctx, tokens, name, digestBody(n), map[string]string{"type": "digest"}, noCollapse)
 	}
 }
 
