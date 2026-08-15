@@ -108,12 +108,15 @@ func probeMP4(data []byte) (videoInfo, error) {
 		}
 	}
 
-	// Always read the track timelines too, and keep the LONGEST duration seen anywhere.
-	// mvhd is a self-reported header a crafted file can understate while its sample
-	// tables describe minutes of playable video, so the cap is enforced against the max
-	// of every source, not whichever one happened to be filled in. This also covers the
-	// legitimate zero cases: fragmented files carry mvhd.duration == 0, and some encoders
-	// leave mdhd at 0 as well, leaving the sample table as the only source of truth.
+	// mvhd carries the PRESENTED duration - the movie timeline after edit lists are applied -
+	// and that is the authoritative length. A track's raw sample table (stts) sums the coded
+	// samples, which routinely runs LONGER than the presentation whenever an edit list trims
+	// the head or tail; phone recorders and re-encoders emit such edit lists as a matter of
+	// course. Taking the max of mvhd and the stts sum therefore over-counts and falsely
+	// rejects legitimate clips (a real 9s clip whose stts sums to 12s). So mvhd wins whenever
+	// it is present, and the track/stts duration is used ONLY when mvhd is 0 (fragmented files
+	// and the encoders that leave the movie header blank). The "spoofed short mvhd hiding a
+	// long file" case is low severity: the 25MB size cap is the real resource control here.
 	for _, trak := range findBoxes(moovKids, "trak") {
 		trakKids, _ := parseBoxes(trak.payload)
 		if tkhd, found := findBox(trakKids, "tkhd"); found {
@@ -122,8 +125,10 @@ func probeMP4(data []byte) (videoInfo, error) {
 				info.Width, info.Height = w, h
 			}
 		}
-		if ms := trackDurationMs(trakKids); ms > info.DurationMs {
-			info.DurationMs = ms
+		if info.DurationMs <= 0 {
+			if ms := trackDurationMs(trakKids); ms > info.DurationMs {
+				info.DurationMs = ms
+			}
 		}
 	}
 
