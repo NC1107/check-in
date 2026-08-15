@@ -353,7 +353,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     if (source == null) return null;
     final user = source.user!;
     final birthday = resolveBirthday(
-      stored: await lastSignupBirthday(),
+      stored: await lastSignupBirthday(_fullPhone),
       month: user.birthdayMonth,
       day: user.birthdayDay,
       now: DateTime.now(),
@@ -482,9 +482,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         password: _password.text,
       );
       // The server marshals birthdays without the year, so this is the only place the
-      // full date exists. Remember it here so the next group join can fill it in exactly
-      // instead of asking for a year the API can never give back.
-      await rememberSignupBirthday(_birthday!);
+      // full date exists. Remember it against this number so the next group join can fill
+      // it in exactly instead of asking for a year the API can never give back.
+      await rememberSignupBirthday(_fullPhone, _birthday!);
       // Now that we have a token, upload the photo and attach it. Best-effort: the account
       // already exists, so a photo failure shouldn't block finishing signup.
       if (_photoBytes != null) {

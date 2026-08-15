@@ -116,6 +116,10 @@ void main() {
     // one would turn that default into an explicit choice the user never made.
     await pumpToProfile(tester, groups: [account(displayName: 'Nick Conn')]);
 
+    // Assert the prefill actually ran, or an empty display name would also be what a
+    // completely broken prefill produced.
+    expect(fieldText(tester, 0), 'Nick');
+    expect(fieldText(tester, 1), 'Conn');
     expect(fieldText(tester, 2), '');
   });
 
@@ -213,7 +217,7 @@ void main() {
 
   testWidgets('a birthday remembered from a previous signup fills in exactly', (tester) async {
     SharedPreferences.setMockInitialValues(
-        {'seen_selfhost_intro': true, 'signup_birthday': '1990-03-14'});
+        {'seen_selfhost_intro': true, 'signup_birthday': '12025550186|1990-03-14'});
 
     await pumpToProfile(tester, groups: [account(birthdayMonth: 3, birthdayDay: 14)]);
     await tester.enterText(find.byType(TextField).at(3), 'hunter2hunter2');
@@ -245,7 +249,7 @@ void main() {
     // Nothing else on the device ever sees the full date again, so if this is not written
     // here the next join is back to scrolling for a year.
     SharedPreferences.setMockInitialValues(
-        {'seen_selfhost_intro': true, 'signup_birthday': '1990-03-14'});
+        {'seen_selfhost_intro': true, 'signup_birthday': '12025550186|1990-03-14'});
 
     await pumpToProfile(tester, groups: [account(birthdayMonth: 3, birthdayDay: 14)]);
     await tester.enterText(find.byType(TextField).at(3), 'hunter2hunter2');
@@ -254,7 +258,7 @@ void main() {
     await settle(tester);
 
     expect(find.text("You're all set"), findsOneWidget);
-    expect(await lastSignupBirthday(), DateTime(1990, 3, 14));
+    expect(await lastSignupBirthday('+12025550186'), DateTime(1990, 3, 14));
   });
 }
 

@@ -3,10 +3,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../state/app_state.dart';
 
-/// The last birthday entered at signup on this device. The server never returns a birth
-/// year (`db.User.Birthday` is marshalled to month/day only so a member's age is never
-/// exposed over the API), but signup requires a full date - so the only way to carry an
-/// exact birthday into the next group is to remember it locally.
+/// The last birthday entered at signup on this device, stored as `<phone digits>|<date>`.
+///
+/// The server never returns a birth year (`db.User.Birthday` is marshalled to month/day
+/// only so a member's age is never exposed over the API), but signup requires a full date,
+/// so the only way to carry an exact birthday into the next group is to remember it here.
+///
+/// It is scoped to the phone number that entered it because a device is not a person. Two
+/// people who share one and happen to share a birth month and day would otherwise look
+/// like agreement to [resolveBirthday], handing the second person the first person's birth
+/// year - the exact disclosure the server's month/day-only design exists to prevent.
 const _kSignupBirthday = 'signup_birthday';
 
 String _digits(String raw) => raw.replaceAll(RegExp(r'\D'), '');
@@ -65,17 +71,30 @@ ServerAccount? prefillSourceFor(MultiSession session, String fullPhone) {
   return (value: null, seed: DateTime(stored.year, month, day));
 }
 
-/// Reads back [rememberSignupBirthday]. A corrupt value degrades to "no prefill" rather
-/// than throwing, because this runs on the join path where a crash would block signup
-/// entirely over a field the user can simply fill in.
-Future<DateTime?> lastSignupBirthday() async {
+/// Reads back the birthday [rememberSignupBirthday] stored for [fullPhone], or null when
+/// this device remembers one for somebody else.
+///
+/// A corrupt or unscoped value degrades to "no prefill" rather than throwing, because this
+/// runs on the join path where a crash would block signup entirely over a field the user
+/// can simply fill in. A value written before birthdays were phone-scoped has no owner
+/// recorded, so it is refused rather than guessed at - that costs one year scroll, once.
+Future<DateTime?> lastSignupBirthday(String fullPhone) async {
+  final wanted = _digits(fullPhone);
+  if (wanted.isEmpty) return null;
   final prefs = await SharedPreferences.getInstance();
   final raw = prefs.getString(_kSignupBirthday);
   if (raw == null) return null;
-  return DateTime.tryParse(raw);
+  final sep = raw.indexOf('|');
+  if (sep < 0 || raw.substring(0, sep) != wanted) return null;
+  return DateTime.tryParse(raw.substring(sep + 1));
 }
 
-Future<void> rememberSignupBirthday(DateTime birthday) async {
+Future<void> rememberSignupBirthday(String fullPhone, DateTime birthday) async {
+  final digits = _digits(fullPhone);
+  if (digits.isEmpty) return;
   final prefs = await SharedPreferences.getInstance();
-  await prefs.setString(_kSignupBirthday, DateFormat('yyyy-MM-dd').format(birthday));
+  await prefs.setString(
+    _kSignupBirthday,
+    '$digits|${DateFormat('yyyy-MM-dd').format(birthday)}',
+  );
 }

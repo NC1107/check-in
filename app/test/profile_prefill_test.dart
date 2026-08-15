@@ -156,26 +156,54 @@ void main() {
   });
 
   group('the remembered signup birthday', () {
-    test('round-trips', () async {
+    test('round-trips for the number that entered it', () async {
       SharedPreferences.setMockInitialValues({});
 
-      await rememberSignupBirthday(DateTime(1990, 3, 14));
+      await rememberSignupBirthday('+12025550186', DateTime(1990, 3, 14));
 
-      expect(await lastSignupBirthday(), DateTime(1990, 3, 14));
+      expect(await lastSignupBirthday('+12025550186'), DateTime(1990, 3, 14));
+    });
+
+    test('is readable however the same number is formatted', () async {
+      SharedPreferences.setMockInitialValues({});
+
+      await rememberSignupBirthday('+12025550186', DateTime(1990, 3, 14));
+
+      expect(await lastSignupBirthday('+1 (202) 555-0186'), DateTime(1990, 3, 14));
+    });
+
+    test('is never handed to a different number on the same device', () async {
+      // A device is not a person. Two people sharing one who also share a birth month and
+      // day would look like agreement to resolveBirthday, which would hand the second one
+      // the first one's birth year - the disclosure the server's month/day-only birthday
+      // marshalling exists to prevent.
+      SharedPreferences.setMockInitialValues({});
+
+      await rememberSignupBirthday('+12025550186', DateTime(1990, 3, 14));
+
+      expect(await lastSignupBirthday('+12025550999'), isNull);
     });
 
     test('is absent before any signup on this device', () async {
       SharedPreferences.setMockInitialValues({});
 
-      expect(await lastSignupBirthday(), isNull);
+      expect(await lastSignupBirthday('+12025550186'), isNull);
+    });
+
+    test('refuses a value stored before birthdays were scoped to a number', () async {
+      // No owner was recorded, so there is no way to tell whose it is. Costs one year
+      // scroll, once, rather than risking handing it to the wrong person.
+      SharedPreferences.setMockInitialValues({'signup_birthday': '1990-03-14'});
+
+      expect(await lastSignupBirthday('+12025550186'), isNull);
     });
 
     test('degrades to nothing rather than throwing on a corrupt value', () async {
       // This is read on the join path, where an exception would block signup entirely over
       // a field the user can just fill in.
-      SharedPreferences.setMockInitialValues({'signup_birthday': 'not-a-date'});
+      SharedPreferences.setMockInitialValues({'signup_birthday': '12025550186|not-a-date'});
 
-      expect(await lastSignupBirthday(), isNull);
+      expect(await lastSignupBirthday('+12025550186'), isNull);
     });
   });
 }
