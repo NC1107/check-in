@@ -5,11 +5,28 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 
 import '../../state/app_state.dart';
+import '../../theme/tokens.dart';
 import 'auth_screen.dart';
 import 'invite_links.dart';
 
 /// Root navigator, so an invite link can push the add-group flow from outside the tree.
 final rootNavigatorKey = GlobalKey<NavigatorState>();
+
+/// The group already signed in on this device that an invite for [server] would re-add, or
+/// null for a genuinely new server. Matches on the derived group id (the host), the same key
+/// the session stores groups under, so a link and an existing group line up regardless of
+/// path or trailing slashes.
+///
+/// Only signed-in groups count. A group you still have but are signed out of falls through
+/// to the connect screen on purpose: re-login, not a "you're already in" dead end, is the
+/// way back in there.
+ServerAccount? existingGroupForInvite(MultiSession session, String server) {
+  final id = MultiSessionController.groupIdFor(server);
+  for (final g in session.signedIn) {
+    if (g.id == id) return g;
+  }
+  return null;
+}
 
 /// Delivers platform deep links ([inviteServerFromUri]) into [pendingInviteServerProvider].
 ///
@@ -78,10 +95,42 @@ class _InviteLinkListenerState extends ConsumerState<InviteLinkListener>
 
     final navigator = rootNavigatorKey.currentState;
     if (navigator == null) return;
+
+    // A link for a group already connected here would otherwise drop the user into the
+    // connect flow for a group they already have. Tell them instead, and drop the parked
+    // invite so it can't prefill the next manual connect.
+    final existing = existingGroupForInvite(session, server);
+    if (existing != null) {
+      ref.read(pendingInviteServerProvider.notifier).consume();
+      _showAlreadyJoined(navigator, existing.displayName);
+      return;
+    }
+
     _addGroupOpen = true;
     navigator
         .push(MaterialPageRoute<void>(builder: (_) => AuthScreen(initialServer: server)))
         .whenComplete(() => _addGroupOpen = false);
+  }
+
+  void _showAlreadyJoined(NavigatorState navigator, String groupName) {
+    showDialog<void>(
+      context: navigator.context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kBgSurface,
+        title: Text("You're already in $groupName",
+            style: const TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700)),
+        content: const Text(
+          'This group is already connected on this device, so there is nothing to join.',
+          style: TextStyle(color: kFgSecondary, fontSize: 14, height: 1.5),
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Got it'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
