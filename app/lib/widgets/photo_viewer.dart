@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:video_player/video_player.dart';
 
 import '../api/models.dart';
+import '../state/app_state.dart';
 import 'media_frame.dart';
 
 /// Full-screen, pinch-to-zoom viewer for one or more attachments (e.g. a profile photo, or
-/// all the media on a multi-image check-in). A clip shows as its poster frame with a play
-/// badge and cannot be played here yet. Opened by tapping an image. Swipe left/right
+/// all the media on a multi-image check-in). A clip plays inline (its poster shows until the
+/// first frame is ready, then it autoplays looping). Opened by tapping an image. Swipe left/right
 /// pages between photos (disabled while the current photo is zoomed, so panning a zoomed
 /// photo doesn't also flip the page); swiping up or down dismisses, the close button, or
 /// the system back gesture; double-tap toggles between fit-to-screen and a 2.5x zoom
@@ -139,13 +142,22 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTicker
                       _page = i;
                       _zoomed = false; // a freshly-shown page always starts unzoomed
                     }),
-                    itemBuilder: (_, i) => _ZoomablePhoto(
-                      media: widget.media[i],
-                      groupId: widget.groupId,
-                      onZoomChanged: (z) {
-                        if (i == _page) setState(() => _zoomed = z);
-                      },
-                    ),
+                    itemBuilder: (_, i) {
+                      final m = widget.media[i];
+                      // A clip plays here; a photo pinch-zooms. The video page owns exactly
+                      // one controller and only while it is the visible page (active), so
+                      // paging away tears it down - the strict lifecycle the plan calls for.
+                      if (m.isVideo) {
+                        return _VideoPage(media: m, groupId: widget.groupId, active: i == _page);
+                      }
+                      return _ZoomablePhoto(
+                        media: m,
+                        groupId: widget.groupId,
+                        onZoomChanged: (z) {
+                          if (i == _page) setState(() => _zoomed = z);
+                        },
+                      );
+                    },
                   ),
                 ),
               ),
@@ -226,6 +238,13 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> {
     }
   }
 
+  // The tapped feed photo flies in via a shared [photoHeroTag]. Only the initial page needs
+  // a matching source, but tagging every image page is harmless since each media id yields a
+  // distinct tag; a clip's poster stays a plain fade.
+  Widget _heroed(Widget child) => widget.media.isImage
+      ? Hero(tag: photoHeroTag(widget.groupId, widget.media.id), child: child)
+      : child;
+
   void _handleDoubleTap() {
     const scale = 2.5;
     final zoomed = _controller.value.getMaxScaleOnAxis() > 1.01;
@@ -256,8 +275,158 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> {
         minScale: 1,
         maxScale: 5,
         child: SizedBox.expand(
-          child: MediaFrame(media: widget.media, groupId: widget.groupId, fit: BoxFit.contain),
+          child: _heroed(
+            MediaFrame(media: widget.media, groupId: widget.groupId, fit: BoxFit.contain),
+          ),
         ),
+      ),
+    );
+  }
+}
+
+/// One clip inside the viewer's [PageView]: plays the stored MP4 (the main file, not the
+/// poster variant) over its own poster, which stays visible until the first frame decodes so
+/// there is no black flash. Tap toggles play/pause; a corner button mutes.
+///
+/// The lifecycle is the whole point. There is exactly one controller and only while this is
+/// the active page: it is created when the page becomes active and torn down the moment it
+/// stops being active (a swipe) or the viewer closes, and paused when the app backgrounds.
+/// That keeps the app off the ListView-controller scar and inside Android's small pool of
+/// hardware video decoders.
+class _VideoPage extends ConsumerStatefulWidget {
+  const _VideoPage({required this.media, required this.active, this.groupId});
+
+  final PostMedia media;
+  final String? groupId;
+  final bool active;
+
+  @override
+  ConsumerState<_VideoPage> createState() => _VideoPageState();
+}
+
+class _VideoPageState extends ConsumerState<_VideoPage> with WidgetsBindingObserver {
+  VideoPlayerController? _controller;
+  bool _initialized = false;
+  bool _muted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    if (widget.active) _create();
+  }
+
+  @override
+  void didUpdateWidget(_VideoPage old) {
+    super.didUpdateWidget(old);
+    if (widget.active && !old.active) {
+      _create();
+    } else if (!widget.active && old.active) {
+      _teardown();
+      if (mounted) setState(() {});
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _teardown();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Never let a clip keep playing (or holding its decoder) once the app is backgrounded.
+    if (state == AppLifecycleState.paused) _controller?.pause();
+  }
+
+  void _create() {
+    if (_controller != null) return;
+    // Point at the clip itself (imageUrl with no variant), with the same bearer header the
+    // image loader uses. Playback is device-only; on an unsupported host (a widget test)
+    // initialize rejects and the poster simply stays put.
+    final api = ref.read(contentApiProvider(widget.groupId));
+    final controller = VideoPlayerController.networkUrl(
+      Uri.parse(api.imageUrl(widget.media.id)),
+      httpHeaders: api.authHeaders,
+    );
+    _controller = controller;
+    controller.initialize().then((_) {
+      if (!mounted || _controller != controller) return;
+      controller.setLooping(true);
+      controller.setVolume(_muted ? 0 : 1);
+      if (widget.active) controller.play();
+      setState(() => _initialized = true);
+    }).catchError((_) {
+      // No platform player (test/unsupported): keep showing the poster, no crash.
+    });
+  }
+
+  void _teardown() {
+    final controller = _controller;
+    _controller = null;
+    _initialized = false;
+    controller?.pause();
+    controller?.dispose();
+  }
+
+  void _togglePlay() {
+    final controller = _controller;
+    if (controller == null || !_initialized) return;
+    setState(() {
+      controller.value.isPlaying ? controller.pause() : controller.play();
+    });
+  }
+
+  void _toggleMute() {
+    final controller = _controller;
+    if (controller == null) return;
+    setState(() {
+      _muted = !_muted;
+      controller.setVolume(_muted ? 0 : 1);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = _controller;
+    final playing = _initialized && controller != null && controller.value.isPlaying;
+    return GestureDetector(
+      onTap: _togglePlay,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          // The poster (or a flat clip backdrop) under the video until the first frame lands.
+          if (!_initialized)
+            MediaFrame(media: widget.media, groupId: widget.groupId, fit: BoxFit.contain),
+          if (_initialized && controller != null)
+            Center(
+              child: AspectRatio(
+                aspectRatio: controller.value.aspectRatio,
+                child: VideoPlayer(controller),
+              ),
+            ),
+          // A play glyph while paused, so a paused clip does not read as a frozen photo.
+          if (_initialized && !playing)
+            const Center(
+              child: Icon(Icons.play_arrow_rounded, color: Colors.white, size: 64),
+            ),
+          if (_initialized)
+            SafeArea(
+              child: Align(
+                alignment: Alignment.bottomRight,
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: IconButton(
+                    icon: Icon(_muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                        color: Colors.white, size: 26),
+                    tooltip: _muted ? 'Unmute' : 'Mute',
+                    onPressed: _toggleMute,
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

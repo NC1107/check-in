@@ -167,6 +167,46 @@ void main() {
       expect(find.byType(AuthScreen), findsOneWidget);
       expect(find.text('https://gamma.example.com'), findsOneWidget);
     });
+
+    // A link for a group you already have should not dump you back into connect: say so and
+    // leave nothing parked to prefill the next real join.
+    testWidgets('an invite for a group already connected says so instead of connecting',
+        (tester) async {
+      await pumpApp(tester, overrides: signedIn());
+
+      await deliver(tester, 'checkin://join?server=https%3A%2F%2Fbeta.example.com');
+
+      expect(find.byType(AuthScreen), findsNothing);
+      expect(find.text("You're already in Beta"), findsOneWidget);
+      expect(scopeOf(tester).read(pendingInviteServerProvider), isNull);
+    });
+  });
+
+  group('existingGroupForInvite', () {
+    ServerAccount account(String host, {String? token}) => ServerAccount(
+          id: host,
+          baseUrl: 'https://$host',
+          serverName: host,
+          token: token,
+        );
+
+    test('matches a signed-in group by its derived host id', () {
+      final session = MultiSession(groups: [account('beta.example.com', token: 't')]);
+      final match = existingGroupForInvite(session, 'https://beta.example.com/join');
+      expect(match?.id, 'beta.example.com');
+    });
+
+    test('returns null for a genuinely new server', () {
+      final session = MultiSession(groups: [account('beta.example.com', token: 't')]);
+      expect(existingGroupForInvite(session, 'https://alpha.example.com'), isNull);
+    });
+
+    // A group you have but are signed out of routes through connect on purpose, where
+    // re-login is the way back in - so the "already in" match must not claim it.
+    test('does not match a group you are signed out of', () {
+      final session = MultiSession(groups: [account('beta.example.com')]);
+      expect(existingGroupForInvite(session, 'https://beta.example.com'), isNull);
+    });
   });
 
   group('an auth screen that is already open', () {

@@ -3,6 +3,12 @@ import 'package:flutter/material.dart';
 import '../api/models.dart';
 import 'auth_image.dart';
 
+/// The [Hero] tag a feed photo and its full-screen counterpart share, so tapping the photo
+/// flies it into the viewer. Scoped by group id as well as media id because the same media
+/// id can surface under two connected groups, and two heroes sharing a tag on one screen
+/// would crash.
+String photoHeroTag(String? groupId, int mediaId) => 'photo-$groupId-$mediaId';
+
 /// One post attachment, rendered as a still. A photo or gif renders directly (gifs animate
 /// on their own); a clip renders its poster frame under a play badge and its length.
 ///

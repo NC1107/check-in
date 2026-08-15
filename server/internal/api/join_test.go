@@ -136,6 +136,22 @@ func TestJoinPageNeverRedirectsOnItsOwn(t *testing.T) {
 	}
 }
 
+// Mobile Firefox (and other browsers) ignore the custom-scheme button, so the manual
+// address fallback is the guaranteed path in. It must always be spelled out, clearly tied
+// to the "button did nothing" case, with the bare host shown for the visitor to enter.
+func TestJoinPageSpellsOutTheManualAddressFallback(t *testing.T) {
+	body := renderTestJoinPage(t).Body.String()
+	for _, want := range []string{
+		"Button did nothing?",
+		"Open Check-In yourself, tap Add group",
+		"<code>alpha.example.com</code>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("invite page is missing the manual fallback text %q", want)
+		}
+	}
+}
+
 func TestJoinPageAlwaysShowsBothStores(t *testing.T) {
 	body := renderTestJoinPage(t).Body.String()
 	for _, link := range []string{joinAppStoreURL, joinPlayStoreURL} {
