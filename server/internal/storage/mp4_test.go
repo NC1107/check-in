@@ -336,15 +336,35 @@ func TestParseBoxesRefusesWraparoundLargesize(t *testing.T) {
 	}
 }
 
-// mvhd is self-reported and a crafted file can understate it while its sample tables
-// describe minutes of playable video. The cap must bind against the longest duration any
-// source reports, so lying in the movie header buys nothing.
-func TestProbeMP4RejectsUnderstatedMvhdDuration(t *testing.T) {
-	// mvhd claims 5s; the track's sample table sums to 60s (1800 samples at 1/30s).
-	data := clip(mvhdV0(5000),
+// mvhd carries the presented duration after edit lists are applied, so it is authoritative.
+// An edit list that trims a recording leaves the raw sample table (stts) summing LONGER than
+// the presentation, which is the common shape of a legitimate phone clip. The presented 9s
+// must win over the 12s of coded samples, or real clips get rejected.
+//
+// Mutation check: this fails the instant probeMP4 goes back to taking max(mvhd, stts), because
+// the 12s sample table would then push the file over the 12s cap.
+func TestProbeMP4AcceptsEditListTrimmedClip(t *testing.T) {
+	// mvhd presents 9s; the track's sample table sums to 12s (360 samples at 1/30s), the
+	// excess trimmed by an edit list the recorder wrote.
+	data := clip(mvhdV0(9000),
 		tkhd(720, 1280, identityMatrix()),
-		box("mdia", mdhd(30000, 0), box("minf", box("stbl", stts(1800, 1000)))))
+		box("mdia", mdhd(30000, 0), box("minf", box("stbl", stts(360, 1000)))))
+	info, err := probeMP4(data)
+	if err != nil {
+		t.Fatalf("an edit-list-trimmed 9s clip must be accepted: %v", err)
+	}
+	if info.DurationMs != 9000 {
+		t.Errorf("DurationMs = %d, want 9000 (presented mvhd duration, not the 12s sample sum)", info.DurationMs)
+	}
+}
+
+// A movie header that itself presents more than the cap is still rejected: mvhd winning does
+// not mean the cap stops binding, only that it binds against the presented length.
+func TestProbeMP4RejectsOverCapMvhd(t *testing.T) {
+	data := clip(mvhdV0(maxVideoDurationMs+1),
+		tkhd(720, 1280, identityMatrix()),
+		box("mdia", mdhd(30000, 0), box("minf", box("stbl", stts(60, 1000)))))
 	if _, err := probeMP4(data); err == nil {
-		t.Error("a clip whose sample table runs 60s was accepted on a 5s mvhd claim")
+		t.Error("a clip whose mvhd presents over the cap must be rejected")
 	}
 }

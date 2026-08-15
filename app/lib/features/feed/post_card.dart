@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -215,6 +216,22 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
       if (mounted) _snack('Allow photo access to save this');
     } catch (_) {
       if (mounted) _snack('Could not save the photo');
+    }
+  }
+
+  /// Downloads the post's clip (with auth) and saves it to the device gallery. Gal.putVideo
+  /// takes a file path rather than bytes, so the clip is staged in a temp file first.
+  Future<void> _saveVideo(int mediaId) async {
+    try {
+      final bytes = await ref.read(contentApiProvider(widget.post.groupId)).downloadMedia(mediaId);
+      final file = File('${Directory.systemTemp.path}/checkin_clip_$mediaId.mp4');
+      await file.writeAsBytes(bytes);
+      await Gal.putVideo(file.path);
+      if (mounted) _snack('Saved to your photos');
+    } on GalException catch (_) {
+      if (mounted) _snack('Allow photo access to save this');
+    } catch (_) {
+      if (mounted) _snack('Could not save the video');
     }
   }
 
@@ -484,11 +501,12 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                     onSelected: (v) {
                       if (v == 'delete') _confirmDelete();
                       if (v == 'save') _savePhoto(p.imageMedia.first.id);
+                      if (v == 'saveVideo') _saveVideo(p.videoMedia.first.id);
                       if (v == 'report') _reportPost();
                     },
                     itemBuilder: (_) => [
-                      // Only a real image: Gal writes the bytes as they arrive, so saving a
-                      // clip would put a file in the gallery that will not open.
+                      // A photo saves as-is; a clip goes down its own putVideo path (it is
+                      // staged to a temp file first).
                       if (p.imageMedia.isNotEmpty)
                         const PopupMenuItem(
                           value: 'save',
@@ -497,6 +515,17 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                               Icon(Icons.download_outlined, size: 19, color: _fgPrimary),
                               SizedBox(width: 10),
                               Text('Save photo', style: TextStyle(color: _fgPrimary)),
+                            ],
+                          ),
+                        ),
+                      if (p.videoMedia.isNotEmpty)
+                        const PopupMenuItem(
+                          value: 'saveVideo',
+                          child: Row(
+                            children: [
+                              Icon(Icons.download_outlined, size: 19, color: _fgPrimary),
+                              SizedBox(width: 10),
+                              Text('Save video', style: TextStyle(color: _fgPrimary)),
                             ],
                           ),
                         ),
@@ -582,10 +611,13 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                 ),
               ],
             ),
-          // Cross-post: name the groups this single card stands in for.
+          // Cross-post: name the groups this single card stands in for. Under media the
+          // label needs its own breathing room; under bare text the body's bottom padding
+          // already provides it, and stacking both left the label floating in dead space
+          // between the text and the actions row.
           if (_sharedToLabel() case final label?)
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+              padding: EdgeInsets.fromLTRB(14, p.media.isEmpty ? 0 : 10, 14, 0),
               child: Row(
                 children: [
                   const Icon(Icons.group_outlined, size: 13, color: _fgMuted),

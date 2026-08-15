@@ -259,10 +259,16 @@ class Post {
   late final List<PostMedia> media = _media.isNotEmpty ? _media : PostMedia.images(images);
 
   /// The attachments that are images: the ones a plain image widget can render and the
-  /// device gallery can store. A clip is neither.
+  /// device gallery can store as photos. A clip is neither.
   List<PostMedia> get imageMedia => [
         for (final m in media)
           if (m.isImage) m
+      ];
+
+  /// The attachments that are clips: saved to the gallery as videos, not photos.
+  List<PostMedia> get videoMedia => [
+        for (final m in media)
+          if (m.isVideo) m
       ];
 
   /// Ids of the tagged members, for the feed's "include posts they're in" filter.

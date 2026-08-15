@@ -14,6 +14,11 @@ class VideoPlugin: NSObject, FlutterPlugin {
   }
 
   func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    // The audio-session call carries no path, so it is handled before the path guard.
+    if call.method == "respectSilentSwitch" {
+      respectSilentSwitch(result: result)
+      return
+    }
     guard let args = call.arguments as? [String: Any],
       let path = args["path"] as? String
     else {
@@ -29,6 +34,21 @@ class VideoPlugin: NSObject, FlutterPlugin {
       location(path: path, result: result)
     default:
       result(FlutterMethodNotImplemented)
+    }
+  }
+
+  // Sets the shared audio session to the ambient category, which honors the Ring/Silent
+  // switch: a clip plays sound when the ringer is on and stays silent otherwise. This
+  // deliberately overrides video_player, which upgrades the session to .playback (audio even
+  // in silent mode) on its first init and never downgrades - so the change is re-asserted
+  // from Dart once a clip is ready to play. Device-verified: the simulator does not model the
+  // hardware silent switch.
+  private func respectSilentSwitch(result: @escaping FlutterResult) {
+    do {
+      try AVAudioSession.sharedInstance().setCategory(.ambient)
+      result(nil)
+    } catch {
+      result(FlutterError(code: "audio_session", message: error.localizedDescription, details: nil))
     }
   }
 

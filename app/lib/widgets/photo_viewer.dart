@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:video_player/video_player.dart';
 
 import '../api/models.dart';
+import '../media/video_native.dart';
 import '../state/app_state.dart';
 import 'media_frame.dart';
 
@@ -355,6 +358,10 @@ class _VideoPageState extends ConsumerState<_VideoPage> with WidgetsBindingObser
       if (!mounted || _controller != controller) return;
       controller.setLooping(true);
       controller.setVolume(_muted ? 0 : 1);
+      // Make the clip's audio follow the Ring/Silent switch (ambient category) rather than
+      // playing through silent mode, which is video_player's forced default. Re-asserted here
+      // because that default is set on the plugin's first init and never downgrades.
+      unawaited(const VideoNative().respectSilentSwitch());
       if (widget.active) controller.play();
       setState(() => _initialized = true);
     }).catchError((_) {
