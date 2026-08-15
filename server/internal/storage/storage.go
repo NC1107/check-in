@@ -76,21 +76,19 @@ func (s *Store) SaveMedia(r io.Reader, maxImageBytes, maxVideoBytes int64) (Save
 	if err != nil {
 		return SavedMedia{}, err
 	}
+	kind, limit := "image", maxImageBytes
+	if isMP4(data) {
+		kind, limit = "video", maxVideoBytes
+	}
+	if int64(len(data)) > limit {
+		return SavedMedia{}, fmt.Errorf("%s exceeds %d bytes", kind, limit)
+	}
 	switch {
 	case isMP4(data):
-		if int64(len(data)) > maxVideoBytes {
-			return SavedMedia{}, fmt.Errorf("video exceeds %d bytes", maxVideoBytes)
-		}
 		return s.saveVideo(data)
 	case isGIF(data):
-		if int64(len(data)) > maxImageBytes {
-			return SavedMedia{}, fmt.Errorf("image exceeds %d bytes", maxImageBytes)
-		}
 		return s.saveGIF(data)
 	default:
-		if int64(len(data)) > maxImageBytes {
-			return SavedMedia{}, fmt.Errorf("image exceeds %d bytes", maxImageBytes)
-		}
 		return s.saveImage(data)
 	}
 }
