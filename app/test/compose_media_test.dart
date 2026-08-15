@@ -53,29 +53,42 @@ void main() {
       expect(clipNeedsTrim(10001), isTrue);
     });
 
-    test('the trim window is clamped to at most ten seconds, inside the clip', () {
-      // A start at zero on a long clip yields exactly the 10s cap, not the whole clip - the
-      // cap is min(start + 10s, duration). This is the line a mutation would drop: without
-      // it the window would be the full 30s and a >10s clip would sail through.
-      final full = clampTrimWindow(0, 30000);
-      expect(full.startMs, 0);
-      expect(full.endMs, 10000);
+    test('a selection under the cap is handed back unchanged', () {
+      // Two independent handles: a 3s pick stays 3s, it is not stretched to a fixed width.
+      final three = clampTrimWindow(0, 3000, 30000);
+      expect(three.startMs, 0);
+      expect(three.endMs, 3000);
+    });
 
-      // A window near the end runs only to the clip's end, never past it.
-      final tail = clampTrimWindow(27000, 30000);
-      expect(tail.startMs, 27000);
-      expect(tail.endMs, 30000);
+    test('an over-cap span is trimmed by moving the dragged edge, not the anchor', () {
+      // Dragging the end past the cap pulls the END back to start + 10s; the start is left
+      // where it is. This is the line a mutation would drop: without the 10s cap the window
+      // would be the full 11s and a >10s clip would sail through.
+      final draggedEnd = clampTrimWindow(0, 11000, 30000, moved: TrimEdge.end);
+      expect(draggedEnd.startMs, 0);
+      expect(draggedEnd.endMs, 10000);
 
-      // A short clip keeps its whole length.
-      final short = clampTrimWindow(0, 4000);
-      expect(short.endMs, 4000);
+      // Dragging the start of the same 11s span instead moves the START forward to end - 10s;
+      // the end is the anchor and does not move. So the opposite handle is never dragged along.
+      final draggedStart = clampTrimWindow(0, 11000, 30000, moved: TrimEdge.start);
+      expect(draggedStart.startMs, 1000);
+      expect(draggedStart.endMs, 11000);
+    });
 
-      // A negative or past-the-end start is pulled back inside [0, duration].
-      expect(clampTrimWindow(-500, 30000).startMs, 0);
-      final past = clampTrimWindow(40000, 30000);
-      expect(past.startMs, lessThanOrEqualTo(30000));
+    test('a span under the minimum is bumped to one second', () {
+      // Squeezing the end almost onto the start holds the window open at the 1s minimum by
+      // moving the dragged (end) edge.
+      final tiny = clampTrimWindow(5000, 5300, 30000, moved: TrimEdge.end);
+      expect(tiny.startMs, 5000);
+      expect(tiny.endMs, 6000);
+    });
+
+    test('out-of-range edges clamp back inside the clip', () {
+      final past = clampTrimWindow(-500, 40000, 30000);
+      expect(past.startMs, 0);
+      expect(past.endMs, 10000); // capped at start + 10s, and inside [0, 30000]
       expect(past.endMs, lessThanOrEqualTo(30000));
-      expect(past.endMs, greaterThanOrEqualTo(past.startMs));
+      expect(past.endMs - past.startMs, lessThanOrEqualTo(10000));
     });
   });
 

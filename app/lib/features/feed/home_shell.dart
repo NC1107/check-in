@@ -45,6 +45,15 @@ bool isVideoPick(String path) =>
 /// higher, for encoder slop); this is the user-facing window the trim sheet enforces.
 const kMaxClipMs = 10000;
 
+/// The shortest clip the trim sheet will hand back. A handle dragged closer than this is held
+/// here rather than allowed to collapse the window to nothing.
+const kMinClipMs = 1000;
+
+/// Which handle the user is dragging. When a span constraint is hit the clamp resolves it by
+/// moving the dragged edge, never the opposite one, so a handle can never drag its partner
+/// along with it.
+enum TrimEdge { start, end }
+
 /// Which upload path a picked file takes. A clip is encoded and gets a poster; an animated
 /// gif is uploaded raw so it keeps moving; everything else is a photo re-encoded to jpeg.
 /// One selector so no call site can disagree about what a given file is.
@@ -58,15 +67,31 @@ UploadKind uploadKindFor(String path) {
 /// Whether a clip picked at [durationMs] is over the cap and must be trimmed first.
 bool clipNeedsTrim(int durationMs) => durationMs > kMaxClipMs;
 
-/// The <=[maxMs] window the trim sheet hands back, made safe: the start never goes negative
-/// or past the clip, and the end is min(start + maxMs, duration) so the window can never
-/// exceed the cap or run off the end. Dropping that cap is exactly what would let a clip
-/// longer than the limit through.
-({int startMs, int endMs}) clampTrimWindow(int startMs, int durationMs, {int maxMs = kMaxClipMs}) {
+/// Clamps an explicit (start, end) selection to a legal trim window: both edges inside
+/// [0, duration], the span between them at least [minMs] and at most [maxMs]. [moved] names
+/// the handle the user just dragged, so a violated span is fixed by moving that edge and the
+/// opposite (anchor) edge is left where it is. Dropping the [maxMs] cap is exactly what would
+/// let a clip longer than the limit through.
+({int startMs, int endMs}) clampTrimWindow(
+  int startMs,
+  int endMs,
+  int durationMs, {
+  int maxMs = kMaxClipMs,
+  int minMs = kMinClipMs,
+  TrimEdge moved = TrimEdge.end,
+}) {
   final duration = durationMs < 0 ? 0 : durationMs;
-  final start = startMs < 0 ? 0 : (startMs > duration ? duration : startMs);
-  final uncapped = start + maxMs;
-  final end = uncapped < duration ? uncapped : duration;
+  // A clip shorter than the minimum span can only ever give back its whole self.
+  if (duration <= minMs) return (startMs: 0, endMs: duration);
+  if (moved == TrimEdge.start) {
+    // The end is the anchor; move the start to satisfy the span against it.
+    final end = endMs.clamp(minMs, duration);
+    final start = startMs.clamp((end - maxMs).clamp(0, duration), end - minMs);
+    return (startMs: start, endMs: end);
+  }
+  // The start is the anchor; move the end.
+  final start = startMs.clamp(0, duration - minMs);
+  final end = endMs.clamp(start + minMs, (start + maxMs).clamp(0, duration));
   return (startMs: start, endMs: end);
 }
 
@@ -353,6 +378,9 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   int _clipDurationMs = 0;
   String? _clipEncodedPath;
   List<int>? _clipPoster;
+  // A local poster frame for the compose tile, so the picked clip shows its own still rather
+  // than a bare play badge on a black box before it is posted.
+  Uint8List? _clipPosterPreview;
   bool _processingClip = false;
   // Members the author tags as appearing in the post (id + name + photo for chip display).
   final List<({int id, String name, int? photoId})> _tagged = [];
@@ -410,19 +438,89 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     });
   }
 
+  /// Whether the current selection may take a clip: at least one target group is chosen and
+  /// every one of them can store video. Recomputed on demand so the pick entry points agree
+  /// with the button gating in build.
+  bool get _clipAllowed => clipComposeAllowed([
+        for (final g in ref.read(multiSessionProvider).signedIn)
+          if (_targets.contains(g.id)) g
+      ]);
+
   // No imageQuality on picks: that re-encodes and strips EXIF, which we need to read the
-  // photo's GPS. The server downscales + strips metadata on its end.
+  // photo's GPS. The server downscales + strips metadata on its end. One picker returns both
+  // photos and videos; each is routed to its own flow, never mixed into a single post.
   Future<void> _pickFromGallery() async {
-    final picked = await ImagePicker().pickMultiImage();
+    final picked = await ImagePicker().pickMultipleMedia();
     if (picked.isEmpty || !mounted) return;
+    final photos = <XFile>[];
+    XFile? video;
+    for (final x in picked) {
+      if (isVideoPick(x.path)) {
+        video ??= x;
+      } else {
+        photos.add(x);
+      }
+    }
+    // A post is one clip OR a set of photos, never both. When the pick mixes them (or photos
+    // are already attached), keep the photos and skip the clip with a clear note.
+    if (video != null && (photos.isNotEmpty || _images.isNotEmpty)) {
+      _toast('Add photos or one video, not both.');
+      video = null;
+    }
+    if (video != null && !_clipAllowed) {
+      _toast('The selected group can\'t receive clips yet.');
+      video = null;
+    }
+    if (video != null) {
+      await _handlePickedClip(video.path);
+      return;
+    }
+    if (photos.isEmpty) return;
     setState(() {
-      for (final x in picked) {
-        // The image picker can still hand back a clip; it belongs to the Video button's
-        // flow, not the photo strip, so skip it here rather than post it as a still.
-        if (!isVideoPick(x.path) && _images.length < _maxImages) _images.add(x);
+      for (final x in photos) {
+        if (_images.length < _maxImages) _images.add(x);
       }
     });
     await _resolveLocation();
+  }
+
+  /// The Camera button's two-way chooser: a photo or a clip, since image_picker has no single
+  /// camera call that offers both. The clip option only appears where a clip could be stored
+  /// and no photos are already attached.
+  Future<void> _pickFromCamera() async {
+    final wantVideo = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: _bgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            ListTile(
+              leading: Icon(Icons.photo_camera_outlined, color: context.accent),
+              title: const Text('Take Photo', style: TextStyle(color: _fgPrimary)),
+              onTap: () => Navigator.of(context).pop(false),
+            ),
+            if (_clipAllowed && _images.isEmpty)
+              ListTile(
+                leading: Icon(Icons.videocam_outlined, color: context.accent),
+                title: const Text('Record Video', style: TextStyle(color: _fgPrimary)),
+                onTap: () => Navigator.of(context).pop(true),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (wantVideo == null || !mounted) return;
+    if (wantVideo) {
+      await _pickClip(ImageSource.camera);
+    } else {
+      await _takePhoto();
+    }
   }
 
   Future<void> _takePhoto() async {
@@ -435,25 +533,31 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     await _resolveLocation();
   }
 
-  /// Picks or records a clip, then runs it through the compose pipeline: read its duration,
-  /// trim it down to the cap if it is over, read its recording location (before the encode
-  /// drops the metadata), and hold it for upload. A clip is exclusive with photos.
+  /// Picks or records a clip from [source], then hands it to the compose pipeline.
   Future<void> _pickClip(ImageSource source) async {
     final x = await ImagePicker().pickVideo(source: source);
     if (x == null || !mounted) return;
+    await _handlePickedClip(x.path);
+  }
+
+  /// Runs an already-picked clip through the compose pipeline: read its duration, trim it
+  /// down to the cap if it is over, read its recording location (before the encode drops the
+  /// metadata), grab a local poster for the tile, and hold it for upload. A clip is exclusive
+  /// with photos.
+  Future<void> _handlePickedClip(String pickedPath) async {
     setState(() => _processingClip = true);
     try {
-      final info = await VideoCompress.getMediaInfo(x.path);
+      final info = await VideoCompress.getMediaInfo(pickedPath);
       final durationMs = (info.duration ?? 0).round();
-      var path = x.path;
+      var path = pickedPath;
       var dur = durationMs;
       if (clipNeedsTrim(durationMs)) {
-        final window = await _openTrimSheet(x.path, durationMs);
+        final window = await _openTrimSheet(pickedPath, durationMs);
         if (window == null) {
           if (mounted) setState(() => _processingClip = false);
           return; // trim sheet cancelled
         }
-        path = await ref.read(videoNativeProvider).trim(x.path, window.startMs, window.endMs);
+        path = await ref.read(videoNativeProvider).trim(pickedPath, window.startMs, window.endMs);
         dur = window.endMs - window.startMs;
       }
       if (!mounted) return;
@@ -462,11 +566,13 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
         _clipDurationMs = dur;
         _clipEncodedPath = null;
         _clipPoster = null;
+        _clipPosterPreview = null;
         _images.clear(); // a clip replaces any photos: a post is one or the other
         _processingClip = false;
       });
       // GPS must be read from the trimmed source, before the size encode strips it.
       await _resolveClipLocation(path);
+      await _loadClipPosterPreview(path);
     } catch (_) {
       if (mounted) {
         setState(() {
@@ -474,6 +580,17 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
           _error = "Couldn't prepare that clip. Try another.";
         });
       }
+    }
+  }
+
+  /// Grabs a local poster frame for the compose tile. Best-effort: a clip with no preview
+  /// still shows the play badge and posts fine.
+  Future<void> _loadClipPosterPreview(String path) async {
+    try {
+      final bytes = await VideoCompress.getByteThumbnail(path, quality: 60);
+      if (mounted && bytes != null) setState(() => _clipPosterPreview = bytes);
+    } catch (_) {
+      // No decodable frame: the tile keeps its play-badge-on-dark fallback.
     }
   }
 
@@ -804,10 +921,17 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
       for (final g in session.signedIn)
         if (_posted.contains(g.id)) g.displayName
     ].join(', ');
+    // Never surface a raw server string for a clip failure: a message like "video is longer
+    // than 12 seconds" is internal and, with the server's mvhd fix, a <=10s clip should not
+    // reach that backstop anyway. Show a friendly line instead. Photos keep the server's
+    // wording, which is already member-facing.
+    final firstShareError = _clip != null
+        ? "Couldn't post that clip. Try a shorter one."
+        : (failMsg ?? "Couldn't share to $failedNames. Check your connection and retry.");
     setState(() {
       _busy = false;
       _error = _posted.isEmpty
-          ? (failMsg ?? "Couldn't share to $failedNames. Check your connection and retry.")
+          ? firstShareError
           : "Posted to $postedNames. Couldn't reach $failedNames - tap Retry to try again.";
     });
   }
@@ -851,7 +975,9 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     if (clip == null || _clipEncodedPath != null) return;
     final info = await VideoCompress.compressVideo(
       clip.path,
-      quality: VideoQuality.MediumQuality,
+      // MediumQuality looked muddy on device; a fixed 720p is clean and predictable and a
+      // 10s clip stays comfortably under the 25MB cap. Tunable after device review.
+      quality: VideoQuality.Res1280x720Quality,
     );
     _clipEncodedPath = info?.path ?? clip.path;
     try {
@@ -871,292 +997,276 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
         _targets.isNotEmpty;
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     final retrying = _posted.isNotEmpty;
-    // A clip may only go to groups whose server stores video. Offer the clip buttons only
-    // when every selected target supports it, so a clip is never composed for a group that
-    // would reject it.
-    final clipAllowed = clipComposeAllowed([
-      for (final g in session.signedIn)
-        if (_targets.contains(g.id)) g
-    ]);
+    // Give the sheet a comfortable working height (roughly half the screen) in every state so
+    // it never opens as a cramped strip. The keyboard inset is subtracted from the minimum so
+    // the content area plus the keyboard-avoidance padding still sum to about the same height,
+    // rather than overflowing when the composer is focused.
+    final minSheetHeight =
+        (MediaQuery.sizeOf(context).height * 0.55 - bottomInset).clamp(0.0, double.infinity);
 
     return Padding(
       padding: EdgeInsets.only(bottom: bottomInset),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Drag handle
-          Container(
-            width: 38,
-            height: 4,
-            margin: const EdgeInsets.only(top: 10, bottom: 14),
-            decoration: BoxDecoration(
-              color: _border,
-              borderRadius: BorderRadius.circular(9999),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(minHeight: minSheetHeight),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Drag handle
+            Container(
+              width: 38,
+              height: 4,
+              margin: const EdgeInsets.only(top: 10, bottom: 14),
+              decoration: BoxDecoration(
+                color: _border,
+                borderRadius: BorderRadius.circular(9999),
+              ),
             ),
-          ),
-          // Title row
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  style: TextButton.styleFrom(
-                    foregroundColor: _fgSecondary,
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                  ),
-                  child: const Text('Cancel',
-                      style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
-                ),
-                const Expanded(
-                  child: Text(
-                    'New check-in',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 15),
-                  ),
-                ),
-                ValueListenableBuilder<TextEditingValue>(
-                  valueListenable: _bodyCtrl,
-                  builder: (_, __, ___) => TextButton(
-                    onPressed: hasContent && !_busy ? _submit : null,
+            // Title row
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
                     style: TextButton.styleFrom(
-                      backgroundColor: hasContent ? context.accent : _bgSurfaceHover,
-                      foregroundColor: hasContent ? context.onAccent : _fgMuted,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9999)),
-                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      foregroundColor: _fgSecondary,
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
                     ),
-                    child: _busy
-                        ? SizedBox(
-                            width: 16,
-                            height: 16,
-                            child:
-                                CircularProgressIndicator(strokeWidth: 2, color: context.onAccent))
-                        : Text(
-                            // Say how many groups this goes to, so cross-posting is
-                            // never a surprise.
-                            retrying
-                                ? 'Retry'
-                                : (_targets.length > 1 ? 'Share (${_targets.length})' : 'Share'),
-                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                    child: const Text('Cancel',
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
                   ),
-                ),
-              ],
-            ),
-          ),
-          // Cross-post targets: one pill per connected group, under an explicit POST TO
-          // label so "where is this going" is a first-class choice, not an afterthought.
-          // Hidden with a single group (nothing to choose). Groups already posted to
-          // (partial-failure retry) show a check and lock.
-          if (session.signedIn.length > 1)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      const Text('POST TO',
-                          style: TextStyle(
-                              color: _fgMuted,
-                              fontWeight: FontWeight.w600,
-                              fontSize: 12,
-                              letterSpacing: 0.4)),
-                      if (_targets.isEmpty) ...[
-                        const SizedBox(width: 8),
-                        const Text('pick at least one group',
-                            style: TextStyle(color: _fgMuted, fontSize: 12)),
-                      ],
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [for (final g in session.signedIn) _targetChip(g)],
-                  ),
-                ],
-              ),
-            ),
-          const SizedBox(height: 14),
-          // Image previews - a removable thumbnail strip.
-          if (_images.isNotEmpty)
-            SizedBox(
-              height: 100,
-              child: ListView.separated(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemCount: _images.length,
-                separatorBuilder: (_, __) => const SizedBox(width: 8),
-                itemBuilder: (_, i) => _thumb(i),
-              ),
-            ),
-          // Clip preview - one removable tile (a clip is exclusive with photos).
-          if (_clip != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Align(alignment: Alignment.centerLeft, child: _clipTile()),
-            ),
-          // Detected location (read from the photos or the clip, removable before posting)
-          if ((_images.isNotEmpty || _clip != null) && (_resolvingLocation || _location != null))
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-              child: Row(
-                children: [
-                  Icon(Icons.place_outlined, size: 16, color: context.accent),
-                  const SizedBox(width: 6),
-                  Expanded(
+                  const Expanded(
                     child: Text(
-                      _resolvingLocation ? 'Checking location…' : _location!,
-                      style: const TextStyle(color: _fgSecondary, fontSize: 13),
+                      'New check-in',
+                      textAlign: TextAlign.center,
+                      style:
+                          TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 15),
                     ),
                   ),
-                  if (_location != null && !_resolvingLocation)
-                    GestureDetector(
-                      onTap: () => setState(() {
-                        _location = null;
-                        _locationSource = null;
-                        _locationCleared = true;
-                      }),
-                      behavior: HitTestBehavior.opaque,
-                      child: const Padding(
-                        padding: EdgeInsets.all(2),
-                        child: Icon(Icons.close, size: 16, color: _fgMuted),
+                  ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: _bodyCtrl,
+                    builder: (_, __, ___) => TextButton(
+                      onPressed: hasContent && !_busy ? _submit : null,
+                      style: TextButton.styleFrom(
+                        backgroundColor: hasContent ? context.accent : _bgSurfaceHover,
+                        foregroundColor: hasContent ? context.onAccent : _fgMuted,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9999)),
+                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
+                      child: _busy
+                          ? SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: context.onAccent))
+                          : Text(
+                              // Say how many groups this goes to, so cross-posting is
+                              // never a surprise.
+                              retrying
+                                  ? 'Retry'
+                                  : (_targets.length > 1 ? 'Share (${_targets.length})' : 'Share'),
+                              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
                     ),
+                  ),
                 ],
               ),
             ),
-          // Text input
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (me != null) ...[
-                  UserAvatar(name: me.name, size: 38, mediaId: me.profileMediaId, colorSeed: me.id),
-                  const SizedBox(width: 12),
-                ],
-                Expanded(
-                  child: TextField(
-                    controller: _bodyCtrl,
-                    onChanged: (_) => setState(() {}),
-                    minLines: 3,
-                    maxLines: 6,
-                    style: const TextStyle(color: _fgPrimary, fontSize: 16, height: 1.5),
-                    decoration: const InputDecoration(
-                      hintText: "What's going on?",
-                      hintStyle: TextStyle(color: _fgMuted),
-                      border: InputBorder.none,
-                      contentPadding: EdgeInsets.only(top: 6),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Tag people - who's in this post (drives the feed's "include posts they're in").
-          // Member ids are per-server, so tagging needs exactly one target group; when it
-          // isn't available the picker is simply hidden.
-          if (session.signedIn.length <= 1 || _targets.length == 1)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-              child: InkWell(
-                onTap: _pickPeople,
-                borderRadius: BorderRadius.circular(10),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Row(
-                    children: [
-                      Icon(Icons.person_add_alt_1_outlined, size: 18, color: context.accent),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: _tagged.isEmpty
-                            ? const Text('Tag people',
-                                style: TextStyle(color: _fgSecondary, fontSize: 14))
-                            : Text(
-                                [for (final t in _tagged) t.name].join(', '),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: _fgPrimary, fontSize: 14),
-                              ),
-                      ),
-                      if (_tagged.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(right: 4),
-                          child: Text('${_tagged.length}',
-                              style: const TextStyle(color: _fgMuted, fontSize: 13)),
-                        ),
-                      const Icon(Icons.chevron_right, size: 18, color: _fgMuted),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(_error!, style: const TextStyle(color: kLike, fontSize: 13)),
-            ),
-          // Divider + media buttons (photos, camera, and - where the server takes it - a clip)
-          const Divider(color: _border, height: 24),
-          if (_processingClip)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: context.accent),
-                  ),
-                  const SizedBox(width: 10),
-                  const Text('Preparing clip…',
-                      style: TextStyle(color: _fgSecondary, fontSize: 13)),
-                ],
-              ),
-            )
-          // A clip is the whole post; remove it (via its tile) to switch back to photos.
-          else if (_clip == null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _mediaButton(Icons.image_outlined,
-                            _images.isEmpty ? 'Photos' : 'Add more', _pickFromGallery),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: _mediaButton(Icons.photo_camera_outlined, 'Camera', _takePhoto),
-                      ),
-                    ],
-                  ),
-                  // Clips only where the selected group(s) can store them, and only as the
-                  // sole attachment (no mixing with the photo strip).
-                  if (clipAllowed && _images.isEmpty) ...[
-                    const SizedBox(height: 10),
+            // Cross-post targets: one pill per connected group, under an explicit POST TO
+            // label so "where is this going" is a first-class choice, not an afterthought.
+            // Hidden with a single group (nothing to choose). Groups already posted to
+            // (partial-failure retry) show a check and lock.
+            if (session.signedIn.length > 1)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Row(
                       children: [
-                        Expanded(
-                          child: _mediaButton(
-                              Icons.movie_outlined, 'Video', () => _pickClip(ImageSource.gallery)),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: _mediaButton(Icons.videocam_outlined, 'Record',
-                              () => _pickClip(ImageSource.camera)),
-                        ),
+                        const Text('POST TO',
+                            style: TextStyle(
+                                color: _fgMuted,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 12,
+                                letterSpacing: 0.4)),
+                        if (_targets.isEmpty) ...[
+                          const SizedBox(width: 8),
+                          const Text('pick at least one group',
+                              style: TextStyle(color: _fgMuted, fontSize: 12)),
+                        ],
                       ],
                     ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [for (final g in session.signedIn) _targetChip(g)],
+                    ),
                   ],
+                ),
+              ),
+            const SizedBox(height: 14),
+            // Image previews - a removable thumbnail strip.
+            if (_images.isNotEmpty)
+              SizedBox(
+                height: 100,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  itemCount: _images.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (_, i) => _thumb(i),
+                ),
+              ),
+            // Clip preview - one removable tile (a clip is exclusive with photos).
+            if (_clip != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Align(alignment: Alignment.centerLeft, child: _clipTile()),
+              ),
+            // Detected location (read from the photos or the clip, removable before posting)
+            if ((_images.isNotEmpty || _clip != null) && (_resolvingLocation || _location != null))
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                child: Row(
+                  children: [
+                    Icon(Icons.place_outlined, size: 16, color: context.accent),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        _resolvingLocation ? 'Checking location…' : _location!,
+                        style: const TextStyle(color: _fgSecondary, fontSize: 13),
+                      ),
+                    ),
+                    if (_location != null && !_resolvingLocation)
+                      GestureDetector(
+                        onTap: () => setState(() {
+                          _location = null;
+                          _locationSource = null;
+                          _locationCleared = true;
+                        }),
+                        behavior: HitTestBehavior.opaque,
+                        child: const Padding(
+                          padding: EdgeInsets.all(2),
+                          child: Icon(Icons.close, size: 16, color: _fgMuted),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            // Text input
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (me != null) ...[
+                    UserAvatar(
+                        name: me.name, size: 38, mediaId: me.profileMediaId, colorSeed: me.id),
+                    const SizedBox(width: 12),
+                  ],
+                  Expanded(
+                    child: TextField(
+                      controller: _bodyCtrl,
+                      onChanged: (_) => setState(() {}),
+                      minLines: 3,
+                      maxLines: 6,
+                      style: const TextStyle(color: _fgPrimary, fontSize: 16, height: 1.5),
+                      decoration: const InputDecoration(
+                        hintText: "What's going on?",
+                        hintStyle: TextStyle(color: _fgMuted),
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.only(top: 6),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
-        ],
+            // Tag people - who's in this post (drives the feed's "include posts they're in").
+            // Member ids are per-server, so tagging needs exactly one target group; when it
+            // isn't available the picker is simply hidden.
+            if (session.signedIn.length <= 1 || _targets.length == 1)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                child: InkWell(
+                  onTap: _pickPeople,
+                  borderRadius: BorderRadius.circular(10),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Row(
+                      children: [
+                        Icon(Icons.person_add_alt_1_outlined, size: 18, color: context.accent),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: _tagged.isEmpty
+                              ? const Text('Tag people',
+                                  style: TextStyle(color: _fgSecondary, fontSize: 14))
+                              : Text(
+                                  [for (final t in _tagged) t.name].join(', '),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: _fgPrimary, fontSize: 14),
+                                ),
+                        ),
+                        if (_tagged.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: Text('${_tagged.length}',
+                                style: const TextStyle(color: _fgMuted, fontSize: 13)),
+                          ),
+                        const Icon(Icons.chevron_right, size: 18, color: _fgMuted),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Text(_error!, style: const TextStyle(color: kLike, fontSize: 13)),
+              ),
+            // Divider + media buttons: one Gallery (photos and videos) and one Camera (photo or
+            // clip via a chooser). The pick entry points handle the one-clip-or-photos rule and
+            // the video-capable-group gating.
+            const Divider(color: _border, height: 24),
+            if (_processingClip)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: context.accent),
+                    ),
+                    const SizedBox(width: 10),
+                    const Text('Preparing clip…',
+                        style: TextStyle(color: _fgSecondary, fontSize: 13)),
+                  ],
+                ),
+              )
+            // A clip is the whole post; remove it (via its tile) to switch back to photos.
+            else if (_clip == null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _mediaButton(Icons.photo_library_outlined,
+                          _images.isEmpty ? 'Gallery' : 'Add more', _pickFromGallery),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _mediaButton(Icons.photo_camera_outlined, 'Camera', _pickFromCamera),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1167,15 +1277,24 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     final label = PostMedia(id: 0, mime: 'video/mp4', durationMs: _clipDurationMs).durationLabel;
     return Stack(
       children: [
-        Container(
-          width: 140,
-          height: 100,
-          decoration: BoxDecoration(
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            width: 140,
+            height: 100,
             color: const Color(0xFF14161A),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: const Center(
-            child: Icon(Icons.play_arrow_rounded, color: Colors.white, size: 34),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                // The clip's own poster frame, once decoded, sits behind the play badge so the
+                // tile is not a bare black box while composing.
+                if (_clipPosterPreview != null)
+                  Image.memory(_clipPosterPreview!, fit: BoxFit.cover),
+                const Center(
+                  child: Icon(Icons.play_arrow_rounded, color: Colors.white, size: 34),
+                ),
+              ],
+            ),
           ),
         ),
         if (label.isNotEmpty)
@@ -1204,6 +1323,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                 _clip = null;
                 _clipEncodedPath = null;
                 _clipPoster = null;
+                _clipPosterPreview = null;
                 _clipDurationMs = 0;
                 _location = null;
                 _locationSource = null;
@@ -1387,11 +1507,13 @@ class _TagPeopleSheetState extends State<_TagPeopleSheet> {
   }
 }
 
-/// Trims an over-length clip down to a <=10s window before it is posted. A filmstrip of
-/// frames spans the whole clip; two handles pick the window (slide the left/whole to move
-/// the start, drag the right to shorten the tail), and a preview shows the selected start
-/// frame. The window is clamped through [clampTrimWindow] so it can never exceed the cap or
-/// run off the clip. Returns (startMs, endMs) on Trim, or null on cancel.
+/// Trims a clip down to a <=10s window before it is posted. A filmstrip of frames spans the
+/// whole clip; two independent handles pick the window - the left sets the start, the right
+/// sets the end, each freely draggable - so any span from 1s up to the 10s cap can be chosen.
+/// The preview plays the selected [start, end] range so the pick can be reviewed before Trim.
+/// Every drag is clamped through [clampTrimWindow], which moves only the dragged edge and can
+/// never let the window exceed the cap or run off the clip. Returns (startMs, endMs) on Trim,
+/// or null on cancel.
 class _TrimSheet extends StatefulWidget {
   const _TrimSheet({required this.path, required this.durationMs});
 
@@ -1409,19 +1531,27 @@ class _TrimSheetState extends State<_TrimSheet> {
   final List<Uint8List?> _thumbs = List.filled(_frames, null);
   VideoPlayerController? _preview;
   bool _previewReady = false;
+  bool _playing = false;
+  // The preview starts muted so opening the sheet is never a jump-scare; the toggle turns
+  // sound on to review audio before posting.
+  bool _muted = true;
 
   @override
   void initState() {
     super.initState();
-    final window = clampTrimWindow(0, widget.durationMs);
-    _startMs = window.startMs;
-    _endMs = window.endMs;
+    // Two independent edges, seeded with the widest legal window (the head of the clip up to
+    // the cap). The handles move each edge on its own from here.
+    _startMs = 0;
+    _endMs = widget.durationMs < kMaxClipMs ? widget.durationMs : kMaxClipMs;
+    // Thumbs load in the background; the handles are interactive immediately against the
+    // placeholder strip, so a long clip never blocks dragging while frames decode.
     _loadThumbs();
     _initPreview();
   }
 
   @override
   void dispose() {
+    _preview?.removeListener(_watchPreview);
     _preview?.dispose();
     super.dispose();
   }
@@ -1444,12 +1574,45 @@ class _TrimSheetState extends State<_TrimSheet> {
     _preview = controller;
     controller.initialize().then((_) {
       if (!mounted) return;
-      controller.setVolume(0);
+      controller.setVolume(_muted ? 0 : 1);
       controller.seekTo(Duration(milliseconds: _startMs));
+      controller.addListener(_watchPreview);
       setState(() => _previewReady = true);
     }).catchError((_) {
       // No platform player (test/unsupported): the strip alone drives the selection.
     });
+  }
+
+  // Keeps preview playback inside the chosen window: loop back to the start once it reaches
+  // the selected end, and mirror the play/pause state into the button.
+  void _watchPreview() {
+    final controller = _preview;
+    if (controller == null || !_previewReady) return;
+    final playing = controller.value.isPlaying;
+    if (playing && controller.value.position.inMilliseconds >= _endMs) {
+      controller.seekTo(Duration(milliseconds: _startMs));
+    }
+    if (playing != _playing && mounted) setState(() => _playing = playing);
+  }
+
+  void _togglePlay() {
+    final controller = _preview;
+    if (controller == null || !_previewReady) return;
+    if (controller.value.isPlaying) {
+      controller.pause();
+      return;
+    }
+    final pos = controller.value.position.inMilliseconds;
+    if (pos < _startMs || pos >= _endMs) {
+      controller.seekTo(Duration(milliseconds: _startMs));
+    }
+    controller.setVolume(_muted ? 0 : 1);
+    controller.play();
+  }
+
+  void _toggleMute() {
+    setState(() => _muted = !_muted);
+    _preview?.setVolume(_muted ? 0 : 1);
   }
 
   void _seekPreview(int ms) {
@@ -1457,9 +1620,10 @@ class _TrimSheetState extends State<_TrimSheet> {
     if (controller != null && _previewReady) controller.seekTo(Duration(milliseconds: ms));
   }
 
-  // The whole window slides with the start; the end follows to keep a full <=10s span.
+  // The left handle moves only the start; the end stays put (clampTrimWindow moves the start
+  // edge to honor the 1s..10s span against the fixed end).
   void _setStart(int ms) {
-    final window = clampTrimWindow(ms, widget.durationMs);
+    final window = clampTrimWindow(ms, _endMs, widget.durationMs, moved: TrimEdge.start);
     setState(() {
       _startMs = window.startMs;
       _endMs = window.endMs;
@@ -1467,11 +1631,13 @@ class _TrimSheetState extends State<_TrimSheet> {
     _seekPreview(_startMs);
   }
 
-  // The right handle only shortens the tail: end stays within (start, start + cap].
+  // The right handle moves only the end; the start stays put.
   void _setEnd(int ms) {
-    final maxEnd = (_startMs + kMaxClipMs).clamp(0, widget.durationMs);
-    final clamped = ms.clamp(_startMs + 500, maxEnd);
-    setState(() => _endMs = clamped);
+    final window = clampTrimWindow(_startMs, ms, widget.durationMs, moved: TrimEdge.end);
+    setState(() {
+      _startMs = window.startMs;
+      _endMs = window.endMs;
+    });
   }
 
   int _dxToMs(double dx, double width) => width <= 0 ? 0 : (dx / width * widget.durationMs).round();
@@ -1479,64 +1645,108 @@ class _TrimSheetState extends State<_TrimSheet> {
   @override
   Widget build(BuildContext context) {
     final selectedMs = _endMs - _startMs;
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 38,
-              height: 4,
-              margin: const EdgeInsets.only(bottom: 14),
-              decoration: BoxDecoration(color: _border, borderRadius: BorderRadius.circular(9999)),
-            ),
-            Row(
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  style: TextButton.styleFrom(foregroundColor: _fgSecondary),
-                  child: const Text('Cancel'),
-                ),
-                Expanded(
-                  child: Text(
-                    'Trim to ${(selectedMs / 1000).toStringAsFixed(1)}s',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                        color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 15),
-                  ),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop((startMs: _startMs, endMs: _endMs)),
-                  style: TextButton.styleFrom(
-                    backgroundColor: context.accent,
-                    foregroundColor: context.onAccent,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9999)),
-                  ),
-                  child: const Text('Trim', style: TextStyle(fontWeight: FontWeight.w700)),
-                ),
-              ],
-            ),
-            const SizedBox(height: 14),
-            if (_previewReady && _preview != null)
-              AspectRatio(
-                aspectRatio: _preview!.value.aspectRatio,
-                child: VideoPlayer(_preview!),
-              )
-            else
-              const AspectRatio(
-                aspectRatio: 16 / 9,
-                child: ColoredBox(color: Color(0xFF14161A)),
+    // isScrollControlled makes the sheet full-height, so its own top reaches under the status
+    // bar; pad by the status-bar inset so the header always clears the clock/notch.
+    return Padding(
+      padding: EdgeInsets.only(top: MediaQuery.paddingOf(context).top),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 38,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration:
+                    BoxDecoration(color: _border, borderRadius: BorderRadius.circular(9999)),
               ),
-            const SizedBox(height: 14),
-            SizedBox(height: 56, child: _filmstrip()),
-            const SizedBox(height: 8),
-            const Text(
-              'Drag the ends to pick up to 10 seconds.',
-              style: TextStyle(color: _fgMuted, fontSize: 12),
-            ),
-          ],
+              Row(
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(),
+                    style: TextButton.styleFrom(foregroundColor: _fgSecondary),
+                    child: const Text('Cancel'),
+                  ),
+                  Expanded(
+                    child: Text(
+                      'Trim to ${(selectedMs / 1000).toStringAsFixed(1)}s',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 15),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop((startMs: _startMs, endMs: _endMs)),
+                    style: TextButton.styleFrom(
+                      backgroundColor: context.accent,
+                      foregroundColor: context.onAccent,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9999)),
+                    ),
+                    child: const Text('Trim', style: TextStyle(fontWeight: FontWeight.w700)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              _previewPane(context),
+              const SizedBox(height: 14),
+              SizedBox(height: 56, child: _filmstrip()),
+              const SizedBox(height: 8),
+              const Text(
+                'Drag either end to pick 1 to 10 seconds. Tap play to preview.',
+                style: TextStyle(color: _fgMuted, fontSize: 12),
+              ),
+            ],
+          ),
         ),
+      ),
+    );
+  }
+
+  /// The preview video with a centered play/pause control and a mute toggle, so the chosen
+  /// window can be watched (and heard) before committing to it.
+  Widget _previewPane(BuildContext context) {
+    final ready = _previewReady && _preview != null;
+    return AspectRatio(
+      aspectRatio: ready ? _preview!.value.aspectRatio : 16 / 9,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          if (ready) VideoPlayer(_preview!) else const ColoredBox(color: Color(0xFF14161A)),
+          if (ready)
+            GestureDetector(
+              onTap: _togglePlay,
+              behavior: HitTestBehavior.opaque,
+              child: Container(
+                width: 52,
+                height: 52,
+                decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                child: Icon(_playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                    color: Colors.white, size: 32),
+              ),
+            ),
+          if (ready)
+            Positioned(
+              right: 6,
+              bottom: 6,
+              child: Semantics(
+                button: true,
+                label: _muted ? 'Unmute preview' : 'Mute preview',
+                child: GestureDetector(
+                  onTap: _toggleMute,
+                  behavior: HitTestBehavior.opaque,
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                    child: Icon(_muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                        color: Colors.white, size: 18),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
