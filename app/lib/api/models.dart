@@ -3,7 +3,13 @@
 import 'package:intl/intl.dart';
 
 class ServerInfo {
-  ServerInfo({required this.name, required this.initialized, this.color = '', this.publicUrl});
+  ServerInfo({
+    required this.name,
+    required this.initialized,
+    this.color = '',
+    this.publicUrl,
+    this.mediaTypes = const ['image'],
+  });
 
   final String name;
   final bool initialized;
@@ -16,11 +22,84 @@ class ServerInfo {
   /// installs). Used to match push payloads back to a connected group.
   final String? publicUrl;
 
+  /// What this server accepts as an attachment ('image', 'gif', 'video'). A server that
+  /// predates typed media says nothing, and only ever accepted stills - so the absent key
+  /// means images only, not "anything goes". The app uses this to hide options a group's
+  /// server would reject rather than letting the upload fail after the fact.
+  final List<String> mediaTypes;
+
+  bool supports(String mediaType) => mediaTypes.contains(mediaType);
+
   factory ServerInfo.fromJson(Map<String, dynamic> j) => ServerInfo(
         name: j['name'] as String? ?? 'Check-In',
         initialized: j['initialized'] as bool? ?? false,
         color: j['color'] as String? ?? '',
         publicUrl: j['publicUrl'] as String?,
+        mediaTypes: (j['mediaTypes'] as List?)?.map((e) => e as String).toList() ?? const ['image'],
+      );
+}
+
+/// One attachment on a post, with the type the server stored it as. The typed list is what
+/// tells a renderer whether it is looking at a photo, an animated gif or a clip; the flat
+/// [Post.mediaIds] cannot, and every renderer used to just assume "decodable image".
+class PostMedia {
+  const PostMedia({
+    required this.id,
+    required this.mime,
+    this.width = 0,
+    this.height = 0,
+    this.durationMs = 0,
+    this.hasPoster = false,
+  });
+
+  final int id;
+  final String mime;
+
+  /// Stored display dimensions (0 when the server didn't report them). They let a caller
+  /// size a box before the bytes arrive, so the card doesn't jump on decode.
+  final int width;
+  final int height;
+
+  /// Playing time for a timed medium; 0 for a still.
+  final int durationMs;
+
+  /// Whether a poster frame is stored for this clip. The server serves the clip itself for
+  /// `?variant=poster` when there is none, so a renderer must check this rather than point
+  /// an image widget at bytes that will never decode.
+  final bool hasPoster;
+
+  bool get isVideo => mime.startsWith('video/');
+  bool get isImage => mime.startsWith('image/');
+  bool get isGif => mime == 'image/gif';
+
+  /// The stored aspect ratio, or null when the server reported no usable dimensions.
+  double? get aspectRatio => width > 0 && height > 0 ? width / height : null;
+
+  /// "0:10" - the clip's length, or '' when this isn't a timed medium. Rounded up so a
+  /// sub-second clip reads as 0:01 rather than an alarming 0:00.
+  String get durationLabel {
+    if (durationMs <= 0) return '';
+    final total = (durationMs / 1000).ceil();
+    return '${total ~/ 60}:${(total % 60).toString().padLeft(2, '0')}';
+  }
+
+  /// Image-typed entries for a bare list of media ids: what a server predating the typed
+  /// array returns, and what a context that is an image by construction (a profile photo)
+  /// passes to a media renderer.
+  static List<PostMedia> images(List<int> ids) =>
+      [for (final id in ids) PostMedia(id: id, mime: _assumedMime)];
+
+  /// Everything an old server could store was a still it had re-encoded, so any image type
+  /// is a truthful stand-in; the renderers only ever branch on the `image/` prefix.
+  static const _assumedMime = 'image/jpeg';
+
+  factory PostMedia.fromJson(Map<String, dynamic> j) => PostMedia(
+        id: (j['id'] as num).toInt(),
+        mime: j['mime'] as String? ?? _assumedMime,
+        width: (j['width'] as num?)?.toInt() ?? 0,
+        height: (j['height'] as num?)?.toInt() ?? 0,
+        durationMs: (j['durationMs'] as num?)?.toInt() ?? 0,
+        hasPoster: j['hasPoster'] as bool? ?? false,
       );
 }
 
@@ -83,6 +162,7 @@ class Post {
     required this.likedByViewer,
     this.mediaId,
     this.mediaIds = const [],
+    List<PostMedia> media = const [],
     this.authorPhotoId,
     this.location,
     this.commentsPreview = const [],
@@ -90,12 +170,14 @@ class Post {
     this.groupId,
     this.crossPostId,
     this.copies = const [],
-  });
+  }) : _media = media;
 
   final int id;
   final int authorId;
   final String authorName;
-  final String kind; // 'text' | 'image'
+  // 'text' | 'image' | 'video', derived by the server from what is actually attached.
+  // Branch on [media] instead: kind says nothing about which attachment is which.
+  final String kind;
   final String body;
   final DateTime createdAt;
   final int likeCount;
@@ -103,6 +185,10 @@ class Post {
   final bool likedByViewer;
   final int? mediaId;
   final List<int> mediaIds;
+
+  /// The typed attachments exactly as the server sent them - empty for a text post and for
+  /// every server that predates the typed array. Read [media], not this.
+  final List<PostMedia> _media;
   final int? authorPhotoId;
   final String? location; // coarse "City, Country", null for most posts
   final List<CommentPreview> commentsPreview;
@@ -154,6 +240,7 @@ class Post {
         likedByViewer: likedByViewer,
         mediaId: mediaId,
         mediaIds: mediaIds,
+        media: _media,
         authorPhotoId: authorPhotoId,
         location: location,
         commentsPreview: commentsPreview,
@@ -167,6 +254,18 @@ class Post {
   /// single cover so older posts still render.
   List<int> get images =>
       mediaIds.isNotEmpty ? mediaIds : (mediaId != null ? [mediaId!] : const []);
+
+  /// The post's attachments in order, typed. A server that predates the typed array sends
+  /// only ids, so those are synthesised as images - which is what they always were on such
+  /// a server. Computed once: it is read on every rebuild of a card.
+  late final List<PostMedia> media = _media.isNotEmpty ? _media : PostMedia.images(images);
+
+  /// The attachments that can be written to the device gallery. A clip is not one of them:
+  /// Gal.putImageBytes on mp4 bytes writes a file the gallery cannot open.
+  List<PostMedia> get savableImages => [
+        for (final m in media)
+          if (m.isImage) m
+      ];
 
   /// Ids of the tagged members, for the feed's "include posts they're in" filter.
   List<int> get peopleIds => [for (final p in people) p.id];
@@ -192,6 +291,9 @@ class Post {
         likedByViewer: j['likedByViewer'] as bool? ?? false,
         mediaId: j['mediaId'] as int?,
         mediaIds: ((j['mediaIds'] as List?) ?? const []).map((e) => e as int).toList(),
+        media: ((j['media'] as List?) ?? const [])
+            .map((e) => PostMedia.fromJson(e as Map<String, dynamic>))
+            .toList(),
         authorPhotoId: j['authorPhotoId'] as int?,
         location: j['location'] as String?,
         commentsPreview: ((j['commentsPreview'] as List?) ?? [])
