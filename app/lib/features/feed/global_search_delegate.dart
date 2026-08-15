@@ -177,22 +177,33 @@ class GlobalSearchDelegate extends SearchDelegate<void> {
   }
 
   Widget _postTile(BuildContext context, Post p) {
+    final hasClip = p.media.any((m) => m.isVideo);
+    // A row this small has no room for a poster and a play badge, so a clip is named
+    // rather than shown; only an attachment that renders as an image gets a thumbnail.
+    final thumbs = p.imageMedia;
     final preview = p.body.trim().isNotEmpty
         ? p.body.trim()
-        : (p.kind == 'image' ? 'Photo check-in' : 'Check-in');
+        : switch ((hasClip, p.media.isNotEmpty)) {
+            (true, _) => 'Video check-in',
+            (_, true) => 'Photo check-in',
+            _ => 'Check-in',
+          };
     return ListTile(
-      leading: p.kind == 'image' && p.mediaId != null
+      leading: thumbs.isNotEmpty
           ? ClipRRect(
               borderRadius: BorderRadius.circular(8),
               child: SizedBox(
-                  width: 40, height: 40, child: AuthImage(mediaId: p.mediaId!, groupId: _groupId)),
+                  width: 40,
+                  height: 40,
+                  child: AuthImage(mediaId: thumbs.first.id, groupId: _groupId)),
             )
           : Container(
               width: 40,
               height: 40,
               decoration:
                   BoxDecoration(color: kBgSurfaceHover, borderRadius: BorderRadius.circular(8)),
-              child: const Icon(Icons.chat_bubble_outline, size: 18, color: kFgMuted),
+              child: Icon(hasClip ? Icons.videocam_outlined : Icons.chat_bubble_outline,
+                  size: 18, color: kFgMuted),
             ),
       title: Text(p.authorName,
           style: const TextStyle(color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 14)),

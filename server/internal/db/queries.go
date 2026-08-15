@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -19,10 +20,16 @@ const commentPreviewExpr = `, COALESCE((
 		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)
 		      ORDER BY c.created_at DESC LIMIT 2) t), '[]'::json)`
 
-// postMediaExpr appends the post's full ordered set of image ids as a bigint[]. Empty for
-// text posts and (until backfill clients re-save) old single-image posts keep their cover.
-const postMediaExpr = `, COALESCE(ARRAY(
-		SELECT pm.media_id FROM post_media pm WHERE pm.post_id = p.id ORDER BY pm.position), '{}')`
+// postMediaExpr appends the post's full ordered set of attachments as a JSON array of
+// {id, mime, width, height, durationMs, hasPoster}. Empty for text posts. The bare id list
+// older clients read is derived from this in Go rather than fetched a second time, so the
+// two can never disagree about order or membership.
+const postMediaExpr = `, COALESCE((
+		SELECT json_agg(json_build_object(
+			'id', m.id, 'mime', m.mime, 'width', m.width, 'height', m.height,
+			'durationMs', m.duration_ms, 'hasPoster', m.poster_path <> '') ORDER BY pm.position)
+		FROM post_media pm JOIN media m ON m.id = pm.media_id
+		WHERE pm.post_id = p.id), '[]'::json)`
 
 // postPeopleExpr appends the members tagged in post p as a JSON array of {id, name},
 // name-sorted. Empty array when no one is tagged.
@@ -651,28 +658,52 @@ func (d *DB) scanTokens(ctx context.Context, sql string, args ...any) ([]string,
 
 // ---- media ----
 
+// mediaColumns is the column list every media read shares, in Media field order.
+const mediaColumns = `id, owner_id, path, mime, width, height, duration_ms, poster_path, created_at`
+
 // CreateMedia records an uploaded file.
-func (d *DB) CreateMedia(ctx context.Context, ownerID *int64, path, mime string, width, height int) (Media, error) {
+func (d *DB) CreateMedia(ctx context.Context, ownerID *int64, path, mime string, width, height, durationMs int) (Media, error) {
 	var m Media
 	err := d.Pool.QueryRow(ctx, `
-		INSERT INTO media (owner_id, path, mime, width, height)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, owner_id, path, mime, width, height, created_at`,
-		ownerID, path, mime, width, height,
-	).Scan(&m.ID, &m.OwnerID, &m.Path, &m.Mime, &m.Width, &m.Height, &m.CreatedAt)
+		INSERT INTO media (owner_id, path, mime, width, height, duration_ms)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING `+mediaColumns,
+		ownerID, path, mime, width, height, durationMs,
+	).Scan(&m.ID, &m.OwnerID, &m.Path, &m.Mime, &m.Width, &m.Height, &m.DurationMs, &m.PosterPath, &m.CreatedAt)
 	return m, err
 }
 
 // GetMedia returns media metadata by id.
 func (d *DB) GetMedia(ctx context.Context, id int64) (Media, error) {
 	var m Media
-	err := d.Pool.QueryRow(ctx, `
-		SELECT id, owner_id, path, mime, width, height, created_at FROM media WHERE id = $1`, id,
-	).Scan(&m.ID, &m.OwnerID, &m.Path, &m.Mime, &m.Width, &m.Height, &m.CreatedAt)
+	err := d.Pool.QueryRow(ctx,
+		`SELECT `+mediaColumns+` FROM media WHERE id = $1`, id,
+	).Scan(&m.ID, &m.OwnerID, &m.Path, &m.Mime, &m.Width, &m.Height, &m.DurationMs, &m.PosterPath, &m.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return m, ErrNotFound
 	}
 	return m, err
+}
+
+// SetMediaPoster attaches a still frame to a clip the caller owns, returning the path of
+// the poster it replaced (empty when there was none) so the caller can delete the old
+// file. Returns ErrNotFound when the item does not exist, belongs to someone else, or is
+// not a video - an image never needs a poster, and allowing one would let hasPoster mean
+// something no client is prepared for.
+func (d *DB) SetMediaPoster(ctx context.Context, mediaID, ownerID int64, posterPath string) (string, error) {
+	var previous string
+	// The CTE runs against the statement's snapshot, so it still sees the row as it was
+	// before the UPDATE - which is the only way to learn the path being orphaned.
+	err := d.Pool.QueryRow(ctx, `
+		WITH old AS (SELECT poster_path FROM media WHERE id = $1 AND owner_id = $2)
+		UPDATE media SET poster_path = $3
+		WHERE id = $1 AND owner_id = $2 AND mime LIKE 'video/%'
+		RETURNING COALESCE((SELECT poster_path FROM old), '')`,
+		mediaID, ownerID, posterPath).Scan(&previous)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	return previous, err
 }
 
 // GetVisibleMedia returns a media item only if the viewer is allowed to see it: they
@@ -683,7 +714,7 @@ func (d *DB) GetMedia(ctx context.Context, id int64) (Media, error) {
 func (d *DB) GetVisibleMedia(ctx context.Context, id, viewerID int64) (Media, error) {
 	var m Media
 	err := d.Pool.QueryRow(ctx, `
-		SELECT m.id, m.owner_id, m.path, m.mime, m.width, m.height, m.created_at
+		SELECT m.id, m.owner_id, m.path, m.mime, m.width, m.height, m.duration_ms, m.poster_path, m.created_at
 		FROM media m
 		WHERE m.id = $1 AND (
 			m.owner_id = $2
@@ -691,7 +722,7 @@ func (d *DB) GetVisibleMedia(ctx context.Context, id, viewerID int64) (Media, er
 			OR EXISTS (SELECT 1 FROM post_media pm WHERE pm.media_id = m.id)
 			OR EXISTS (SELECT 1 FROM users u WHERE u.profile_media_id = m.id)
 		)`, id, viewerID,
-	).Scan(&m.ID, &m.OwnerID, &m.Path, &m.Mime, &m.Width, &m.Height, &m.CreatedAt)
+	).Scan(&m.ID, &m.OwnerID, &m.Path, &m.Mime, &m.Width, &m.Height, &m.DurationMs, &m.PosterPath, &m.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return m, ErrNotFound
 	}
@@ -706,8 +737,10 @@ func (d *DB) SetUserProfileMedia(ctx context.Context, userID, mediaID int64) err
 
 // ---- posts ----
 
-// CreatePost inserts a post.
-func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, mediaIDs []int64, location *string, peopleIDs []int64, crossPostID *string) (Post, error) {
+// CreatePost inserts a post. Its kind is derived from what is attached rather than taken
+// from the caller: the attachments are already being read here to check ownership, and a
+// post whose kind disagrees with its contents is a rendering bug on every client.
+func (d *DB) CreatePost(ctx context.Context, authorID int64, body string, mediaIDs []int64, location *string, peopleIDs []int64, crossPostID *string) (Post, error) {
 	var p Post
 	tx, err := d.Pool.Begin(ctx)
 	if err != nil {
@@ -718,28 +751,13 @@ func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, 
 	// The author must own every referenced media item. Without this an author could
 	// attach another member's media id, which GetVisibleMedia would then expose to the
 	// whole group (an IDOR / privacy leak). Treat unowned or non-existent ids the same.
-	if len(mediaIDs) > 0 {
-		uniq := make(map[int64]struct{}, len(mediaIDs))
-		for _, m := range mediaIDs {
-			uniq[m] = struct{}{}
-		}
-		var owned int
-		if err := tx.QueryRow(ctx,
-			`SELECT count(DISTINCT id) FROM media WHERE id = ANY($1) AND owner_id = $2`,
-			mediaIDs, authorID).Scan(&owned); err != nil {
-			return p, err
-		}
-		if owned != len(uniq) {
-			return p, ErrNotOwned
-		}
+	attached, err := ownedMedia(ctx, tx, mediaIDs, authorID)
+	if err != nil {
+		return p, err
 	}
+	kind := kindFor(attached)
 
-	// posts.media_id holds the cover (first image) for older clients; the full set lives
-	// in post_media.
-	var cover *int64
-	if len(mediaIDs) > 0 {
-		cover = &mediaIDs[0]
-	}
+	cover := coverFor(attached)
 	err = tx.QueryRow(ctx, `
 		INSERT INTO posts (author_id, kind, body, media_id, location, cross_post_id)
 		VALUES ($1, $2, $3, $4, $5, $6)
@@ -791,7 +809,70 @@ func (d *DB) CreatePost(ctx context.Context, authorID int64, kind, body string, 
 		return p, err
 	}
 	p.MediaIDs = mediaIDs
+	p.Media = attached
 	return p, nil
+}
+
+// ownedMedia returns the given media items in the order asked for, and ErrNotOwned unless
+// every one of them belongs to the author.
+func ownedMedia(ctx context.Context, tx pgx.Tx, mediaIDs []int64, authorID int64) ([]PostMedia, error) {
+	if len(mediaIDs) == 0 {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT id, mime, width, height, duration_ms, poster_path <> ''
+		FROM media WHERE id = ANY($1) AND owner_id = $2`, mediaIDs, authorID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byID := make(map[int64]PostMedia, len(mediaIDs))
+	for rows.Next() {
+		var m PostMedia
+		if err := rows.Scan(&m.ID, &m.Mime, &m.Width, &m.Height, &m.DurationMs, &m.HasPoster); err != nil {
+			return nil, err
+		}
+		byID[m.ID] = m
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]PostMedia, 0, len(mediaIDs))
+	for _, id := range mediaIDs {
+		m, ok := byID[id]
+		if !ok {
+			return nil, ErrNotOwned
+		}
+		out = append(out, m)
+	}
+	return out, nil
+}
+
+// coverFor picks the legacy posts.media_id cover: the first IMAGE attached, never a clip.
+// A published client renders whatever this id serves as a picture, so pointing it at a
+// clip would paint broken-image icons where degrading to caption-only is the intended
+// old-client behaviour. Nil when nothing attached is an image at all.
+func coverFor(media []PostMedia) *int64 {
+	for i := range media {
+		if strings.HasPrefix(media[i].Mime, "image/") {
+			return &media[i].ID
+		}
+	}
+	return nil
+}
+
+// kindFor derives a post's kind from what is attached to it. Video wins over image so a
+// mixed post still tells an old client it has something it cannot render.
+func kindFor(media []PostMedia) string {
+	if len(media) == 0 {
+		return "text"
+	}
+	for _, m := range media {
+		if strings.HasPrefix(m.Mime, "video/") {
+			return "video"
+		}
+	}
+	return "image"
 }
 
 // dedupeExcluding returns the unique ids in order, dropping any equal to exclude.
@@ -845,9 +926,9 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 	var posts []Post
 	for rows.Next() {
 		var p Post
-		var preview, people []byte
+		var preview, media, people []byte
 		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &p.MediaIDs, &people); err != nil {
+			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people); err != nil {
 			return nil, err
 		}
 		if len(preview) > 0 {
@@ -856,6 +937,7 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 		if len(people) > 0 {
 			_ = json.Unmarshal(people, &p.People)
 		}
+		p.applyMedia(media)
 		posts = append(posts, p)
 	}
 	return posts, rows.Err()
@@ -920,9 +1002,9 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 	var posts []Post
 	for rows.Next() {
 		var p Post
-		var preview, people []byte
+		var preview, media, people []byte
 		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &p.MediaIDs, &people); err != nil {
+			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people); err != nil {
 			return nil, err
 		}
 		if len(preview) > 0 {
@@ -931,6 +1013,7 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 		if len(people) > 0 {
 			_ = json.Unmarshal(people, &p.People)
 		}
+		p.applyMedia(media)
 		posts = append(posts, p)
 	}
 	return posts, rows.Err()
@@ -939,7 +1022,7 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 // GetPost returns a single post with engagement counts from the viewer's perspective.
 func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) {
 	var p Post
-	var preview, people []byte
+	var preview, media, people []byte
 	err := d.Pool.QueryRow(ctx, `
 		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id,
 		       u.name, u.profile_media_id,
@@ -951,7 +1034,7 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 		WHERE p.id = $2 AND u.status = 'active'
 		  AND p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)`, viewerID, postID,
 	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID,
-		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &p.MediaIDs, &people)
+		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, ErrNotFound
 	}
@@ -960,6 +1043,9 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 	}
 	if err == nil && len(people) > 0 {
 		_ = json.Unmarshal(people, &p.People)
+	}
+	if err == nil {
+		p.applyMedia(media)
 	}
 	return p, err
 }
@@ -1039,16 +1125,20 @@ func collectPostMedia(ctx context.Context, tx pgx.Tx, postID int64) ([]int64, er
 // deleteOrphanMedia removes any candidate media rows no longer referenced by a post cover,
 // post_media, or a profile photo, returning their stored file paths. Run after the post is
 // deleted so its own references are already gone.
+//
+// A video row owns two files, so the poster comes back alongside the clip. Returning only
+// the clip would leave a file on disk that nothing references and nothing will ever look
+// for again, and the only symptom is a media volume that slowly fills.
 func deleteOrphanMedia(ctx context.Context, tx pgx.Tx, candidates []int64) ([]string, error) {
 	var paths []string
 	for _, mid := range candidates {
-		var path string
+		var path, poster string
 		err := tx.QueryRow(ctx, `
 			DELETE FROM media m WHERE m.id = $1
 			  AND NOT EXISTS (SELECT 1 FROM posts p WHERE p.media_id = m.id)
 			  AND NOT EXISTS (SELECT 1 FROM post_media pm WHERE pm.media_id = m.id)
 			  AND NOT EXISTS (SELECT 1 FROM users u WHERE u.profile_media_id = m.id)
-			RETURNING m.path`, mid).Scan(&path)
+			RETURNING m.path, m.poster_path`, mid).Scan(&path, &poster)
 		if errors.Is(err, pgx.ErrNoRows) {
 			continue // still referenced elsewhere; keep it
 		}
@@ -1056,6 +1146,9 @@ func deleteOrphanMedia(ctx context.Context, tx pgx.Tx, candidates []int64) ([]st
 			return nil, err
 		}
 		paths = append(paths, path)
+		if poster != "" {
+			paths = append(paths, poster)
+		}
 	}
 	return paths, nil
 }

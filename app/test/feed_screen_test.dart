@@ -22,6 +22,16 @@ class _FakeApi extends ApiClient {
       [];
 }
 
+/// A bounded pump loop rather than pumpAndSettle(): a post with photos on it renders them,
+/// and their placeholder spinner animates indefinitely against an unresolvable .invalid
+/// host, so pumpAndSettle's "no frames scheduled" condition never becomes true. Same
+/// technique as photo_viewer_test.
+Future<void> settle(WidgetTester tester) async {
+  for (var i = 0; i < 20; i++) {
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+}
+
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
@@ -32,8 +42,9 @@ void main() {
         id: id,
         authorId: 1,
         authorName: 'Nick',
-        // Text posts render no network images in PostCard, while the download collector
-        // counts p.images (mediaIds) regardless of kind - so galleries are testable offline.
+        // The card renders whatever is attached, whatever the kind says, so these photos
+        // do load - as placeholders, since nothing resolves offline. The download collector
+        // counts the same attachments, which is what makes galleries testable here.
         kind: 'text',
         body: body,
         createdAt: created,
@@ -65,7 +76,7 @@ void main() {
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    await settle(tester);
   }
 
   testWidgets('tapping the status-bar strip scrolls the feed back to the top', (tester) async {
@@ -79,12 +90,12 @@ void main() {
 
     // Scroll down, away from the top.
     await tester.drag(find.byType(Scrollable).first, const Offset(0, -800));
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(scrollable().position.pixels, greaterThan(0));
 
     // A tap inside the status-bar inset (the strip spans its full height) animates back.
     await tester.tapAt(const Offset(200, 20));
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(scrollable().position.pixels, 0);
   });
 
@@ -102,15 +113,15 @@ void main() {
 
     // Apply the Today preset (scoped to the sheet - the feed shows a "Today" divider too).
     await tester.tap(find.byIcon(Icons.filter_list));
-    await tester.pumpAndSettle();
+    await settle(tester);
     await tester.tap(find.descendant(of: find.byType(BottomSheet), matching: find.text('Today')));
     await tester.pump();
     await tester.tap(find.text('Show results'));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     // The compact download button appears left of the filter icon; tap it.
     await tester.tap(find.byIcon(Icons.download_rounded));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     // Only today's gallery matches: all 3 of its photos are counted, the old post's photo
     // isn't, and the summary reflects the active filter.
@@ -119,7 +130,7 @@ void main() {
 
     // Cancel: dialog closes, nothing downloads, and the button is idle again.
     await tester.tap(find.text('Cancel'));
-    await tester.pumpAndSettle();
+    await settle(tester);
     expect(find.text('Download 3 photos?'), findsNothing);
     expect(find.byIcon(Icons.download_rounded), findsOneWidget);
   });
@@ -130,11 +141,11 @@ void main() {
     await pump(tester, [post(1, now, 'a post')]);
 
     await tester.tap(find.byIcon(Icons.filter_list));
-    await tester.pumpAndSettle();
+    await settle(tester);
     await tester.tap(find.descendant(of: find.byType(BottomSheet), matching: find.text('Today')));
     await tester.pump();
     await tester.tap(find.text('Show results'));
-    await tester.pumpAndSettle();
+    await settle(tester);
 
     // The only close icon on the filtered feed is the chip's remove affordance.
     expect(find.byIcon(Icons.close), findsOneWidget);

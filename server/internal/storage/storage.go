@@ -1,6 +1,20 @@
-// Package storage handles safe media uploads to the local filesystem. Images are
-// re-encoded (which strips EXIF/GPS metadata), given random filenames, and validated
-// for type and size.
+// Package storage handles safe media uploads to the local filesystem. Everything stored
+// gets a random filename, a size limit, and a validated type - but "stripped of metadata by
+// re-encoding" is no longer the whole privacy contract, because not every medium survives a
+// re-encode. Each type has its own boundary:
+//
+//   - JPEG, PNG and WebP are decoded and re-encoded. The output shares no bytes with the
+//     input, so EXIF (and the GPS in it) cannot survive.
+//   - GIF is stored as uploaded, because re-encoding it destroys the animation that is the
+//     whole point of accepting it. It has no EXIF to strip; its metadata channels are
+//     comment and application extension blocks, which sanitizeGIF blanks.
+//   - MP4 is stored as uploaded, because re-encoding video needs a transcoder this server
+//     deliberately does not have. Its location and device atoms are blanked in place by
+//     stripLocationMetadata.
+//
+// A future reader tempted to "fix" the passthrough paths by routing them back through the
+// image encoder should know that both were passthrough on purpose, and that the sanitizers
+// are what replaces the re-encode.
 package storage
 
 import (
@@ -19,10 +33,16 @@ import (
 	_ "image/gif" // register decoders
 
 	"golang.org/x/image/draw"
+	_ "golang.org/x/image/webp" // the app already uploads webp; without this it is rejected
 )
 
 // maxDimension is the largest width/height kept; larger images are scaled down.
 const maxDimension = 1600
+
+// maxPixels guards against decompression/"pixel bomb" attacks: a few KB of input can
+// declare enormous dimensions, and a decoder allocates a buffer proportional to W*H. 50 MP
+// covers high-end phone cameras with margin.
+const maxPixels = 50_000_000
 
 // Store writes media files under a base directory.
 type Store struct {
@@ -37,41 +57,76 @@ func New(baseDir string) (*Store, error) {
 	return &Store{baseDir: baseDir}, nil
 }
 
-// SavedImage describes a stored image.
-type SavedImage struct {
+// SavedMedia describes a stored file.
+type SavedMedia struct {
 	// RelPath is the path relative to the base dir (stored in the DB).
 	RelPath string
 	Mime    string
 	Width   int
 	Height  int
+	// DurationMs is how long a timed medium runs; 0 for stills.
+	DurationMs int
+}
+
+// SaveMedia stores an uploaded file of any supported type, picking the pipeline that fits
+// it. Images and videos have separate size limits, so the caller passes both and the
+// per-type check happens here, once the type is actually known.
+func (s *Store) SaveMedia(r io.Reader, maxImageBytes, maxVideoBytes int64) (SavedMedia, error) {
+	data, err := readCapped(r, max(maxImageBytes, maxVideoBytes))
+	if err != nil {
+		return SavedMedia{}, err
+	}
+	kind, limit := "image", maxImageBytes
+	if isMP4(data) {
+		kind, limit = "video", maxVideoBytes
+	}
+	if int64(len(data)) > limit {
+		return SavedMedia{}, fmt.Errorf("%s exceeds %d bytes", kind, limit)
+	}
+	switch {
+	case isMP4(data):
+		return s.saveVideo(data)
+	case isGIF(data):
+		return s.saveGIF(data)
+	default:
+		return s.saveImage(data)
+	}
 }
 
 // SaveImage decodes, downscales if needed, re-encodes (stripping metadata), and writes
 // an image. Decoding untrusted input through the standard library and re-encoding is the
-// safety boundary: we never persist the raw uploaded bytes.
-func (s *Store) SaveImage(r io.Reader, maxBytes int64) (SavedImage, error) {
-	limited := io.LimitReader(r, maxBytes+1)
-	data, err := io.ReadAll(limited)
+// safety boundary: we never persist the raw uploaded bytes. An animated GIF loses its
+// animation here, which is why SaveMedia routes GIF uploads elsewhere; this path is for
+// callers that specifically want a still image, such as a video's poster frame.
+func (s *Store) SaveImage(r io.Reader, maxBytes int64) (SavedMedia, error) {
+	data, err := readCapped(r, maxBytes)
 	if err != nil {
-		return SavedImage{}, err
+		return SavedMedia{}, err
 	}
 	if int64(len(data)) > maxBytes {
-		return SavedImage{}, fmt.Errorf("image exceeds %d bytes", maxBytes)
+		return SavedMedia{}, fmt.Errorf("image exceeds %d bytes", maxBytes)
 	}
+	return s.saveImage(data)
+}
 
-	// Guard against decompression/"pixel bomb" attacks: a few KB of input can declare
-	// enormous dimensions, and image.Decode allocates a buffer proportional to W*H.
-	// Check the header first and reject anything beyond a generous real-camera size.
-	const maxPixels = 50_000_000 // 50 MP — covers high-end phone cameras with margin
+// readCapped reads at most maxBytes+1 bytes, so the caller can tell "at the limit" from
+// "over it" without buffering an unbounded upload.
+func readCapped(r io.Reader, maxBytes int64) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(r, maxBytes+1))
+}
+
+func (s *Store) saveImage(data []byte) (SavedMedia, error) {
+	// Check the header before decoding, so a pixel bomb is rejected without ever
+	// allocating the buffer it asks for.
 	if cfg, _, err := image.DecodeConfig(bytes.NewReader(data)); err != nil {
-		return SavedImage{}, fmt.Errorf("decode image: %w", err)
+		return SavedMedia{}, fmt.Errorf("decode image: %w", err)
 	} else if int64(cfg.Width)*int64(cfg.Height) > maxPixels {
-		return SavedImage{}, fmt.Errorf("image dimensions too large")
+		return SavedMedia{}, fmt.Errorf("image dimensions too large")
 	}
 
 	img, format, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
-		return SavedImage{}, fmt.Errorf("decode image: %w", err)
+		return SavedMedia{}, fmt.Errorf("decode image: %w", err)
 	}
 	// Downscale before applying orientation. Both steps allocate a fresh buffer, but the
 	// rotate/flip is the expensive one — done on the full-resolution image, a portrait
@@ -92,32 +147,93 @@ func (s *Store) SaveImage(r io.Reader, maxBytes int64) (SavedImage, error) {
 	switch format {
 	case "png":
 		if err := png.Encode(&buf, img); err != nil {
-			return SavedImage{}, err
+			return SavedMedia{}, err
 		}
 		mime, ext = "image/png", ".png"
-	default: // jpeg, gif and anything else are normalized to jpeg
+	default: // jpeg, webp, gif and anything else are normalized to jpeg
 		if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 85}); err != nil {
-			return SavedImage{}, err
+			return SavedMedia{}, err
 		}
 		mime, ext = "image/jpeg", ".jpg"
 	}
 
+	rel, err := s.write(buf.Bytes(), ext)
+	if err != nil {
+		return SavedMedia{}, err
+	}
+
+	b := img.Bounds()
+	return SavedMedia{RelPath: rel, Mime: mime, Width: b.Dx(), Height: b.Dy()}, nil
+}
+
+// saveGIF stores an animated GIF as uploaded, after checking its dimensions, counting its
+// frames and blanking its metadata blocks. Nothing is re-encoded: gif.EncodeAll would
+// re-quantize every frame, and a round trip through it is both slow and visibly lossy.
+func (s *Store) saveGIF(data []byte) (SavedMedia, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return SavedMedia{}, fmt.Errorf("decode image: %w", err)
+	}
+	if int64(cfg.Width)*int64(cfg.Height) > maxPixels {
+		return SavedMedia{}, fmt.Errorf("image dimensions too large")
+	}
+	if _, err := sanitizeGIF(data); err != nil {
+		return SavedMedia{}, err
+	}
+	rel, err := s.write(data, ".gif")
+	if err != nil {
+		return SavedMedia{}, err
+	}
+	return SavedMedia{RelPath: rel, Mime: "image/gif", Width: cfg.Width, Height: cfg.Height}, nil
+}
+
+// saveVideo validates a clip's container, reads its duration and display size, and stores
+// it with its location and device metadata blanked.
+func (s *Store) saveVideo(data []byte) (SavedMedia, error) {
+	info, err := probeMP4(data)
+	if err != nil {
+		return SavedMedia{}, err
+	}
+	rel, err := s.write(stripLocationMetadata(data), ".mp4")
+	if err != nil {
+		return SavedMedia{}, err
+	}
+	return SavedMedia{
+		RelPath:    rel,
+		Mime:       "video/mp4",
+		Width:      info.Width,
+		Height:     info.Height,
+		DurationMs: info.DurationMs,
+	}, nil
+}
+
+// write stores bytes under a random name and returns the path relative to the base dir.
+func (s *Store) write(data []byte, ext string) (string, error) {
 	name, err := randomName()
 	if err != nil {
-		return SavedImage{}, err
+		return "", err
 	}
 	// Shard by first two chars to avoid huge flat directories.
 	rel := filepath.Join(name[:2], name+ext)
 	abs := filepath.Join(s.baseDir, rel)
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return SavedImage{}, err
+		return "", err
 	}
-	if err := os.WriteFile(abs, buf.Bytes(), 0o644); err != nil {
-		return SavedImage{}, err
+	if err := os.WriteFile(abs, data, 0o644); err != nil {
+		return "", err
 	}
+	return rel, nil
+}
 
-	b := img.Bounds()
-	return SavedImage{RelPath: rel, Mime: mime, Width: b.Dx(), Height: b.Dy()}, nil
+// isGIF and isMP4 identify the two passthrough types from their magic bytes, before any
+// decoder sees the file. Everything else falls through to the image pipeline, which
+// rejects what it cannot decode.
+func isGIF(data []byte) bool {
+	return len(data) > 3 && string(data[0:3]) == "GIF"
+}
+
+func isMP4(data []byte) bool {
+	return len(data) > 8 && string(data[4:8]) == "ftyp"
 }
 
 // Open returns a reader for a stored file given its relative path. The path is cleaned

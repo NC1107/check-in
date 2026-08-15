@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
-import 'auth_image.dart';
+import '../api/models.dart';
+import 'media_frame.dart';
 
-/// Full-screen, pinch-to-zoom viewer for one or more media ids (e.g. a profile photo, or
-/// all the photos on a multi-image check-in). Opened by tapping an image. Swipe left/right
+/// Full-screen, pinch-to-zoom viewer for one or more attachments (e.g. a profile photo, or
+/// all the media on a multi-image check-in). A clip shows as its poster frame with a play
+/// badge and cannot be played here yet. Opened by tapping an image. Swipe left/right
 /// pages between photos (disabled while the current photo is zoomed, so panning a zoomed
 /// photo doesn't also flip the page); swiping up or down dismisses, the close button, or
 /// the system back gesture; double-tap toggles between fit-to-screen and a 2.5x zoom
@@ -12,20 +14,21 @@ import 'auth_image.dart';
 class PhotoViewerScreen extends StatefulWidget {
   const PhotoViewerScreen({
     super.key,
-    required this.mediaIds,
+    required this.media,
     this.initialIndex = 0,
     this.groupId,
   });
 
-  /// Every photo reachable from this viewer (e.g. all of a post's images). A single-photo
-  /// context (a profile picture) passes a one-element list.
-  final List<int> mediaIds;
+  /// Every attachment reachable from this viewer (e.g. all of a post's media). A
+  /// single-photo context (a profile picture) passes a one-element list, built with
+  /// [PostMedia.images].
+  final List<PostMedia> media;
 
-  /// Which photo to open on, as an index into [mediaIds].
+  /// Which photo to open on, as an index into [media].
   final int initialIndex;
 
-  /// The connected group the media ids belong to (null = the current group), so the
-  /// authenticated request and cache key resolve to the right server. See [AuthImage].
+  /// The connected group the media belongs to (null = the current group), so the
+  /// authenticated request and cache key resolve to the right server. See [MediaFrame].
   final String? groupId;
 
   /// Pushes the viewer over everything (above the bottom nav). The backdrop is painted by
@@ -33,7 +36,7 @@ class PhotoViewerScreen extends StatefulWidget {
   /// stays transparent.
   static Future<void> open(
     BuildContext context, {
-    required List<int> mediaIds,
+    required List<PostMedia> media,
     int initialIndex = 0,
     String? groupId,
   }) {
@@ -43,7 +46,7 @@ class PhotoViewerScreen extends StatefulWidget {
         barrierColor: Colors.transparent,
         transitionDuration: const Duration(milliseconds: 180),
         pageBuilder: (_, __, ___) =>
-            PhotoViewerScreen(mediaIds: mediaIds, initialIndex: initialIndex, groupId: groupId),
+            PhotoViewerScreen(media: media, initialIndex: initialIndex, groupId: groupId),
         transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
       ),
     );
@@ -106,7 +109,7 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTicker
   @override
   Widget build(BuildContext context) {
     final height = MediaQuery.of(context).size.height;
-    final multi = widget.mediaIds.length > 1;
+    final multi = widget.media.length > 1;
     // Fade the backdrop and ease the photo down as it is dragged, but never below 0.35 so
     // the photo stays legible until release.
     final progress = (_dragDy.abs() / (height * 0.5)).clamp(0.0, 1.0);
@@ -131,13 +134,13 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTicker
                     controller: _pageCtrl,
                     physics:
                         _zoomed ? const NeverScrollableScrollPhysics() : const PageScrollPhysics(),
-                    itemCount: widget.mediaIds.length,
+                    itemCount: widget.media.length,
                     onPageChanged: (i) => setState(() {
                       _page = i;
                       _zoomed = false; // a freshly-shown page always starts unzoomed
                     }),
                     itemBuilder: (_, i) => _ZoomablePhoto(
-                      mediaId: widget.mediaIds[i],
+                      media: widget.media[i],
                       groupId: widget.groupId,
                       onZoomChanged: (z) {
                         if (i == _page) setState(() => _zoomed = z);
@@ -170,7 +173,7 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTicker
                       color: Colors.black.withValues(alpha: 0.5),
                       borderRadius: BorderRadius.circular(9999),
                     ),
-                    child: Text('${_page + 1}/${widget.mediaIds.length}',
+                    child: Text('${_page + 1}/${widget.media.length}',
                         style: const TextStyle(
                             color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
                   ),
@@ -187,9 +190,9 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTicker
 /// own transform so zoom resets when swiping to a different photo, and reports zoom
 /// changes up so the parent can gate page-swiping and swipe-to-dismiss.
 class _ZoomablePhoto extends StatefulWidget {
-  const _ZoomablePhoto({required this.mediaId, required this.onZoomChanged, this.groupId});
+  const _ZoomablePhoto({required this.media, required this.onZoomChanged, this.groupId});
 
-  final int mediaId;
+  final PostMedia media;
   final String? groupId;
   final ValueChanged<bool> onZoomChanged;
 
@@ -253,7 +256,7 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> {
         minScale: 1,
         maxScale: 5,
         child: SizedBox.expand(
-          child: AuthImage(mediaId: widget.mediaId, groupId: widget.groupId, fit: BoxFit.contain),
+          child: MediaFrame(media: widget.media, groupId: widget.groupId, fit: BoxFit.contain),
         ),
       ),
     );

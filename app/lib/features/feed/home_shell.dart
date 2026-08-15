@@ -24,6 +24,20 @@ import '../profile/profile_screen.dart';
 import '../whats_new/release_notes.dart';
 import 'feed_screen.dart';
 
+/// Whether a picked file has to be re-encoded before upload. Photos do: it transcodes the
+/// iPhone HEIC the server cannot read and downscales, so the server never decodes a
+/// full-resolution image. An animated gif must not be - the compressor writes back a
+/// single flattened jpeg frame, which is how every gif posted to date lost its animation
+/// before it ever reached the server.
+bool needsReencodeBeforeUpload(String path) => fileExtension(path) != 'gif';
+
+/// Whether a picked file is a clip. The gallery picker can hand one back even when asked
+/// for images, and this build has nowhere to put it: it would be flattened to a still of
+/// the first frame and posted as a photo. Checking the extension here is cheaper than
+/// per-platform picker filtering and behaves the same everywhere.
+bool isVideoPick(String path) =>
+    const {'mp4', 'mov', 'm4v', '3gp', 'avi', 'webm', 'mkv'}.contains(fileExtension(path));
+
 /// A short opaque id (16 random bytes, hex) that links a post's copies across groups. The
 /// servers never coordinate, so the client mints it; collisions are astronomically unlikely.
 String _newCrossPostId() {
@@ -324,21 +338,37 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   Future<void> _pickFromGallery() async {
     final picked = await ImagePicker().pickMultiImage();
     if (picked.isEmpty || !mounted) return;
+    final photos = [
+      for (final x in picked)
+        if (!isVideoPick(x.path)) x
+    ];
     setState(() {
-      for (final x in picked) {
+      for (final x in photos) {
         if (_images.length < _maxImages) _images.add(x);
       }
     });
+    if (photos.length != picked.length) _toast('Video posts are coming soon.');
     await _resolveLocation();
   }
 
   Future<void> _takePhoto() async {
     final x = await ImagePicker().pickImage(source: ImageSource.camera);
     if (x == null || !mounted) return;
+    if (isVideoPick(x.path)) {
+      _toast('Video posts are coming soon.');
+      return;
+    }
     setState(() {
       if (_images.length < _maxImages) _images.add(x);
     });
     await _resolveLocation();
+  }
+
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(msg), backgroundColor: _bgSurfaceHover));
   }
 
   /// Read a place label from the first image that carries GPS, remembering which photo it
@@ -597,6 +627,9 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   /// to decode a full-resolution image. Location is already resolved from the original by
   /// this point. Falls back to uploading the original if compression isn't available.
   Future<int> _uploadCompressed(ApiClient api, XFile x) async {
+    // Straight to the raw path for the formats re-encoding would ruin (see
+    // needsReencodeBeforeUpload); the server stores those as they arrive.
+    if (!needsReencodeBeforeUpload(x.path)) return api.uploadImage(x.path);
     List<int>? bytes;
     try {
       bytes = _compressedCache[x.path];

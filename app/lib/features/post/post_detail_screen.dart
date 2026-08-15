@@ -329,7 +329,9 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                         child: Text(post.body,
                             style: const TextStyle(color: kFgPrimary, fontSize: 15, height: 1.5)),
                       ),
-                    if (post.kind == 'image' && post.images.isNotEmpty)
+                    // On the attachments, not on kind: a post carrying a clip is kind
+                    // 'video', and gating on 'image' would render it as caption only.
+                    if (post.media.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: ClipRRect(
@@ -337,13 +339,14 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                           child: AspectRatio(
                             aspectRatio: 4 / 3,
                             child: PostImageCarousel(
-                              mediaIds: post.images,
+                              media: post.media,
                               groupId: widget.groupId,
                               onImageTap: (mediaId) => PhotoViewerScreen.open(
                                 context,
-                                mediaIds: post.images,
-                                initialIndex:
-                                    post.images.indexOf(mediaId).clamp(0, post.images.length - 1),
+                                media: post.media,
+                                initialIndex: post.media
+                                    .indexWhere((m) => m.id == mediaId)
+                                    .clamp(0, post.media.length - 1),
                                 groupId: widget.groupId,
                               ),
                             ),
@@ -588,11 +591,13 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
               ],
             ),
           ),
-          if (post.kind == 'image' && post.mediaId != null)
+          // A clip is not offered: Gal writes the bytes as they arrive, so it would land in
+          // the gallery as a file that will not open.
+          if (post.imageMedia.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.download_outlined, size: 22, color: kFgSecondary),
               tooltip: 'Save photo',
-              onPressed: () => _savePhoto(post.mediaId!),
+              onPressed: () => _savePhoto(post.imageMedia.first.id),
             ),
         ],
       ),

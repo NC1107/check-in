@@ -291,9 +291,10 @@ EOF
 		-Server
 	}
 
-	# Larger body limit so image uploads pass through.
+	# Larger body limit so uploads pass through. Sized for a video clip
+	# (CHECKIN_MAX_VIDEO_BYTES, 25 MiB) plus multipart framing, not a photo.
 	request_body {
-		max_size 15MB
+		max_size 30MB
 	}
 }
 
