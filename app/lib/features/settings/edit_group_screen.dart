@@ -43,6 +43,26 @@ class EditGroupsScreen extends ConsumerWidget {
                   style: const TextStyle(color: kFgMuted, fontSize: 12)),
               trailing: const Icon(Icons.chevron_right, size: 18, color: kFgMuted),
             ),
+          // Signed-out groups get plain rows rather than the editor: renaming, recolouring
+          // and member management all need a live token. Without them the only affordance
+          // anywhere was the feed filter's "sign back in", a dead end for anyone the host
+          // removed.
+          for (final g in session.signedOut)
+            ListTile(
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => AuthScreen(initialServer: g.baseUrl)),
+              ),
+              leading: const Icon(Icons.lock_outline, size: 18, color: kFgMuted),
+              title: Text(g.displayName,
+                  style: const TextStyle(color: kFgSecondary, fontSize: 15)),
+              subtitle: Text('Signed out · ${g.id}',
+                  style: const TextStyle(color: kFgMuted, fontSize: 12)),
+              trailing: IconButton(
+                icon: const Icon(Icons.close, size: 18, color: kFgMuted),
+                tooltip: 'Remove from this device',
+                onPressed: () => _forget(context, ref, g),
+              ),
+            ),
           const Divider(color: kBorder, height: 24),
           ListTile(
             onTap: () => Navigator.of(context).push(
@@ -55,6 +75,38 @@ class EditGroupsScreen extends ConsumerWidget {
         ],
       ),
     );
+  }
+
+  /// Drops a signed-out group from this device. Distinct from leaving: there is no token
+  /// left to log out with, so this never calls the group's server - which is the point,
+  /// since the reason it is signed out may be that the server rejected or forgot us.
+  Future<void> _forget(BuildContext context, WidgetRef ref, ServerAccount g) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kBgSurface,
+        title: Text('Remove ${g.displayName}?',
+            style: const TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700)),
+        content: const Text(
+          'This only forgets the group on this device, so it stops showing in your feed '
+          'filter. If your account there still exists you can add the group again anytime.',
+          style: TextStyle(color: kFgSecondary, fontSize: 14, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: kFgSecondary)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    HapticFeedback.mediumImpact();
+    await ref.read(multiSessionProvider.notifier).removeGroup(g.id);
   }
 }
 
