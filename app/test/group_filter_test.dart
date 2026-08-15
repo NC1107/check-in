@@ -30,7 +30,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          multiSessionProvider.overrideWith((ref) => controller),
+          multiSessionProvider.overrideWith(() => controller),
           // Mirror production: the feed only carries posts from currently-shown groups.
           feedProvider.overrideWith((ref) async {
             final shown = {for (final g in ref.watch(multiSessionProvider).shownGroups) g.id};

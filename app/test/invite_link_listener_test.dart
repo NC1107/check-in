@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -132,7 +133,7 @@ void main() {
     List<Override> signedIn() {
       SharedPreferences.setMockInitialValues({'seen_selfhost_intro': true, 'terms_accepted': true});
       return [
-        multiSessionProvider.overrideWith((ref) => MultiSessionController.seeded(MultiSession(
+        multiSessionProvider.overrideWith(() => MultiSessionController.seeded(MultiSession(
               groups: [
                 ServerAccount(
                   id: 'beta.example.com',
@@ -178,7 +179,7 @@ void main() {
       ));
       await tester.pumpAndSettle();
 
-      container.read(pendingInviteServerProvider.notifier).state = server;
+      container.read(pendingInviteServerProvider.notifier).park(server);
       await tester.pumpAndSettle();
 
       expect(find.text(server), findsOneWidget);

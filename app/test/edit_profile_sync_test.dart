@@ -74,10 +74,10 @@ void main() {
             profileMediaId: profileMediaId),
       );
 
-  Future<_FakeApi> pumpSheet(
+  Future<void> pumpSheet(
     WidgetTester tester, {
     required MultiSessionController controller,
-    required String editingGroupId,
+    required ServerAccount editing,
     required Map<String, _FakeApi> apis,
   }) async {
     // The sheet is designed to size itself inside a bottom-sheet's own constraints; give
@@ -88,20 +88,18 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    final user = controller.state.byId(editingGroupId)!.user!;
     await tester.pumpWidget(ProviderScope(
       overrides: [
-        multiSessionProvider.overrideWith((ref) => controller),
+        multiSessionProvider.overrideWith(() => controller),
         for (final e in apis.entries) contentApiProvider(e.key).overrideWithValue(e.value),
       ],
       child: MaterialApp(
         home: Scaffold(
-          body: EditProfileSheet(user: user, groupId: editingGroupId),
+          body: EditProfileSheet(user: editing.user!, groupId: editing.id),
         ),
       ),
     ));
     await tester.pump();
-    return apis[editingGroupId]!;
   }
 
   // A bounded pump loop rather than pumpAndSettle(): the sheet's existing-photo preview
@@ -122,9 +120,7 @@ void main() {
     final apiB = _FakeApi();
 
     await pumpSheet(tester,
-        controller: controller,
-        editingGroupId: 'alpha.invalid',
-        apis: {'alpha.invalid': apiA, 'beta.invalid': apiB});
+        controller: controller, editing: a, apis: {'alpha.invalid': apiA, 'beta.invalid': apiB});
 
     expect(find.text('Sync photo to all groups'), findsOneWidget);
     await tester.tap(find.text('Sync photo to all groups'));
@@ -155,9 +151,7 @@ void main() {
     final apiB = _FakeApi();
 
     await pumpSheet(tester,
-        controller: controller,
-        editingGroupId: 'alpha.invalid',
-        apis: {'alpha.invalid': apiA, 'beta.invalid': apiB});
+        controller: controller, editing: a, apis: {'alpha.invalid': apiA, 'beta.invalid': apiB});
 
     await tester.tap(find.text('Save'));
     await settle(tester);
@@ -179,9 +173,7 @@ void main() {
     final apiB = _FakeApi(uploadFails: true);
 
     await pumpSheet(tester,
-        controller: controller,
-        editingGroupId: 'alpha.invalid',
-        apis: {'alpha.invalid': apiA, 'beta.invalid': apiB});
+        controller: controller, editing: a, apis: {'alpha.invalid': apiA, 'beta.invalid': apiB});
 
     await tester.tap(find.text('Sync photo to all groups'));
     await settle(tester);
@@ -200,8 +192,7 @@ void main() {
     final controller = MultiSessionController.seeded(MultiSession(groups: [a], restored: true));
     final apiA = _FakeApi();
 
-    await pumpSheet(tester,
-        controller: controller, editingGroupId: 'alpha.invalid', apis: {'alpha.invalid': apiA});
+    await pumpSheet(tester, controller: controller, editing: a, apis: {'alpha.invalid': apiA});
 
     expect(find.text('Sync photo to all groups'), findsNothing);
   });
