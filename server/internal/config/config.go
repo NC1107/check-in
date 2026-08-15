@@ -27,6 +27,10 @@ type Config struct {
 	SessionTTL time.Duration
 	// MaxUploadBytes caps the size of an uploaded image.
 	MaxUploadBytes int64
+	// MaxVideoBytes caps the size of an uploaded video clip. Separate from MaxUploadBytes
+	// because a 10s H.264 clip is a few times heavier than a photo, and raising the photo
+	// limit to match would also raise what a photo upload can spend.
+	MaxVideoBytes int64
 	// DebugToken, when non-empty, enables the /debug web view (stats, phone numbers,
 	// and a destructive DB reset) guarded by this token. Leave unset to disable entirely.
 	DebugToken string
@@ -62,6 +66,7 @@ func Load() (Config, error) {
 		PublicURL:          getenv("CHECKIN_PUBLIC_URL", ""),
 		SessionTTL:         getdur("CHECKIN_SESSION_TTL", 30*24*time.Hour),
 		MaxUploadBytes:     getint64("CHECKIN_MAX_UPLOAD_BYTES", 10<<20), // 10 MiB
+		MaxVideoBytes:      getint64("CHECKIN_MAX_VIDEO_BYTES", 25<<20),  // 25 MiB
 		DebugToken:         getenv("CHECKIN_DEBUG_TOKEN", ""),
 		DefaultCountryCode: getenv("CHECKIN_DEFAULT_COUNTRY_CODE", "1"),
 		FCMCredentialsFile: getenv("CHECKIN_FCM_CREDENTIALS_FILE", ""),

@@ -34,6 +34,7 @@ Under Compose, sensible values are already wired up; override only if you need t
 | `CHECKIN_MEDIA_DIR` | `./data/media` (`/data/media` in the image) | Where uploaded images are stored. Backed by the `media_data` volume in Compose. |
 | `CHECKIN_SESSION_TTL` | `720h` (30 days) | How long a login session stays valid. Accepts Go durations (e.g. `168h`, `720h`). |
 | `CHECKIN_MAX_UPLOAD_BYTES` | `10485760` (10 MiB) | Maximum accepted size for an uploaded image. |
+| `CHECKIN_MAX_VIDEO_BYTES` | `26214400` (25 MiB) | Maximum accepted size for an uploaded video clip. Clips are capped at 12 seconds server-side, so this mostly bounds how generous a bitrate the app may send. If you raise it, raise the reverse proxy's request body limit to match (`request_body max_size` in the `Caddyfile`), or uploads fail at the proxy before reaching the server. |
 
 ## Push notifications
 
