@@ -82,6 +82,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   String? _serverError; // shown inline under the server-address field
   String? _phoneError; // shown inline under the phone field (bad number / not invited)
   bool _isFirstAdmin = false;
+  // Whether to show the accent picker on the profile step. Latched when we enter that
+  // step rather than watched live: the picker persists on tap, so a live check would make
+  // the section vanish under the user's finger the moment they chose a color.
+  bool _askAccent = false;
   AuthResult? _pendingAuth; // captured from signup, applied on "Enter Check-In"
   int? _invited; // number of invitees added on the host invite step (null = not done)
   // The server URL we've successfully reached. Null until the first successful probe;
@@ -301,8 +305,15 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       if (res.registered) {
         setState(() => _loginMode = true); // existing account → reveal the password field
       } else if (res.allowed) {
+        // Read the group list before [_finish] appends this one, so "has groups" means
+        // "was already established before this join".
+        final askAccent = await shouldPromptForAccent(
+          hasGroups: ref.read(multiSessionProvider).groups.isNotEmpty,
+        );
+        if (!mounted) return;
         setState(() {
           _isFirstAdmin = res.isFirstAdmin;
+          _askAccent = askAccent;
           _step = _Step.profile;
         });
       } else {
@@ -750,12 +761,14 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           ),
         ),
         const SizedBox(height: 24),
-        const FieldLabel('Accent color'),
-        const Text('Pick a color - it themes the app for you and updates live.',
-            style: TextStyle(color: _fgMuted, fontSize: 12, height: 1.4)),
-        const SizedBox(height: 14),
-        const AccentPicker(swatchSize: 50),
-        const SizedBox(height: 22),
+        if (_askAccent) ...[
+          const FieldLabel('Accent color'),
+          const Text('Pick a color - it themes the app for you and updates live.',
+              style: TextStyle(color: _fgMuted, fontSize: 12, height: 1.4)),
+          const SizedBox(height: 14),
+          const AccentPicker(swatchSize: 50),
+          const SizedBox(height: 22),
+        ],
         const FieldLabel('Full name'),
         Row(
           children: [

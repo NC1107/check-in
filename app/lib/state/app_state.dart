@@ -618,6 +618,25 @@ final accentProvider = StateNotifierProvider<AccentController, AccentPalette>(
   (ref) => AccentController(),
 );
 
+/// Whether signup should offer the accent picker, given whether this device already has
+/// groups connected. The accent is one per-device theme, and the picker persists the
+/// instant a swatch is tapped, so offering it on a later group join lets that join
+/// silently replace a color the user has been living with.
+///
+/// Both conditions carry weight. A stored accent alone would re-ask someone who signed up
+/// once and never touched the swatches; connected groups alone would ask someone whose
+/// first-ever action was logging in to an existing account, since that path skips signup
+/// entirely. Together they mean "this device has never been through signup".
+///
+/// This reads preferences rather than [accentProvider] because [AccentController] resolves
+/// a missing value through [accentById] to the first preset, so its state can't tell
+/// "never chose" from "chose green".
+Future<bool> shouldPromptForAccent({required bool hasGroups}) async {
+  if (hasGroups) return false;
+  final prefs = await SharedPreferences.getInstance();
+  return prefs.getString(_kAccentId) == null;
+}
+
 /// The location filter applied to the home feed - null means all places. Only applies
 /// to a single group's feed (the filter is hidden in the All view).
 final feedLocationProvider = StateProvider<Set<String>>((ref) => const {});
