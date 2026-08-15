@@ -5,7 +5,8 @@ import 'package:checkin/theme/group_color.dart';
 
 /// Group colors: the admin-set palette lookup, the deterministic fallback, and how
 /// ServerAccount picks between them. These must stay in sync with the server's
-/// groupColorIDs (validated in servername_test.go).
+/// groupColorHex (validated in servername_test.go and, for the hexes themselves,
+/// join_test.go's TestGroupColorHexCoversTheWholePalette).
 void main() {
   test('groupColorById returns the palette color for a known id, null otherwise', () {
     expect(groupColorById('coral'), kGroupColors.firstWhere((g) => g.id == 'coral').color);

@@ -64,6 +64,11 @@ func renderJoinPage(w http.ResponseWriter, view joinView) {
 	// fonts, so inline styles are the only thing it needs beyond 'none'.
 	w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// When no CHECKIN_PUBLIC_URL is set the address on this page comes from the request's
+	// own Host, so a cache in front that keyed on path alone could serve one visitor a link
+	// pointing at somebody else's server - and this page's whole job is to be trusted about
+	// which server to talk to.
+	w.Header().Set("Cache-Control", "no-store")
 	if err := joinTmpl.Execute(w, view); err != nil {
 		// Response already partially written; nothing useful to do but let the recoverer log.
 		return

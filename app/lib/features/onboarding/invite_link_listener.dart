@@ -61,6 +61,10 @@ class _InviteLinkListenerState extends ConsumerState<InviteLinkListener>
   /// Parks the invite for [AuthScreen] to prefill from, and opens that screen itself only
   /// when nothing else is going to.
   void _receive(String server) {
+    // The platform hop that gets us here is only observable on a real device, and a link
+    // that silently does nothing looks the same as one the OS never delivered. This is what
+    // tells those two apart during a device test.
+    debugPrint('[CHECKIN] invite link: $server');
     ref.read(pendingInviteServerProvider.notifier).state = server;
 
     // Every other state already routes through AuthScreen, which takes the parked invite as

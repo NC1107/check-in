@@ -155,6 +155,11 @@ func TestJoinPageHeaders(t *testing.T) {
 	if csp != "default-src 'none'; style-src 'unsafe-inline'" {
 		t.Errorf("Content-Security-Policy = %q", csp)
 	}
+	// Without CHECKIN_PUBLIC_URL the address on the page is derived from the request Host,
+	// so it must never be cached and handed to a visitor it was not built for.
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
 }
 
 // The group name and address are attacker-influencable only by the group's own admin, but

@@ -17,6 +17,10 @@ String? inviteServerFromUri(Uri uri) {
     if (server == null || server.isEmpty) return null;
     final parsed = Uri.tryParse(server);
     if (parsed == null || parsed.host.isEmpty) return null;
+    // Anyone can register a custom scheme, so this value arrives untrusted. It goes on to
+    // become an API base URL, and the https branch below already only ever yields http or
+    // https - accept nothing else here either.
+    if (parsed.scheme != 'https' && parsed.scheme != 'http') return null;
     return server;
   }
   if ((uri.scheme == 'https' || uri.scheme == 'http') && uri.path == '/join') {
