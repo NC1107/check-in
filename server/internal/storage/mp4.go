@@ -56,6 +56,7 @@ var privacyBoxes = map[string]bool{
 	"\xa9mak": true, // manufacturer
 	"\xa9mod": true, // model
 	"\xa9swr": true, // encoding software
+	"\xa9too": true, // encoding tool, which is the one most muxers actually write
 	"\xa9day": true, // capture date
 }
 
