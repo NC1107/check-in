@@ -100,6 +100,28 @@ func main() {
 	_ = httpServer.Shutdown(shutdownCtx)
 }
 
+// publishedFirebaseProject is the project the App Store and Play Store builds are configured
+// with (app/android/app/google-services.json, app/ios/Runner/GoogleService-Info.plist). Those
+// devices mint their FCM tokens against it, so credentials for this project reach them and
+// credentials for any other project do not.
+const publishedFirebaseProject = "check-in-48fdc"
+
+// directPushLog is the boot line for direct-FCM mode. Which app a member installed decides
+// whether direct delivery reaches them at all, so the line has to say which case the host is
+// actually in: stating the warning unconditionally sends someone whose push works perfectly
+// off hunting for a fault that isn't there.
+func directPushLog(projectID string) string {
+	if projectID == publishedFirebaseProject {
+		return fmt.Sprintf("push: direct FCM through Firebase project %q, the one the published "+
+			"apps were built against, so members running those receive notifications. "+
+			"See docs/self-hosting/configuration.md#push-notifications", projectID)
+	}
+	return fmt.Sprintf("push: direct FCM through Firebase project %q. This only reaches an app "+
+		"built against that project; the published apps were not, so members running those get "+
+		"nothing. Clear CHECKIN_FCM_CREDENTIALS_FILE to deliver through the relay instead. "+
+		"See docs/self-hosting/configuration.md#push-notifications", projectID)
+}
+
 // setupPush selects and builds the push Notifier from config, logging the chosen mode. It
 // returns nil (push off) rather than erroring, so a push misconfiguration never stops the
 // server. Precedence: direct FCM when credentials are present (a host shipping its own app,
@@ -120,10 +142,7 @@ func setupPush(ctx context.Context, cfg config.Config, database *db.DB) push.Not
 			log.Println("push: disabled (empty FCM credentials file)")
 			return nil
 		}
-		log.Printf("push: direct FCM, sending through Firebase project %q. Delivery only works if "+
-			"the app your members installed was built against this project; the published apps "+
-			"were not. See docs/self-hosting/configuration.md#push-notifications",
-			sender.ProjectID())
+		log.Print(directPushLog(sender.ProjectID()))
 		return sender
 	}
 

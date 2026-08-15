@@ -19,19 +19,23 @@ void main() {
     user: User(id: 1, name: 'Nick', phone: '+15550001111', isAdmin: false),
   );
 
+  // Ids in, image-typed entries out: exactly what the feed passes for a post from a server
+  // that predates typed media.
   Future<void> pump(WidgetTester tester,
       {required List<int> mediaIds, int initialIndex = 0}) async {
     final controller =
         MultiSessionController.seeded(MultiSession(groups: [account], restored: true));
     await tester.pumpWidget(ProviderScope(
-      overrides: [multiSessionProvider.overrideWith((ref) => controller)],
+      overrides: [multiSessionProvider.overrideWith(() => controller)],
       child: MaterialApp(
         home: Builder(builder: (context) {
           return Scaffold(
             body: Center(
               child: TextButton(
                 onPressed: () => PhotoViewerScreen.open(context,
-                    mediaIds: mediaIds, initialIndex: initialIndex, groupId: 'alpha.invalid'),
+                    media: PostMedia.images(mediaIds),
+                    initialIndex: initialIndex,
+                    groupId: 'alpha.invalid'),
                 child: const Text('open'),
               ),
             ),

@@ -4,7 +4,8 @@ import 'package:flutter/material.dart';
 /// personal accent presets (theme/accent.dart) and from one another. Group color is an
 /// identity/attribution cue only - a card's left rail and a dot by the group in the merged
 /// feed - never an action color, so the feed never turns into a rainbow of buttons. These
-/// ids must stay in sync with the server's groupColorIDs (internal/api/auth_handlers.go).
+/// ids and hexes must stay in sync with the server's groupColorHex
+/// (internal/api/auth_handlers.go), which both validates them and colors the invite page.
 class GroupColor {
   const GroupColor(this.id, this.name, this.color);
   final String id;

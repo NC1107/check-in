@@ -7,7 +7,6 @@
 groups/*.env
 docker-compose.generated.yml
 Caddyfile.generated
-caddy-static/
 
 # Server
 server/data/

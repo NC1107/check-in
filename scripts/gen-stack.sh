@@ -6,8 +6,9 @@
 #
 #   docker-compose.generated.yml   shared db/caddy/backups + one server-<slug> per group
 #   Caddyfile.generated            one HTTPS site block per group subdomain
-#   caddy-static/<slug>/join.html  the invite landing page for each group
-#   caddy-static/shared/           apple-app-site-association + assetlinks.json
+#
+# Each group's invite page is served by its own server at /join, so there is nothing
+# static to render.
 #
 # The original group (the bare $CHECKIN_DOMAIN, database "checkin", volume
 # "media_data") is always rendered as service server-main, so an existing
@@ -17,9 +18,6 @@
 # interpolation from .env as the hand-written one. Run the stack with:
 #
 #   docker compose -f docker-compose.generated.yml up -d
-#
-# Optional .env keys used here (read only to render static files):
-#   ANDROID_CERT_SHA256   Android app-signing cert fingerprint for assetlinks.json
 
 set -euo pipefail
 
@@ -27,10 +25,6 @@ cd "$(dirname "$0")/.."
 
 COMPOSE_OUT=docker-compose.generated.yml
 CADDY_OUT=Caddyfile.generated
-STATIC_DIR=caddy-static
-
-APPLE_TEAM_ID="76S78SUWVM"
-BUNDLE_ID="top.npcserver.checkin"
 
 # ---- read the registry -------------------------------------------------------
 
@@ -66,15 +60,6 @@ if [ "${#slugs[@]}" -gt 0 ]; then
     echo "error: duplicate slug(s) in groups/: $dupes" >&2
     exit 1
   fi
-fi
-
-# Optional values read from .env only to render static files (secrets stay out of the
-# generated compose file, which interpolates ${VAR} at `docker compose` time).
-android_sha=""
-main_name=""
-if [ -f .env ]; then
-  android_sha=$(sed -n 's/^ANDROID_CERT_SHA256=//p' .env | tail -1)
-  main_name=$(sed -n 's/^CHECKIN_SERVER_NAME=//p' .env | tail -1 | tr -d '"')
 fi
 
 # ---- one server service ------------------------------------------------------
@@ -192,7 +177,6 @@ EOF
       CHECKIN_DOMAIN: ${CHECKIN_DOMAIN:?set CHECKIN_DOMAIN in .env}
     volumes:
       - ./Caddyfile.generated:/etc/caddy/Caddyfile:ro
-      - ./caddy-static:/srv/checkin-static:ro
       - caddy_data:/data
       - caddy_config:/config
     deploy:
@@ -268,37 +252,14 @@ EOF
 
 # ---- Caddyfile.generated ------------------------------------------------------
 
-# emit_site <host> <upstream-service> <slug-for-static>
+# emit_site <host> <upstream-service>
 emit_site() {
-  local host="$1" svc="$2" slug="$3"
+  local host="$1" svc="$2"
   cat <<EOF
 ${host} {
 	import checkin_common
 
-	# Invite landing page: https://${host}/join
-	handle /join {
-		root * /srv/checkin-static/${slug}
-		rewrite * /join.html
-		file_server
-	}
-
-	# iOS Universal Links / Android App Links association files.
-	handle /.well-known/apple-app-site-association {
-		root * /srv/checkin-static/shared
-		rewrite * /apple-app-site-association
-		header Content-Type application/json
-		file_server
-	}
-	handle /.well-known/assetlinks.json {
-		root * /srv/checkin-static/shared
-		rewrite * /assetlinks.json
-		header Content-Type application/json
-		file_server
-	}
-
-	handle {
-		reverse_proxy ${svc}:8080
-	}
+	reverse_proxy ${svc}:8080
 }
 
 EOF
@@ -330,103 +291,18 @@ EOF
 		-Server
 	}
 
-	# Larger body limit so image uploads pass through.
+	# Larger body limit so uploads pass through. Sized for a video clip
+	# (CHECKIN_MAX_VIDEO_BYTES, 25 MiB) plus multipart framing, not a photo.
 	request_body {
-		max_size 15MB
+		max_size 30MB
 	}
 }
 
 EOF
-  emit_site '{$CHECKIN_DOMAIN}' server-main main
+  emit_site '{$CHECKIN_DOMAIN}' server-main
   for s in "${slugs[@]}"; do
-    emit_site "$s.{\$CHECKIN_DOMAIN}" "server-$s" "$s"
+    emit_site "$s.{\$CHECKIN_DOMAIN}" "server-$s"
   done
 } > "$CADDY_OUT"
 
-# ---- static assets: /join landing + association files -------------------------
-
-mkdir -p "$STATIC_DIR/shared"
-
-# Apple App Site Association: lets iOS open https://<group>/join directly in the app.
-cat > "$STATIC_DIR/shared/apple-app-site-association" <<EOF
-{
-  "applinks": {
-    "apps": [],
-    "details": [
-      {
-        "appIDs": ["${APPLE_TEAM_ID}.${BUNDLE_ID}"],
-        "components": [{ "/": "/join" }]
-      }
-    ]
-  }
-}
-EOF
-
-# Android App Links. Needs the app-signing cert SHA-256 (Play Console → App integrity);
-# set ANDROID_CERT_SHA256 in .env and re-run, or the file ships with a placeholder.
-cat > "$STATIC_DIR/shared/assetlinks.json" <<EOF
-[
-  {
-    "relation": ["delegate_permission/common.handle_all_urls"],
-    "target": {
-      "namespace": "android_app",
-      "package_name": "${BUNDLE_ID}",
-      "sha256_cert_fingerprints": ["${android_sha:-REPLACE_WITH_PLAY_APP_SIGNING_SHA256}"]
-    }
-  }
-]
-EOF
-
-# emit_join <slug> <display-name> <host-expr-comment>
-emit_join() {
-  local slug="$1" name="$2"
-  mkdir -p "$STATIC_DIR/$slug"
-  cat > "$STATIC_DIR/$slug/join.html" <<EOF
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Join ${name} on Check-In</title>
-<style>
-  body { margin: 0; font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
-         background: #101014; color: #ececf1; display: grid; min-height: 100vh;
-         place-items: center; text-align: center; }
-  main { padding: 32px 24px; max-width: 420px; }
-  h1 { font-size: 24px; margin: 0 0 10px; }
-  p  { color: #a2a2ad; font-size: 15px; line-height: 1.55; margin: 0 0 22px; }
-  a.btn { display: inline-block; background: #5557e0; color: #fff; text-decoration: none;
-          font-weight: 700; padding: 13px 26px; border-radius: 12px; }
-  .hint { margin-top: 20px; font-size: 13px; color: #6f6f7a; }
-  code { color: #a2a2ad; }
-</style>
-</head>
-<body>
-<main>
-  <h1>You&rsquo;ve been invited to ${name}</h1>
-  <p>${name} shares private check-ins on its own Check-In server. Open this invite in
-     the app to join &mdash; your phone number must be on the group&rsquo;s invite list.</p>
-  <a class="btn" href="checkin://join?server=https%3A%2F%2F__HOST__">Open in Check-In</a>
-  <p class="hint">Don&rsquo;t have the app yet? Install <strong>Check-In</strong> from the
-     App&nbsp;Store or Google&nbsp;Play, then tap &ldquo;Add group&rdquo; and enter
-     <code>__HOST__</code>.</p>
-</main>
-<script>
-  // The page is served from the group's own subdomain, so the invite target is simply
-  // where we are. Rewrites the deep link + hint to this host.
-  var host = location.host;
-  document.querySelector('a.btn').href =
-    'checkin://join?server=' + encodeURIComponent('https://' + host);
-  document.querySelector('code').textContent = host;
-</script>
-</body>
-</html>
-EOF
-}
-
-emit_join main "${main_name:-your group}"
-for s in "${slugs[@]}"; do
-  emit_join "$s" "${display_names[$s]}"
-done
-
-echo "rendered: $COMPOSE_OUT, $CADDY_OUT, $STATIC_DIR/ (groups: main${slugs[*]:+ ${slugs[*]}})"
+echo "rendered: $COMPOSE_OUT, $CADDY_OUT (groups: main${slugs[*]:+ ${slugs[*]}})"

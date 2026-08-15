@@ -88,12 +88,19 @@ You can re-upload contacts any time to add new people, and remove members from t
 
 ## 7. Share with friends
 
-Tell your friends two things:
+Once someone's number is on the list, send them your group's invite link:
 
-1. The server URL: `https://check-in.example.com`
-2. To sign up with the phone number you have for them.
+```
+https://check-in.example.com/join
+```
 
-They install the app, enter the URL, enter their number, and complete signup.
+The **Admin** tab has an **Invite link** row that copies it for you. Tapping it opens
+Check-In with your server's address already filled in, so all they type is their phone
+number. Anyone who doesn't have the app yet gets the App Store and Google Play links on
+that page, and taps your link again once it's installed.
+
+The link only says *which* server to talk to. Their number still has to be on the invite
+list, so forwarding it to a stranger gets them nowhere.
 
 ---
 

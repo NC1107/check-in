@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -42,22 +43,24 @@ void main() {
     });
   });
 
-  Future<MultiSessionController> restoredController() async {
-    final controller = MultiSessionController();
-    // _load runs async from the constructor; wait for the restore to land.
-    for (var i = 0; i < 100 && !controller.state.restored; i++) {
+  /// Boots the controller through a container - a Notifier only holds state once a provider
+  /// has built it - and waits for the restore build() kicks off to land.
+  Future<ProviderContainer> restoredContainer() async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    for (var i = 0; i < 100 && !container.session.restored; i++) {
       await Future<void>.delayed(const Duration(milliseconds: 10));
     }
-    expect(controller.state.restored, isTrue);
-    return controller;
+    expect(container.session.restored, isTrue);
+    return container;
   }
 
   test('migrates the legacy single session into the group list', () async {
     SharedPreferences.setMockInitialValues({'base_url': 'https://one.invalid'});
     secureStore['token'] = 'legacy-tok';
 
-    final controller = await restoredController();
-    final s = controller.state;
+    final container = await restoredContainer();
+    final s = container.session;
 
     expect(s.groups, hasLength(1));
     expect(s.groups.single.id, 'one.invalid');
@@ -83,8 +86,8 @@ void main() {
     secureStore['token_a.invalid'] = 'tok-a';
     // b has no token: signed out there, but the entry must survive for re-login.
 
-    final controller = await restoredController();
-    final s = controller.state;
+    final container = await restoredContainer();
+    final s = container.session;
 
     expect([for (final g in s.groups) g.id], ['a.invalid', 'b.invalid']);
     expect(s.byId('a.invalid')!.token, 'tok-a');
@@ -104,10 +107,10 @@ void main() {
     secureStore['token_a.invalid'] = 'tok-a';
     secureStore['token_b.invalid'] = 'tok-b';
 
-    final controller = await restoredController();
+    final container = await restoredContainer();
     // "Show only Beta" becomes "hide everyone but Beta".
-    expect(controller.state.hiddenGroupIds, {'a.invalid'});
-    expect(controller.state.shownGroups.map((g) => g.id), ['b.invalid']);
+    expect(container.session.hiddenGroupIds, {'a.invalid'});
+    expect(container.session.shownGroups.map((g) => g.id), ['b.invalid']);
 
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getString('active_group_id'), isNull); // retired
@@ -123,8 +126,8 @@ void main() {
       'active_group_id': 'gone.invalid',
     });
 
-    final controller = await restoredController();
-    expect(controller.state.hiddenGroupIds, isEmpty);
+    final container = await restoredContainer();
+    expect(container.session.hiddenGroupIds, isEmpty);
   });
 
   test('toggleGroup hides/shows a group and persists; hiding every group is allowed', () async {
@@ -136,25 +139,26 @@ void main() {
     });
     secureStore['token_a.invalid'] = 'tok-a';
     secureStore['token_b.invalid'] = 'tok-b';
-    final controller = await restoredController();
+    final container = await restoredContainer();
+    final controller = container.controller;
     final prefs = await SharedPreferences.getInstance();
 
     await controller.toggleGroup('b.invalid');
-    expect(controller.state.hiddenGroupIds, {'b.invalid'});
-    expect(controller.state.shownGroups.map((g) => g.id), ['a.invalid']);
+    expect(container.session.hiddenGroupIds, {'b.invalid'});
+    expect(container.session.shownGroups.map((g) => g.id), ['a.invalid']);
     expect(prefs.getString('hidden_group_ids'), jsonEncode(['b.invalid']));
 
     // The last shown group can be hidden too - the feed shows an explicit empty state.
     await controller.toggleGroup('a.invalid');
-    expect(controller.state.hiddenGroupIds, {'a.invalid', 'b.invalid'});
-    expect(controller.state.shownGroups, isEmpty);
-    expect(controller.state.nothingShown, isTrue);
+    expect(container.session.hiddenGroupIds, {'a.invalid', 'b.invalid'});
+    expect(container.session.shownGroups, isEmpty);
+    expect(container.session.nothingShown, isTrue);
     // Screens that need "a group" (profile/settings) still get one.
-    expect(controller.state.current?.id, 'a.invalid');
+    expect(container.session.current?.id, 'a.invalid');
 
     // All resets.
     await controller.showAllGroups();
-    expect(controller.state.hiddenGroupIds, isEmpty);
+    expect(container.session.hiddenGroupIds, isEmpty);
     expect(prefs.getString('hidden_group_ids'), jsonEncode(<String>[]));
   });
 
@@ -169,21 +173,22 @@ void main() {
     secureStore['token_a.invalid'] = 'tok-a';
     secureStore['token_b.invalid'] = 'tok-b';
 
-    final controller = await restoredController();
-    expect(controller.state.hiddenGroupIds, {'a.invalid'});
+    final container = await restoredContainer();
+    final controller = container.controller;
+    expect(container.session.hiddenGroupIds, {'a.invalid'});
 
     await controller.signOutGroup('b.invalid');
-    expect(controller.state.byId('b.invalid'), isNotNull);
-    expect(controller.state.byId('b.invalid')!.isSignedIn, isFalse);
+    expect(container.session.byId('b.invalid'), isNotNull);
+    expect(container.session.byId('b.invalid')!.isSignedIn, isFalse);
     expect(secureStore.containsKey('token_b.invalid'), isFalse);
     // The other group is untouched.
-    expect(controller.state.byId('a.invalid')!.token, 'tok-a');
+    expect(container.session.byId('a.invalid')!.token, 'tok-a');
 
     await controller.removeGroup('a.invalid');
-    expect(controller.state.byId('a.invalid'), isNull);
+    expect(container.session.byId('a.invalid'), isNull);
     expect(secureStore.containsKey('token_a.invalid'), isFalse);
     // Removing a hidden group clears it from the hidden set too.
-    expect(controller.state.hiddenGroupIds, isEmpty);
+    expect(container.session.hiddenGroupIds, isEmpty);
   });
 
   test('groupIdFor derives the host', () {
@@ -198,18 +203,19 @@ void main() {
         {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha'},
       ]),
     });
-    final controller = await restoredController();
+    final container = await restoredContainer();
+    final controller = container.controller;
 
     await controller.renameGroup('a.invalid', 'Book Club');
-    expect(controller.state.byId('a.invalid')!.displayName, 'Book Club');
-    expect(controller.state.byId('a.invalid')!.serverName, 'Alpha');
+    expect(container.session.byId('a.invalid')!.displayName, 'Book Club');
+    expect(container.session.byId('a.invalid')!.serverName, 'Alpha');
     // Persisted so it survives a restart.
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getString('groups_json'), contains('Book Club'));
 
     await controller.renameGroup('a.invalid', '   ');
-    expect(controller.state.byId('a.invalid')!.nickname, isNull);
-    expect(controller.state.byId('a.invalid')!.displayName, 'Alpha');
+    expect(container.session.byId('a.invalid')!.nickname, isNull);
+    expect(container.session.byId('a.invalid')!.displayName, 'Alpha');
   });
 
   test('applyServerName updates the server name for everyone and drops any nickname', () async {
@@ -218,11 +224,12 @@ void main() {
         {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha', 'nickname': 'Mine'},
       ]),
     });
-    final controller = await restoredController();
-    expect(controller.state.byId('a.invalid')!.displayName, 'Mine');
+    final container = await restoredContainer();
+    final controller = container.controller;
+    expect(container.session.byId('a.invalid')!.displayName, 'Mine');
 
     await controller.applyServerName('a.invalid', 'Weekend Warriors');
-    final g = controller.state.byId('a.invalid')!;
+    final g = container.session.byId('a.invalid')!;
     expect(g.serverName, 'Weekend Warriors');
     expect(g.nickname, isNull); // the new server name is authoritative now
     expect(g.displayName, 'Weekend Warriors');
@@ -257,16 +264,23 @@ void main() {
         {'id': 'a.invalid', 'baseUrl': 'https://a.invalid', 'name': 'Alpha'},
       ]),
     });
-    final controller = await restoredController();
+    final container = await restoredContainer();
+    final controller = container.controller;
     final prefs = await SharedPreferences.getInstance();
 
     await controller.applyServerColor('a.invalid', 'coral');
-    expect(controller.state.byId('a.invalid')!.color, 'coral');
+    expect(container.session.byId('a.invalid')!.color, 'coral');
     expect(prefs.getString('groups_json'), contains('coral'));
 
     // Empty clears it back to the automatic color and drops it from storage.
     await controller.applyServerColor('a.invalid', '');
-    expect(controller.state.byId('a.invalid')!.color, isNull);
+    expect(container.session.byId('a.invalid')!.color, isNull);
     expect(prefs.getString('groups_json'), isNot(contains('coral')));
   });
+}
+
+/// The controller and the session it exposes, read back through the container that owns it.
+extension on ProviderContainer {
+  MultiSession get session => read(multiSessionProvider);
+  MultiSessionController get controller => read(multiSessionProvider.notifier);
 }

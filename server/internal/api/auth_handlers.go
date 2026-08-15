@@ -42,6 +42,10 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		"color":       s.serverColor(r.Context()),
 		"initialized": initialized,
 		"publicUrl":   s.cfg.PublicURL,
+		// What this server will accept an upload of. A client uses it to hide the video
+		// option against a self-hosted server that has not been updated yet; older clients
+		// ignore the key.
+		"mediaTypes": []string{"image", "gif", "video"},
 	})
 }
 
@@ -74,11 +78,13 @@ func validServerName(raw string) (string, bool) {
 	return name, true
 }
 
-// groupColorIDs is the fixed palette of admin-selectable group colors. The client renders
-// the same ids (theme/group_color.dart); the two must stay in sync.
-var groupColorIDs = map[string]bool{
-	"coral": true, "gold": true, "lime": true, "cyan": true,
-	"indigo": true, "magenta": true, "orange": true, "steel": true,
+// groupColorHex is the fixed palette of admin-selectable group colors, keyed by the id the
+// API speaks. The client renders the same ids and the same values
+// (app/lib/theme/group_color.dart); the two must stay in sync. The hex is only needed by
+// the /join page, which has no client to ask.
+var groupColorHex = map[string]string{
+	"coral": "#FF7A66", "gold": "#E5B93C", "lime": "#93D845", "cyan": "#34C6D8",
+	"indigo": "#7C83FF", "magenta": "#E668C8", "orange": "#F58A3C", "steel": "#8FA0B5",
 }
 
 // validGroupColor accepts an empty string (clear, back to the automatic color) or a known
@@ -88,7 +94,7 @@ func validGroupColor(raw string) (string, bool) {
 	if c == "" {
 		return "", true
 	}
-	if groupColorIDs[c] {
+	if _, ok := groupColorHex[c]; ok {
 		return c, true
 	}
 	return "", false
@@ -236,7 +242,7 @@ type signupReq struct {
 	DisplayName string `json:"displayName"` // optional override; defaults to the full name
 	Birthday    string `json:"birthday"`    // YYYY-MM-DD
 	Password    string `json:"password"`
-	MediaID     *int64 `json:"mediaId,omitempty"` // optional pre-uploaded profile picture
+	MediaID     *int64 `json:"mediaId,omitempty"` // rejected if set; kept so old payloads still parse
 }
 
 // displayName derives the public-facing name from a signup request: an explicit display
@@ -308,6 +314,17 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A signup can never legitimately reference media: uploading requires a session, and
+	// the account does not exist yet, so any id arriving here is by definition somebody
+	// else's file - accepting it would let a brand-new member claim another member's
+	// upload as their avatar, which the profile-photo visibility rule then shows to the
+	// whole group. The apps have never sent this field; the photo is uploaded right after
+	// signup with the fresh token instead.
+	if req.MediaID != nil {
+		writeErr(w, http.StatusBadRequest, "attach the profile photo after signing up")
+		return
+	}
+
 	hash, err := auth.HashPassword(password)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
@@ -316,7 +333,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 
 	user, err := s.db.CreateUser(r.Context(), phone, name,
 		strings.TrimSpace(req.FirstName), strings.TrimSpace(req.LastName),
-		birthday, req.MediaID, hash, isAdmin)
+		birthday, nil, hash, isAdmin)
 	if err != nil {
 		writeErr(w, http.StatusConflict, "could not create account (phone may already exist)")
 		return
@@ -498,6 +515,10 @@ func (s *Server) handleSetProfilePhoto(w http.ResponseWriter, r *http.Request) {
 	}
 	if media.OwnerID == nil || *media.OwnerID != u.ID {
 		writeErr(w, http.StatusForbidden, "that image isn't yours")
+		return
+	}
+	if !isImage(media.Mime) {
+		writeErr(w, http.StatusBadRequest, "a profile photo has to be an image")
 		return
 	}
 	if err := s.db.SetUserProfileMedia(r.Context(), u.ID, req.MediaID); err != nil {

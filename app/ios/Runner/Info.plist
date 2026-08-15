@@ -35,6 +35,11 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<!-- Let the Flutter framework route incoming links (InviteLinkListener) rather than the
+	     native side. On by default today; stated outright so a future engine default can't
+	     quietly break invites. -->
+	<key>FlutterDeepLinkingEnabled</key>
+	<true/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>

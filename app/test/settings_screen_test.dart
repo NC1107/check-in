@@ -37,7 +37,7 @@ void main() {
     ));
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [multiSessionProvider.overrideWith((ref) => controller)],
+        overrides: [multiSessionProvider.overrideWith(() => controller)],
         child: const MaterialApp(home: SettingsScreen(groupId: 'alpha.invalid')),
       ),
     );
@@ -163,5 +163,56 @@ void main() {
     expect(controller.state.byId('beta.invalid'), isNull);
     // Alpha is untouched, token intact.
     expect(controller.state.byId('alpha.invalid')!.isSignedIn, isTrue);
+  });
+
+  // A 401 signs a group out but keeps its entry so the feed filter can offer re-login.
+  // That read the same whether the session merely expired or the host removed you, and
+  // Edit groups only listed signed-in groups - so the one group you'd want gone was the
+  // one you could not reach Leave from.
+  group('a signed-out group', () {
+    ServerAccount signedOutBeta() => const ServerAccount(
+          id: 'beta.invalid',
+          baseUrl: 'https://beta.invalid',
+          serverName: 'Beta',
+        );
+
+    testWidgets('is listed in Edit groups so it is reachable at all', (tester) async {
+      await pump(tester, isAdmin: false, extraGroups: [signedOutBeta()]);
+
+      await tester.tap(find.text('Edit groups'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Beta'), findsOneWidget);
+      expect(find.textContaining('Signed out'), findsOneWidget);
+    });
+
+    testWidgets('can be removed from the device without calling its server', (tester) async {
+      final controller = await pump(tester, isAdmin: false, extraGroups: [signedOutBeta()]);
+      expect(controller.state.byId('beta.invalid'), isNotNull);
+
+      await tester.tap(find.text('Edit groups'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Remove from this device'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Remove'));
+      await tester.pumpAndSettle();
+
+      // Gone from the device, and the signed-in group is untouched.
+      expect(controller.state.byId('beta.invalid'), isNull);
+      expect(controller.state.byId('alpha.invalid'), isNotNull);
+    });
+
+    testWidgets('keeps its entry when the remove dialog is cancelled', (tester) async {
+      final controller = await pump(tester, isAdmin: false, extraGroups: [signedOutBeta()]);
+
+      await tester.tap(find.text('Edit groups'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Remove from this device'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(controller.state.byId('beta.invalid'), isNotNull);
+    });
   });
 }

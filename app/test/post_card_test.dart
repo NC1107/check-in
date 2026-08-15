@@ -37,7 +37,7 @@ void main() {
     final controller =
         MultiSessionController.seeded(MultiSession(groups: [account], restored: true));
     await tester.pumpWidget(ProviderScope(
-      overrides: [multiSessionProvider.overrideWith((ref) => controller)],
+      overrides: [multiSessionProvider.overrideWith(() => controller)],
       child: MaterialApp(home: Scaffold(body: PostCard(post: post, groupColor: groupColor))),
     ));
     await tester.pump();
@@ -59,7 +59,7 @@ void main() {
     final controller =
         MultiSessionController.seeded(MultiSession(groups: [account], restored: true));
     await tester.pumpWidget(ProviderScope(
-      overrides: [multiSessionProvider.overrideWith((ref) => controller)],
+      overrides: [multiSessionProvider.overrideWith(() => controller)],
       child: MaterialApp(
         home: Scaffold(
           body: ListView(children: [

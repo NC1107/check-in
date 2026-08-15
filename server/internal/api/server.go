@@ -46,6 +46,10 @@ func (s *Server) Router() http.Handler {
 	r.Get("/api/health", s.handleHealth)
 	r.Get("/api/server-info", s.handleServerInfo)
 
+	// The group's invite landing page. Public by design: it is the link a host sends to
+	// someone who doesn't have the app yet.
+	r.Get("/join", s.handleJoinPage)
+
 	// Debug/maintenance web view — only mounted when a debug token is configured,
 	// and every request must carry it. Disabled by default in production.
 	if s.cfg.DebugToken != "" {
@@ -114,6 +118,7 @@ func (s *Server) Router() http.Handler {
 
 		r.Post("/api/media", s.handleUploadMedia)
 		r.Get("/api/media/{id}", s.handleServeMedia)
+		r.Post("/api/media/{id}/poster", s.handleSetMediaPoster)
 
 		// Admin-only.
 		r.Group(func(r chi.Router) {

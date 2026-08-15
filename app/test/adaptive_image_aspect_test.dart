@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:checkin/api/models.dart';
 import 'package:checkin/state/app_state.dart';
 import 'package:checkin/widgets/post_image_carousel.dart';
 
@@ -49,9 +50,14 @@ void main() {
         MultiSessionController.seeded(const MultiSession(groups: [account], restored: true));
 
     await tester.pumpWidget(ProviderScope(
-      overrides: [multiSessionProvider.overrideWith((ref) => controller)],
+      overrides: [multiSessionProvider.overrideWith(() => controller)],
       child: const MaterialApp(
-        home: Scaffold(body: PostImageCarousel(mediaIds: [1], groupId: 'g')),
+        home: Scaffold(
+          body: PostImageCarousel(
+            media: [PostMedia(id: 1, mime: 'image/jpeg')],
+            groupId: 'g',
+          ),
+        ),
       ),
     ));
 
