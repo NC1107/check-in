@@ -611,10 +611,13 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                 ),
               ],
             ),
-          // Cross-post: name the groups this single card stands in for.
+          // Cross-post: name the groups this single card stands in for. Under media the
+          // label needs its own breathing room; under bare text the body's bottom padding
+          // already provides it, and stacking both left the label floating in dead space
+          // between the text and the actions row.
           if (_sharedToLabel() case final label?)
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 10, 14, 0),
+              padding: EdgeInsets.fromLTRB(14, p.media.isEmpty ? 0 : 10, 14, 0),
               child: Row(
                 children: [
                   const Icon(Icons.group_outlined, size: 13, color: _fgMuted),
