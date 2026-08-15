@@ -308,3 +308,43 @@ func isZero(b []byte) bool {
 	}
 	return true
 }
+
+// A 64-bit largesize chosen so that offset+size wraps past 2^64 lands back inside the
+// buffer and used to pass the naive bounds check, then panic at the slice. The walk must
+// refuse it. Reproduces the reviewed PoC: a second box at a nonzero offset carrying a
+// largesize that wraps the naive offset+size bound.
+func TestParseBoxesRefusesWraparoundLargesize(t *testing.T) {
+	first := box("free")
+	// Hand-build the malicious sibling: size=1 selects the 64-bit form, then a largesize
+	// that wraps p+size to a small value.
+	evil := make([]byte, 16)
+	binary.BigEndian.PutUint32(evil[0:4], 1)
+	copy(evil[4:8], "moov")
+	// 2^64-4: p+size wraps to p-4, inside the buffer and BELOW p+header, so the naive
+	// p+size bound passes and the slice low > high panics. (An earlier value here summed
+	// to exactly 2^64, which reads back as size 0 and never reached the vulnerable path.)
+	binary.BigEndian.PutUint64(evil[8:16], ^uint64(3))
+	data := append(first, evil...)
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("parseBoxes panicked on a wraparound largesize: %v", r)
+		}
+	}()
+	if _, ok := parseBoxes(data); ok {
+		t.Error("a wraparound largesize was accepted as a valid box list")
+	}
+}
+
+// mvhd is self-reported and a crafted file can understate it while its sample tables
+// describe minutes of playable video. The cap must bind against the longest duration any
+// source reports, so lying in the movie header buys nothing.
+func TestProbeMP4RejectsUnderstatedMvhdDuration(t *testing.T) {
+	// mvhd claims 5s; the track's sample table sums to 60s (1800 samples at 1/30s).
+	data := clip(mvhdV0(5000),
+		tkhd(720, 1280, identityMatrix()),
+		box("mdia", mdhd(30000, 0), box("minf", box("stbl", stts(1800, 1000)))))
+	if _, err := probeMP4(data); err == nil {
+		t.Error("a clip whose sample table runs 60s was accepted on a 5s mvhd claim")
+	}
+}

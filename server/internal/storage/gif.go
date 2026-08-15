@@ -120,10 +120,11 @@ func skipSubBlocks(data []byte, p int, blank bool) (int, error) {
 }
 
 // isAnimationExtension reports whether the application extension whose sub-block chain
-// starts at p is the loop-control one every animated GIF carries: the fixed 11-byte
-// identifier followed by nothing but the 3-byte loop count. The tail is checked as well as
-// the identifier, so the well-known name cannot be used as a wrapper to smuggle a payload
-// past the blanking pass.
+// starts at p is the loop-control one every animated GIF carries. The legitimate form is
+// rigid - the fixed 11-byte identifier, exactly ONE 3-byte sub-block, then the chain
+// terminator - and exactly that shape is demanded, not just "every sub-block is small":
+// a chain of many tiny sub-blocks under the well-known name would otherwise smuggle a
+// payload of arbitrary total length past the blanking pass.
 func isAnimationExtension(data []byte, p int) bool {
 	if p >= len(data) || data[p] != 11 || p+12 > len(data) {
 		return false
@@ -131,16 +132,12 @@ func isAnimationExtension(data []byte, p int) bool {
 	if id := string(data[p+1 : p+12]); id != "NETSCAPE2.0" && id != "ANIMEXTS1.0" {
 		return false
 	}
-	for p += 12; p < len(data); {
-		n := int(data[p])
-		p++
-		if n == 0 {
-			return true
-		}
-		if n > 3 || p+n > len(data) {
-			return false
-		}
-		p += n
+	p += 12
+	// One sub-block of exactly 3 bytes (buffer sub-block id + 16-bit loop count) ...
+	if p+4 > len(data) || data[p] != 3 {
+		return false
 	}
-	return false
+	p += 4
+	// ... followed immediately by the terminator.
+	return p < len(data) && data[p] == 0
 }

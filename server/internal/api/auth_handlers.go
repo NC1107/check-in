@@ -242,7 +242,7 @@ type signupReq struct {
 	DisplayName string `json:"displayName"` // optional override; defaults to the full name
 	Birthday    string `json:"birthday"`    // YYYY-MM-DD
 	Password    string `json:"password"`
-	MediaID     *int64 `json:"mediaId,omitempty"` // optional pre-uploaded profile picture
+	MediaID     *int64 `json:"mediaId,omitempty"` // rejected if set; kept so old payloads still parse
 }
 
 // displayName derives the public-facing name from a signup request: an explicit display
@@ -314,15 +314,15 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// A profile picture attached during signup is optional, but it has to be an image: an
-	// avatar that turns out to be a video clip breaks rendering everywhere a member's face
-	// appears, which is nearly every screen.
+	// A signup can never legitimately reference media: uploading requires a session, and
+	// the account does not exist yet, so any id arriving here is by definition somebody
+	// else's file - accepting it would let a brand-new member claim another member's
+	// upload as their avatar, which the profile-photo visibility rule then shows to the
+	// whole group. The apps have never sent this field; the photo is uploaded right after
+	// signup with the fresh token instead.
 	if req.MediaID != nil {
-		media, err := s.db.GetMedia(r.Context(), *req.MediaID)
-		if err != nil || !isImage(media.Mime) {
-			writeErr(w, http.StatusBadRequest, "a profile photo has to be an image")
-			return
-		}
+		writeErr(w, http.StatusBadRequest, "attach the profile photo after signing up")
+		return
 	}
 
 	hash, err := auth.HashPassword(password)
@@ -333,7 +333,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 
 	user, err := s.db.CreateUser(r.Context(), phone, name,
 		strings.TrimSpace(req.FirstName), strings.TrimSpace(req.LastName),
-		birthday, req.MediaID, hash, isAdmin)
+		birthday, nil, hash, isAdmin)
 	if err != nil {
 		writeErr(w, http.StatusConflict, "could not create account (phone may already exist)")
 		return

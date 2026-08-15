@@ -685,9 +685,11 @@ func (d *DB) GetMedia(ctx context.Context, id int64) (Media, error) {
 	return m, err
 }
 
-// SetMediaPoster attaches a still frame to a media item the caller owns, returning the
-// path of the poster it replaced (empty when there was none) so the caller can delete the
-// old file. Returns ErrNotFound when the item does not exist or belongs to someone else.
+// SetMediaPoster attaches a still frame to a clip the caller owns, returning the path of
+// the poster it replaced (empty when there was none) so the caller can delete the old
+// file. Returns ErrNotFound when the item does not exist, belongs to someone else, or is
+// not a video - an image never needs a poster, and allowing one would let hasPoster mean
+// something no client is prepared for.
 func (d *DB) SetMediaPoster(ctx context.Context, mediaID, ownerID int64, posterPath string) (string, error) {
 	var previous string
 	// The CTE runs against the statement's snapshot, so it still sees the row as it was
@@ -695,7 +697,7 @@ func (d *DB) SetMediaPoster(ctx context.Context, mediaID, ownerID int64, posterP
 	err := d.Pool.QueryRow(ctx, `
 		WITH old AS (SELECT poster_path FROM media WHERE id = $1 AND owner_id = $2)
 		UPDATE media SET poster_path = $3
-		WHERE id = $1 AND owner_id = $2
+		WHERE id = $1 AND owner_id = $2 AND mime LIKE 'video/%'
 		RETURNING COALESCE((SELECT poster_path FROM old), '')`,
 		mediaID, ownerID, posterPath).Scan(&previous)
 	if errors.Is(err, pgx.ErrNoRows) {

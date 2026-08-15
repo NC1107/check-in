@@ -108,9 +108,12 @@ func probeMP4(data []byte) (videoInfo, error) {
 		}
 	}
 
-	// Fall back to the track timelines. A fragmented file legitimately carries
-	// mvhd.duration == 0, and some encoders leave mdhd.duration at 0 too, in which case the
-	// sample table is the only remaining source of truth.
+	// Always read the track timelines too, and keep the LONGEST duration seen anywhere.
+	// mvhd is a self-reported header a crafted file can understate while its sample
+	// tables describe minutes of playable video, so the cap is enforced against the max
+	// of every source, not whichever one happened to be filled in. This also covers the
+	// legitimate zero cases: fragmented files carry mvhd.duration == 0, and some encoders
+	// leave mdhd at 0 as well, leaving the sample table as the only source of truth.
 	for _, trak := range findBoxes(moovKids, "trak") {
 		trakKids, _ := parseBoxes(trak.payload)
 		if tkhd, found := findBox(trakKids, "tkhd"); found {
@@ -119,10 +122,8 @@ func probeMP4(data []byte) (videoInfo, error) {
 				info.Width, info.Height = w, h
 			}
 		}
-		if info.DurationMs == 0 {
-			if ms := trackDurationMs(trakKids); ms > info.DurationMs {
-				info.DurationMs = ms
-			}
+		if ms := trackDurationMs(trakKids); ms > info.DurationMs {
+			info.DurationMs = ms
 		}
 	}
 
@@ -307,7 +308,11 @@ func parseBoxList(data []byte, printableTypes bool) (boxes []mp4Box, ok bool) {
 			size = binary.BigEndian.Uint64(data[p+8 : p+16])
 			header = 16
 		}
-		if size < uint64(header) || uint64(p)+size > uint64(len(data)) {
+		// Bound against len(data)-p rather than p+size: size comes straight off attacker
+		// bytes, and a value near 2^64 makes p+size wrap to something small that passes
+		// the naive check, then panics when sliced. len(data)-p cannot wrap - the loop
+		// guarantees p < len(data).
+		if size < uint64(header) || size > uint64(len(data)-p) {
 			return boxes, false
 		}
 		boxes = append(boxes, mp4Box{

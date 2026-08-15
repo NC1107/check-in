@@ -119,6 +119,28 @@ func TestSanitizeGIFKeepsLoopControl(t *testing.T) {
 	}
 }
 
+// A chain of many tiny sub-blocks under the loop-control identifier is the shape the
+// original small-sub-blocks check waved through: each piece is within the 3-byte budget,
+// but the chain as a whole carries an arbitrary payload. Only the exact one-sub-block
+// loop-control form may survive blanking.
+func TestSanitizeGIFBlanksChunkedSmuggleUnderLoopControlName(t *testing.T) {
+	// Each smuggled token fits one 3-byte sub-block exactly, so it stays contiguous in
+	// the stream: length bytes between chunks would break up anything longer, which is
+	// what made an earlier version of this test pass no matter what the code did.
+	data := gifStream(gifExtension(gifApplicationLabel,
+		[]byte("NETSCAPE2.0"),
+		[]byte("GPS"), []byte("LAT"), []byte("LON"), []byte("DEV"),
+	), gifFrame())
+	if _, err := sanitizeGIF(data); err != nil {
+		t.Fatalf("sanitizeGIF: %v", err)
+	}
+	for _, token := range []string{"GPS", "LAT", "LON", "DEV"} {
+		if bytes.Contains(data, []byte(token)) {
+			t.Errorf("chunked %q under the loop-control identifier survived sanitizing", token)
+		}
+	}
+}
+
 func TestSanitizeGIFRejectsMalformedStream(t *testing.T) {
 	cases := map[string][]byte{
 		"empty":            nil,
