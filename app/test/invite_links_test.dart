@@ -24,6 +24,15 @@ void main() {
     );
   });
 
+  // The wire format, pinned from both ends. Its twin is TestDeepLinkForWireFormat in
+  // server/internal/api/join_test.go, which asserts the /join page emits this exact string.
+  // Change the shape on one side and the pair fails rather than shipping a link the app
+  // silently ignores.
+  test('parses the exact link the server /join page emits', () {
+    const emitted = 'checkin://join?server=https%3A%2F%2Falpha.check-in.example.com';
+    expect(inviteServerFromUri(Uri.parse(emitted)), 'https://alpha.check-in.example.com');
+  });
+
   test('rejects non-invite URIs', () {
     expect(inviteServerFromUri(Uri.parse('https://alpha.example.com/other')), isNull);
     expect(inviteServerFromUri(Uri.parse('checkin://join')), isNull);

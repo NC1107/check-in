@@ -8,13 +8,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'features/feed/home_shell.dart';
 import 'features/onboarding/auth_screen.dart';
+import 'features/onboarding/invite_link_listener.dart';
 import 'features/onboarding/terms_screen.dart';
 import 'notifications/push_messaging.dart';
 import 'state/app_state.dart';
 import 'theme/tokens.dart';
-
-/// Root navigator, so invite links can push the add-group flow from outside the tree.
-final rootNavigatorKey = GlobalKey<NavigatorState>();
 
 void main() {
   // Ensure plugins (secure storage, prefs) are ready before providers spin up, and route
@@ -38,7 +36,7 @@ void main() {
       await _initFirebase().timeout(const Duration(seconds: 8), onTimeout: () {
         debugPrint('[CHECKIN] firebase init timed out; starting without push');
       });
-      runApp(const ProviderScope(child: CheckInApp()));
+      runApp(ProviderScope(overrides: inviteLinkOverrides(), child: const CheckInRoot()));
     },
     (error, stack) => debugPrint('[CHECKIN] uncaught: $error'),
   );
@@ -59,6 +57,18 @@ Future<void> _initFirebase() async {
   } catch (e) {
     debugPrint('[CHECKIN] firebase init skipped: $e');
   }
+}
+
+/// The app as [main] assembles it, named so a test can pump the real thing.
+///
+/// [InviteLinkListener] wraps [CheckInApp] instead of living inside it: observers are
+/// consulted in registration order, so only from above the `MaterialApp` does it get to see
+/// an invite link before the framework mistakes it for a named route.
+class CheckInRoot extends StatelessWidget {
+  const CheckInRoot({super.key});
+
+  @override
+  Widget build(BuildContext context) => const InviteLinkListener(child: CheckInApp());
 }
 
 class CheckInApp extends ConsumerStatefulWidget {

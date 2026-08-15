@@ -616,6 +616,20 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // An invite that lands while this screen is already open. Only the entry step takes it:
+    // past that point the user is signing up against a server they have already reached, and
+    // swapping the address under them would strand a half-finished signup. It stays parked
+    // for the next auth screen instead.
+    ref.listen<String?>(pendingInviteServerProvider, (_, next) {
+      if (next == null || next.isEmpty || _step != _Step.entry) return;
+      ref.read(pendingInviteServerProvider.notifier).state = null;
+      setState(() {
+        _server.text = next;
+        _connectedUrl = null;
+        _serverError = null;
+      });
+    });
+
     return Scaffold(
       backgroundColor: _bgMain,
       body: SafeArea(
