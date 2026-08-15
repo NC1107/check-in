@@ -9,6 +9,7 @@ import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
 import '../../widgets/user_avatar.dart';
+import '../onboarding/invite_links.dart';
 import 'contacts_picker_screen.dart';
 
 /// AdminScreen lets the admin build the signup allowlist (invite list) - from contacts or
@@ -143,6 +144,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
   // ---- add to invite list ----
 
   Widget _addCard() {
+    final baseUrl = ref.watch(contentAccountProvider(widget.groupId))?.baseUrl;
     return _panel(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -185,9 +187,65 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
               ),
             ),
           ),
+          if (baseUrl != null && baseUrl.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            const Divider(height: 1, color: kBorder),
+            const SizedBox(height: 16),
+            _joinLink(joinLinkFor(baseUrl)),
+          ],
         ],
       ),
     );
+  }
+
+  /// The link an admin sends once a number is on the list. Admin-only, because the
+  /// allowlist still decides who may sign up - handing a member a link that will bounce
+  /// their friends would be worse than not offering one.
+  Widget _joinLink(String link) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const FieldLabel('Invite link'),
+        const Text(
+          'Send this to anyone you added. It opens Check-In on their phone with this '
+          "group's address already filled in.",
+          style: TextStyle(color: kFgSecondary, fontSize: 13, height: 1.5),
+        ),
+        const SizedBox(height: 12),
+        GestureDetector(
+          onTap: () => _copyJoinLink(link),
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(12, 13, 12, 13),
+            decoration: BoxDecoration(
+              color: kBgMain,
+              border: Border.all(color: kBorder),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(link,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: kFgPrimary, fontSize: 13, fontWeight: FontWeight.w500)),
+                ),
+                const SizedBox(width: 10),
+                Icon(Icons.copy_rounded, size: 18, color: context.accent),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 6),
+        const Text('Tap to copy', style: TextStyle(color: kFgMuted, fontSize: 12)),
+      ],
+    );
+  }
+
+  Future<void> _copyJoinLink(String link) async {
+    await Clipboard.setData(ClipboardData(text: link));
+    _snack('Invite link copied');
   }
 
   // ---- invite list ----
