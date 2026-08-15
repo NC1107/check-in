@@ -49,7 +49,7 @@ void main() {
         MultiSessionController.seeded(const MultiSession(groups: [account], restored: true));
 
     await tester.pumpWidget(ProviderScope(
-      overrides: [multiSessionProvider.overrideWith((ref) => controller)],
+      overrides: [multiSessionProvider.overrideWith(() => controller)],
       child: const MaterialApp(
         home: Scaffold(body: PostImageCarousel(mediaIds: [1], groupId: 'g')),
       ),

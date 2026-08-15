@@ -48,7 +48,7 @@ void main() {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
-          multiSessionProvider.overrideWith((ref) =>
+          multiSessionProvider.overrideWith(() =>
               MultiSessionController.seeded(const MultiSession(groups: [alpha], restored: true))),
           feedProvider.overrideWith((ref) async => FeedResult(posts: posts)),
           apiForGroupProvider.overrideWith((ref, groupId) => _FakeApi()),

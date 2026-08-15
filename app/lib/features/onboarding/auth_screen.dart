@@ -120,7 +120,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     if (pendingInvite != null) {
       // Consumed - don't re-prefill the next auth screen with a stale invite.
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        ref.read(pendingInviteServerProvider.notifier).state = null;
+        ref.read(pendingInviteServerProvider.notifier).consume();
       });
     }
     // First-launch explainer: tell new users this is self-hosted before they hit the
@@ -622,7 +622,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     // for the next auth screen instead.
     ref.listen<String?>(pendingInviteServerProvider, (_, next) {
       if (next == null || next.isEmpty || _step != _Step.entry) return;
-      ref.read(pendingInviteServerProvider.notifier).state = null;
+      ref.read(pendingInviteServerProvider.notifier).consume();
       setState(() {
         _server.text = next;
         _connectedUrl = null;

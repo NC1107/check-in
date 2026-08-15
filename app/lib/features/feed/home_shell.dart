@@ -133,7 +133,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       if (posted == true) {
         ref.invalidate(feedProvider); // surface the new post immediately
         // Nudge the always-alive profile tab to reload so the new post shows there too.
-        ref.read(profileRefreshProvider.notifier).state++;
+        ref.read(profileRefreshProvider.notifier).bump();
         if (_index != 0) setState(() => _index = 0);
       }
     });
@@ -194,7 +194,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
                 selected: _index == 0,
                 // Re-tapping Feed while already on it scrolls the feed back to the top.
                 onTap: () => _index == 0
-                    ? ref.read(feedScrollToTopProvider.notifier).state++
+                    ? ref.read(feedScrollToTopProvider.notifier).bump()
                     : setState(() => _index = 0),
               ),
               const SizedBox(width: 64), // FAB notch

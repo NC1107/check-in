@@ -175,16 +175,27 @@ const _kLegacyToken = 'token';
 /// MultiSessionController loads and persists every group session across launches.
 /// Tokens live in secure storage (keyed per group); the non-secret group list lives in
 /// shared preferences.
-class MultiSessionController extends StateNotifier<MultiSession> {
-  MultiSessionController() : super(const MultiSession()) {
-    _load();
-  }
+class MultiSessionController extends Notifier<MultiSession> {
+  MultiSessionController() : _seed = null;
 
   /// Starts from a fixed state and skips restore/hydration - for widget tests.
   @visibleForTesting
-  MultiSessionController.seeded(super.initial);
+  MultiSessionController.seeded(MultiSession initial) : _seed = initial;
+
+  final MultiSession? _seed;
 
   final _secure = const FlutterSecureStorage();
+
+  @override
+  MultiSession build() {
+    final seed = _seed;
+    if (seed != null) return seed;
+    // Restore reads storage and so can't be synchronous. Start from the empty session -
+    // whose `restored: false` is exactly what startup shows as "still restoring" - and swap
+    // the stored one in when it lands.
+    _load();
+    return const MultiSession();
+  }
 
   /// Derives the stable group id from a base URL: its host. One group per subdomain,
   /// so the host is unique, readable, and survives reinstalling the group.
@@ -479,9 +490,8 @@ class MultiSessionController extends StateNotifier<MultiSession> {
   static String _encodeHidden(Set<String> ids) => jsonEncode(ids.toList());
 }
 
-final multiSessionProvider = StateNotifierProvider<MultiSessionController, MultiSession>(
-  (ref) => MultiSessionController(),
-);
+final multiSessionProvider =
+    NotifierProvider<MultiSessionController, MultiSession>(MultiSessionController.new);
 
 /// An ApiClient bound to one group. A 401 there signs out ONLY that group - the other
 /// groups' sessions (and the shared image cache) stay intact.
@@ -533,10 +543,9 @@ final contentApiProvider = Provider.family<ApiClient, String?>((ref, groupId) {
 /// intended liked-state, and an absent key means "use whatever the server last returned".
 /// Before this, the feed card and the post screen each kept their own like state, so a like
 /// made in one place was invisible in the other and was lost the moment a widget rebuilt.
-class LikesController extends StateNotifier<Map<String, bool>> {
-  LikesController(this._ref) : super(const {});
-
-  final Ref _ref;
+class LikesController extends Notifier<Map<String, bool>> {
+  @override
+  Map<String, bool> build() => const {};
 
   static String _key(String? groupId, int postId) => '$groupId:$postId';
 
@@ -552,7 +561,7 @@ class LikesController extends StateNotifier<Map<String, bool>> {
     if (prev == wantLike) return;
     state = {...state, key: wantLike};
     try {
-      final api = _ref.read(contentApiProvider(groupId));
+      final api = ref.read(contentApiProvider(groupId));
       wantLike ? await api.like(postId) : await api.unlike(postId);
     } catch (_) {
       final next = {...state};
@@ -566,9 +575,7 @@ class LikesController extends StateNotifier<Map<String, bool>> {
   }
 }
 
-final likesProvider = StateNotifierProvider<LikesController, Map<String, bool>>(
-  (ref) => LikesController(ref),
-);
+final likesProvider = NotifierProvider<LikesController, Map<String, bool>>(LikesController.new);
 
 /// The heart state and count to render for [post], applying the viewer's like overlay on
 /// top of the server counts. The count is carried as a delta from the server's own value,
@@ -605,9 +612,13 @@ const _kAccentId = 'accent_id';
 
 /// The user's chosen accent palette, persisted per-device. Drives the whole app
 /// theme via [AccentPalette] on [ThemeData].
-class AccentController extends StateNotifier<AccentPalette> {
-  AccentController() : super(kAccentPresets.first) {
+class AccentController extends Notifier<AccentPalette> {
+  @override
+  AccentPalette build() {
+    // Preferences are async, so the stored choice can't be the initial value; the app wears
+    // the default palette for the frame or two before it arrives.
     _load();
+    return kAccentPresets.first;
   }
 
   Future<void> _load() async {
@@ -622,9 +633,7 @@ class AccentController extends StateNotifier<AccentPalette> {
   }
 }
 
-final accentProvider = StateNotifierProvider<AccentController, AccentPalette>(
-  (ref) => AccentController(),
-);
+final accentProvider = NotifierProvider<AccentController, AccentPalette>(AccentController.new);
 
 /// Whether signup should offer the accent picker, given whether this device already has
 /// groups connected. The accent is one per-device theme, and the picker persists the
@@ -645,14 +654,30 @@ Future<bool> shouldPromptForAccent({required bool hasGroups}) async {
   return prefs.getString(_kAccentId) == null;
 }
 
-/// The location filter applied to the home feed - null means all places. Only applies
+/// The location filter applied to the home feed - empty means all places. Only applies
 /// to a single group's feed (the filter is hidden in the All view).
-final feedLocationProvider = StateProvider<Set<String>>((ref) => const {});
+class FeedLocationFilter extends Notifier<Set<String>> {
+  @override
+  Set<String> build() => const {};
+
+  /// Replaces the selection wholesale (the filter sheet applies its PLACES picks in one go).
+  void apply(Set<String> locations) => state = locations;
+}
+
+final feedLocationProvider =
+    NotifierProvider<FeedLocationFilter, Set<String>>(FeedLocationFilter.new);
 
 /// Bumped whenever the viewer creates a check-in. The profile tab lives in an always-alive
 /// IndexedStack, so it can't notice new posts on its own; it listens to this and reloads,
 /// which is why a just-posted check-in now shows up when you switch to your profile.
-final profileRefreshProvider = StateProvider<int>((ref) => 0);
+class ProfileRefresh extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  void bump() => state++;
+}
+
+final profileRefreshProvider = NotifierProvider<ProfileRefresh, int>(ProfileRefresh.new);
 
 /// What the feed shows: the merged posts plus which groups couldn't be reached (All
 /// view only), so the feed can degrade gracefully instead of failing whole.
@@ -768,9 +793,13 @@ const _kTermsAccepted = 'terms_accepted';
 
 /// Tracks whether the user has accepted the in-app terms of service. Checked before
 /// the auth screen so the EULA is presented on first launch (Apple Guideline 1.2).
-class TermsController extends StateNotifier<bool> {
-  TermsController() : super(false) {
+class TermsController extends Notifier<bool> {
+  @override
+  bool build() {
+    // Preferences are async, so start from "not accepted": erring towards showing the gate
+    // again is recoverable, erring towards skipping it is what Apple rejected the app for.
     _load();
+    return false;
   }
 
   Future<void> _load() async {
@@ -785,6 +814,4 @@ class TermsController extends StateNotifier<bool> {
   }
 }
 
-final termsProvider = StateNotifierProvider<TermsController, bool>(
-  (ref) => TermsController(),
-);
+final termsProvider = NotifierProvider<TermsController, bool>(TermsController.new);

@@ -56,7 +56,7 @@ void main() {
     ));
     await tester.pumpWidget(ProviderScope(
       overrides: [
-        multiSessionProvider.overrideWith((ref) => controller),
+        multiSessionProvider.overrideWith(() => controller),
         apiForGroupProvider('alpha.example.com').overrideWithValue(_EmptyAdminApi()),
       ],
       child: const MaterialApp(home: AdminScreen(groupId: 'alpha.example.com')),

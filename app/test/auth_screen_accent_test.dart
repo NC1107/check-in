@@ -37,7 +37,7 @@ void main() {
     final controller = MultiSessionController.seeded(MultiSession(groups: groups, restored: true));
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [multiSessionProvider.overrideWith((ref) => controller)],
+        overrides: [multiSessionProvider.overrideWith(() => controller)],
         child: MaterialApp(home: AuthScreen(clientFactory: (_, {token}) => _FakeApi())),
       ),
     );

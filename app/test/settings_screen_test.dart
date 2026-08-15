@@ -37,7 +37,7 @@ void main() {
     ));
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [multiSessionProvider.overrideWith((ref) => controller)],
+        overrides: [multiSessionProvider.overrideWith(() => controller)],
         child: const MaterialApp(home: SettingsScreen(groupId: 'alpha.invalid')),
       ),
     );

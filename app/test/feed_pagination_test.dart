@@ -72,7 +72,7 @@ void main() {
 
     await tester.pumpWidget(ProviderScope(
       overrides: [
-        multiSessionProvider.overrideWith((ref) => MultiSessionController.seeded(
+        multiSessionProvider.overrideWith(() => MultiSessionController.seeded(
             const MultiSession(groups: [signedInA, signedInB], restored: true))),
         feedProvider.overrideWith((ref) async => FeedResult(posts: [
               post(1, 'a.invalid', now.subtract(const Duration(minutes: 1))),
@@ -121,7 +121,7 @@ void main() {
 
     await tester.pumpWidget(ProviderScope(
       overrides: [
-        multiSessionProvider.overrideWith((ref) => MultiSessionController.seeded(
+        multiSessionProvider.overrideWith(() => MultiSessionController.seeded(
             const MultiSession(groups: [signedInA, signedInB], restored: true))),
         feedProvider.overrideWith((ref) async => FeedResult(posts: [
               post(1, 'a.invalid', now.subtract(const Duration(minutes: 1))),
