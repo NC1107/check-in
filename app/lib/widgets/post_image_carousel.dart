@@ -69,7 +69,13 @@ class _PostImageCarouselState extends State<PostImageCarousel> {
   }
 
   Widget _single(List<PostMedia> media) =>
-      _AdaptiveImage(media: media.first, groupId: widget.groupId);
+      _hero(media.first, _AdaptiveImage(media: media.first, groupId: widget.groupId));
+
+  // Wrap real images (gifs included) so a tapped feed photo flies into the full-screen
+  // viewer, which shares the same [photoHeroTag]. A clip shows a poster, not the photo
+  // itself, so it doesn't hero.
+  Widget _hero(PostMedia m, Widget child) =>
+      m.isImage ? Hero(tag: photoHeroTag(widget.groupId, m.id), child: child) : child;
 
   Widget _carousel(List<PostMedia> media) {
     return AspectRatio(
@@ -81,7 +87,8 @@ class _PostImageCarouselState extends State<PostImageCarousel> {
             controller: _ctrl,
             itemCount: media.length,
             onPageChanged: (i) => setState(() => _page = i),
-            itemBuilder: (_, i) => MediaFrame(media: media[i], groupId: widget.groupId),
+            itemBuilder: (_, i) =>
+                _hero(media[i], MediaFrame(media: media[i], groupId: widget.groupId)),
           ),
           Positioned(
             top: 8,

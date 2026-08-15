@@ -833,22 +833,9 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
             ),
           ),
           // Tag people - who's in this post (drives the feed's "include posts they're in").
-          // Member ids are per-server, so tagging needs exactly one target group.
-          if (session.signedIn.length > 1 && _targets.length != 1)
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
-              child: Row(
-                children: [
-                  Icon(Icons.person_add_alt_1_outlined, size: 18, color: _fgMuted),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text('Tagging people works when sharing to one group.',
-                        style: TextStyle(color: _fgMuted, fontSize: 13)),
-                  ),
-                ],
-              ),
-            )
-          else
+          // Member ids are per-server, so tagging needs exactly one target group; when it
+          // isn't available the picker is simply hidden.
+          if (session.signedIn.length <= 1 || _targets.length == 1)
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
               child: InkWell(
