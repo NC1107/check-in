@@ -58,8 +58,9 @@ You need a Linux server with Docker, a domain/subdomain pointed at it, and ports
    contact's phone number becomes their invite — that's the whole access-control model.
    See [security.md](security.md) for how this works and its caveats.
 
-6. **Share your server URL** with friends. They install the app, enter the URL, and sign
-   up by entering a phone number you invited.
+6. **Send them your invite link** (`https://check-in.example.com/join`, copyable from the
+   Admin tab). Tapping it opens the app with your server's address already filled in, or
+   points them at the App Store / Google Play first.
 
 That's it. To upgrade later: `docker compose pull && docker compose up -d`
 (see [operations.md](operations.md)).
