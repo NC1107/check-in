@@ -164,8 +164,9 @@ var joinTmpl = template.Must(template.New("join").Parse(`<!doctype html>
   .card h2{margin:0 0 8px;color:#8B8B93;font-size:11px;font-weight:600;letter-spacing:.6px;
            text-transform:uppercase;}
   .card p{margin:0;color:#A1A1AA;font-size:14px;}
-  code{display:block;margin-top:10px;padding:11px 12px;border:1px solid #2A2A2A;border-radius:10px;
-       background:#0A0A0A;color:#F4F4F5;font-size:14px;word-break:break-all;}
+  code{display:block;margin-top:10px;padding:13px 14px;border:1px solid var(--accent);border-radius:10px;
+       background:#0A0A0A;color:#F4F4F5;font-size:15px;font-weight:600;word-break:break-all;
+       user-select:all;-webkit-user-select:all;}
   .foot{margin:20px 0 0;color:#8B8B93;font-size:13px;}
 </style></head>
 <body><main>
@@ -178,14 +179,19 @@ var joinTmpl = template.Must(template.New("join").Parse(`<!doctype html>
   <h1>You're invited to <span>{{.GroupName}}</span></h1>
   <p class="lede">{{.GroupName}} shares private check-ins on its own Check-In server. Open this
      invite in the app to join.</p>
+  <!-- The checkin:// button is best-effort: whether a browser follows a custom-scheme link
+       varies (mobile Firefox, for one, ignores it entirely), and with no script here there
+       is no way to detect or work around that. The server address block below is the
+       guaranteed path into the app and is spelled out for exactly that case. -->
   <a class="btn" href="{{.DeepLink}}">Open in Check-In</a>
   <div class="stores">
     <a href="{{.AppStoreURL}}">App Store</a>
     <a href="{{.PlayStoreURL}}">Google Play</a>
   </div>
   <div class="card">
-    <h2>Server address</h2>
-    <p>Already have Check-In? Open it, tap Add group, and enter:</p>
+    <h2>Button did nothing?</h2>
+    <p>Some browsers ignore the button above. Open Check-In yourself, tap Add group, and enter
+       this address:</p>
     <code>{{.Host}}</code>
   </div>
   <p class="foot">Your number has to be on this group's invite list - ask whoever sent you this
