@@ -8,6 +8,7 @@ import 'package:checkin/api/api_client.dart';
 import 'package:checkin/api/models.dart';
 import 'package:checkin/features/onboarding/auth_screen.dart';
 import 'package:checkin/state/app_state.dart';
+import 'package:checkin/theme/accent_picker.dart';
 
 /// The accent color is a per-device theme and the picker persists on tap, so signup may
 /// only offer it on a device's first-ever signup. A second group join that re-offered it
@@ -67,6 +68,30 @@ void main() {
 
     expect(find.text('Full name'), findsOneWidget);
     expect(find.text('Accent color'), findsOneWidget);
+  });
+
+  testWidgets('picking a color does not pull the section out from under the user', (tester) async {
+    SharedPreferences.setMockInitialValues({'seen_selfhost_intro': true});
+
+    await pumpToProfile(tester, groups: const []);
+    expect(find.text('Accent color'), findsOneWidget);
+
+    // The picker persists on tap, so a gate re-read from storage on every build would
+    // hide the section the instant it was used. It is latched at step entry to stop that.
+    final swatches = find.descendant(
+      of: find.byType(AccentPicker),
+      matching: find.byType(GestureDetector),
+    );
+    final tapped = swatches.at(1);
+    // Guard against a vacuous pass: assert the tap actually moved the selection, so the
+    // section surviving below means it survived a real write rather than a dead tap.
+    expect(find.descendant(of: tapped, matching: find.byIcon(Icons.check)), findsNothing);
+    await tester.tap(tapped);
+    await tester.pumpAndSettle();
+    expect(find.descendant(of: tapped, matching: find.byIcon(Icons.check)), findsOneWidget);
+
+    expect(find.text('Accent color'), findsOneWidget);
+    expect(find.byType(AccentPicker), findsOneWidget);
   });
 }
 
