@@ -105,6 +105,14 @@ class MultiSession {
           if (g.isSignedIn) g
       ];
 
+  /// Groups still on this device whose token is gone. A 401 means an expired session, but
+  /// it means exactly the same thing when the host removed you or the server is gone for
+  /// good, so these need a way out as well as a way back in.
+  List<ServerAccount> get signedOut => [
+        for (final g in groups)
+          if (!g.isSignedIn) g
+      ];
+
   bool get anySignedIn => groups.any((g) => g.isSignedIn);
 
   ServerAccount? byId(String? id) {
