@@ -141,6 +141,7 @@ func (p *Post) applyMedia(raw []byte) {
 		_ = json.Unmarshal(raw, &p.Media)
 	}
 	if len(p.Media) == 0 {
+		p.Media = nil // a text post carries no array at all, not an empty one
 		return
 	}
 	p.MediaIDs = make([]int64, len(p.Media))
