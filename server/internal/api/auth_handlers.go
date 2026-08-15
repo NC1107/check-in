@@ -74,11 +74,13 @@ func validServerName(raw string) (string, bool) {
 	return name, true
 }
 
-// groupColorIDs is the fixed palette of admin-selectable group colors. The client renders
-// the same ids (theme/group_color.dart); the two must stay in sync.
-var groupColorIDs = map[string]bool{
-	"coral": true, "gold": true, "lime": true, "cyan": true,
-	"indigo": true, "magenta": true, "orange": true, "steel": true,
+// groupColorHex is the fixed palette of admin-selectable group colors, keyed by the id the
+// API speaks. The client renders the same ids and the same values
+// (app/lib/theme/group_color.dart); the two must stay in sync. The hex is only needed by
+// the /join page, which has no client to ask.
+var groupColorHex = map[string]string{
+	"coral": "#FF7A66", "gold": "#E5B93C", "lime": "#93D845", "cyan": "#34C6D8",
+	"indigo": "#7C83FF", "magenta": "#E668C8", "orange": "#F58A3C", "steel": "#8FA0B5",
 }
 
 // validGroupColor accepts an empty string (clear, back to the automatic color) or a known
@@ -88,7 +90,7 @@ func validGroupColor(raw string) (string, bool) {
 	if c == "" {
 		return "", true
 	}
-	if groupColorIDs[c] {
+	if _, ok := groupColorHex[c]; ok {
 		return c, true
 	}
 	return "", false
