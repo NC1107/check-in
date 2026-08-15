@@ -110,7 +110,11 @@ func (s *Server) handleServeMedia(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	relPath, mime := variantFile(media, r.URL.Query().Get("variant"))
+	relPath, mime, ok := variantFile(media, r.URL.Query().Get("variant"))
+	if !ok {
+		writeErr(w, http.StatusNotFound, "poster not found")
+		return
+	}
 	f, err := s.store.Open(relPath)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, "media file missing")
@@ -137,15 +141,19 @@ func (s *Server) handleServeMedia(w http.ResponseWriter, r *http.Request) {
 
 // variantFile picks which stored file answers a request, and what to call it.
 //
-// Anything but a poster that actually exists resolves to the main file. That fallback is
-// deliberate: a client that asks for a poster before one has been generated gets the clip
-// itself rather than a 404 to special-case, and an unknown variant name from a future
-// client degrades to today's behaviour instead of failing.
-func variantFile(media db.Media, variant string) (relPath, mime string) {
-	if variant == "poster" && media.PosterPath != "" {
-		return media.PosterPath, posterMime(media.PosterPath)
+// A poster request for a clip that has none is refused rather than answered with the
+// clip: the caller asked for something image-shaped, and handing back an mp4 fails later
+// and further away, as an undecodable image. Unknown variant NAMES still fall back to the
+// main file, so a future client asking for a variant this server predates degrades to
+// today's behaviour instead of breaking.
+func variantFile(media db.Media, variant string) (relPath, mime string, ok bool) {
+	if variant == "poster" {
+		if media.PosterPath == "" {
+			return "", "", false
+		}
+		return media.PosterPath, posterMime(media.PosterPath), true
 	}
-	return media.Path, media.Mime
+	return media.Path, media.Mime, true
 }
 
 // isImage reports whether a stored item can be rendered anywhere an image is expected.

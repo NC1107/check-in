@@ -755,12 +755,7 @@ func (d *DB) CreatePost(ctx context.Context, authorID int64, body string, mediaI
 	}
 	kind := kindFor(attached)
 
-	// posts.media_id holds the cover (first image) for older clients; the full set lives
-	// in post_media.
-	var cover *int64
-	if len(mediaIDs) > 0 {
-		cover = &mediaIDs[0]
-	}
+	cover := coverFor(attached)
 	err = tx.QueryRow(ctx, `
 		INSERT INTO posts (author_id, kind, body, media_id, location, cross_post_id)
 		VALUES ($1, $2, $3, $4, $5, $6)
@@ -849,6 +844,19 @@ func ownedMedia(ctx context.Context, tx pgx.Tx, mediaIDs []int64, authorID int64
 		out = append(out, m)
 	}
 	return out, nil
+}
+
+// coverFor picks the legacy posts.media_id cover: the first IMAGE attached, never a clip.
+// A published client renders whatever this id serves as a picture, so pointing it at a
+// clip would paint broken-image icons where degrading to caption-only is the intended
+// old-client behaviour. Nil when nothing attached is an image at all.
+func coverFor(media []PostMedia) *int64 {
+	for i := range media {
+		if strings.HasPrefix(media[i].Mime, "image/") {
+			return &media[i].ID
+		}
+	}
+	return nil
 }
 
 // kindFor derives a post's kind from what is attached to it. Video wins over image so a

@@ -17,18 +17,24 @@ func TestVariantFile(t *testing.T) {
 		variant  string
 		wantPath string
 		wantMime string
+		wantOK   bool
 	}{
-		{"no variant serves the file itself", clip, "", "ab/abcd.mp4", "video/mp4"},
-		{"poster serves the still frame", clip, "poster", "cd/cdef.jpg", "image/jpeg"},
-		{"a clip with no poster falls back to the clip", unposted, "poster", "ab/abcd.mp4", "video/mp4"},
-		{"an image has no poster to serve", photo, "poster", "ef/efgh.png", "image/png"},
-		{"an unknown variant falls back", clip, "thumbnail", "ab/abcd.mp4", "video/mp4"},
+		{"no variant serves the file itself", clip, "", "ab/abcd.mp4", "video/mp4", true},
+		{"poster serves the still frame", clip, "poster", "cd/cdef.jpg", "image/jpeg", true},
+		// A missing poster is refused, never answered with the clip: the caller asked for
+		// something image-shaped, and an mp4 there fails later as an undecodable image.
+		{"a clip with no poster is a 404", unposted, "poster", "", "", false},
+		{"an image has no poster either", photo, "poster", "", "", false},
+		// Unknown variant NAMES still fall back, so a future client asking for a variant
+		// this server predates degrades instead of breaking.
+		{"an unknown variant falls back", clip, "thumbnail", "ab/abcd.mp4", "video/mp4", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			path, mime := variantFile(tt.media, tt.variant)
-			if path != tt.wantPath || mime != tt.wantMime {
-				t.Errorf("variantFile() = (%q, %q), want (%q, %q)", path, mime, tt.wantPath, tt.wantMime)
+			path, mime, ok := variantFile(tt.media, tt.variant)
+			if path != tt.wantPath || mime != tt.wantMime || ok != tt.wantOK {
+				t.Errorf("variantFile() = (%q, %q, %v), want (%q, %q, %v)",
+					path, mime, ok, tt.wantPath, tt.wantMime, tt.wantOK)
 			}
 		})
 	}

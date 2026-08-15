@@ -82,3 +82,23 @@ func TestKindFor(t *testing.T) {
 		})
 	}
 }
+
+// The legacy cover must never point at a clip: published clients render posts.media_id
+// as a picture, so a video there paints a broken-image icon where caption-only is the
+// intended degradation.
+func TestCoverForSkipsClips(t *testing.T) {
+	clipFirst := []PostMedia{
+		{ID: 8, Mime: "video/mp4"},
+		{ID: 7, Mime: "image/jpeg"},
+	}
+	if got := coverFor(clipFirst); got == nil || *got != 7 {
+		t.Errorf("coverFor(clip first) = %v, want the first image id 7", got)
+	}
+	clipOnly := []PostMedia{{ID: 8, Mime: "video/mp4"}}
+	if got := coverFor(clipOnly); got != nil {
+		t.Errorf("coverFor(clip only) = %v, want nil", got)
+	}
+	if got := coverFor(nil); got != nil {
+		t.Errorf("coverFor(nil) = %v, want nil", got)
+	}
+}
