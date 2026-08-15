@@ -593,11 +593,11 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
           ),
           // A clip is not offered: Gal writes the bytes as they arrive, so it would land in
           // the gallery as a file that will not open.
-          if (post.savableImages.isNotEmpty)
+          if (post.imageMedia.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.download_outlined, size: 22, color: kFgSecondary),
               tooltip: 'Save photo',
-              onPressed: () => _savePhoto(post.savableImages.first.id),
+              onPressed: () => _savePhoto(post.imageMedia.first.id),
             ),
         ],
       ),

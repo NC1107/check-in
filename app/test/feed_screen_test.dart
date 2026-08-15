@@ -42,9 +42,9 @@ void main() {
         id: id,
         authorId: 1,
         authorName: 'Nick',
-        // The card renders whatever is attached whatever the kind says, so these photos
-        // do load (as placeholders - nothing resolves offline); what the kind keeps out of
-        // the way is the rest of an image post's chrome.
+        // The card renders whatever is attached, whatever the kind says, so these photos
+        // do load - as placeholders, since nothing resolves offline. The download collector
+        // counts the same attachments, which is what makes galleries testable here.
         kind: 'text',
         body: body,
         createdAt: created,

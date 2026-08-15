@@ -97,7 +97,7 @@ void main() {
     });
 
     expect(post.media, isEmpty);
-    expect(post.savableImages, isEmpty);
+    expect(post.imageMedia, isEmpty);
   });
 
   test('only images are offered to the gallery', () {
@@ -112,7 +112,7 @@ void main() {
       ],
     });
 
-    expect([for (final m in post.savableImages) m.id], [9]);
+    expect([for (final m in post.imageMedia) m.id], [9]);
   });
 
   test('a clip reports its length as m:ss, rounded up so it is never 0:00', () {
@@ -138,14 +138,11 @@ void main() {
       'mediaTypes': ['image', 'gif', 'video'],
     });
     expect(modern.mediaTypes, ['image', 'gif', 'video']);
-    expect(modern.supports('video'), isTrue);
 
     // A server predating typed media only ever accepted stills, so the absent key must not
     // be read as "anything goes" - it is what stops a clip being offered to a server that
     // would reject it.
     final old = ServerInfo.fromJson({'name': 'Beta', 'initialized': true});
     expect(old.mediaTypes, ['image']);
-    expect(old.supports('video'), isFalse);
-    expect(old.supports('gif'), isFalse);
   });
 }

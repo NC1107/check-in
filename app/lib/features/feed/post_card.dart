@@ -483,13 +483,13 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                     ),
                     onSelected: (v) {
                       if (v == 'delete') _confirmDelete();
-                      if (v == 'save') _savePhoto(p.savableImages.first.id);
+                      if (v == 'save') _savePhoto(p.imageMedia.first.id);
                       if (v == 'report') _reportPost();
                     },
                     itemBuilder: (_) => [
                       // Only a real image: Gal writes the bytes as they arrive, so saving a
                       // clip would put a file in the gallery that will not open.
-                      if (p.savableImages.isNotEmpty)
+                      if (p.imageMedia.isNotEmpty)
                         const PopupMenuItem(
                           value: 'save',
                           child: Row(

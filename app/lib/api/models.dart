@@ -28,8 +28,6 @@ class ServerInfo {
   /// server would reject rather than letting the upload fail after the fact.
   final List<String> mediaTypes;
 
-  bool supports(String mediaType) => mediaTypes.contains(mediaType);
-
   factory ServerInfo.fromJson(Map<String, dynamic> j) => ServerInfo(
         name: j['name'] as String? ?? 'Check-In',
         initialized: j['initialized'] as bool? ?? false,
@@ -260,9 +258,9 @@ class Post {
   /// a server. Computed once: it is read on every rebuild of a card.
   late final List<PostMedia> media = _media.isNotEmpty ? _media : PostMedia.images(images);
 
-  /// The attachments that can be written to the device gallery. A clip is not one of them:
-  /// Gal.putImageBytes on mp4 bytes writes a file the gallery cannot open.
-  List<PostMedia> get savableImages => [
+  /// The attachments that are images: the ones a plain image widget can render and the
+  /// device gallery can store. A clip is neither.
+  List<PostMedia> get imageMedia => [
         for (final m in media)
           if (m.isImage) m
       ];

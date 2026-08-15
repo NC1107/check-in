@@ -599,7 +599,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         for (final p in posts)
           // Clips are left out rather than downloaded as unopenable files; a bulk save is
           // the one place a member cannot see what each item was.
-          for (final m in p.savableImages) (groupId: p.groupId, mediaId: m.id)
+          for (final m in p.imageMedia) (groupId: p.groupId, mediaId: m.id)
       ];
     } catch (_) {
       if (mounted) setState(() => _downloading = false);
