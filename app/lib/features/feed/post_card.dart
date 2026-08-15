@@ -554,20 +554,24 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
             )
           else
             const SizedBox(height: 10),
-          // Image(s) - the carousel sizes itself (single images keep their own
-          // clamped aspect ratio); the heart burst overlays it.
-          if (p.kind == 'image' && p.images.isNotEmpty)
+          // Attachments - the carousel sizes itself (a single one keeps its own clamped
+          // aspect ratio); the heart burst overlays it.
+          // Gated on the attachments themselves, not on kind: a post with a clip on it is
+          // kind 'video', and a card that checked for 'image' would render it as caption
+          // only.
+          if (p.media.isNotEmpty)
             Stack(
               alignment: Alignment.center,
               children: [
                 PostImageCarousel(
-                  mediaIds: p.images,
+                  media: p.media,
                   groupId: p.groupId,
                   onDoubleTap: _doubleTapLike,
                   onImageTap: (mediaId) => PhotoViewerScreen.open(
                     context,
-                    mediaIds: p.images,
-                    initialIndex: p.images.indexOf(mediaId).clamp(0, p.images.length - 1),
+                    media: p.media,
+                    initialIndex:
+                        p.media.indexWhere((m) => m.id == mediaId).clamp(0, p.media.length - 1),
                     groupId: p.groupId,
                   ),
                 ),

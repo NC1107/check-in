@@ -16,12 +16,19 @@ class AuthImage extends ConsumerWidget {
     required this.mediaId,
     this.fit = BoxFit.cover,
     this.groupId,
+    this.variant,
     this.onImageResolved,
   });
 
   final int mediaId;
   final BoxFit fit;
   final String? groupId;
+
+  /// Which stored file to show for this media id: null for the media itself, 'poster' for
+  /// a clip's still frame. It scopes the cache key as well as the URL - a poster and its
+  /// clip share an id, so one key for both would serve whichever was fetched first to
+  /// both, e.g. rendering the poster where the full photo belongs.
+  final String? variant;
 
   /// Called once this exact image has decoded successfully, with its intrinsic size (e.g.
   /// so a caller can size a box to the photo's real aspect ratio). Reading the size off the
@@ -36,10 +43,10 @@ class AuthImage extends ConsumerWidget {
     final api = ref.watch(contentApiProvider(groupId));
     final onResolved = onImageResolved;
     return CachedNetworkImage(
-      imageUrl: api.imageUrl(mediaId),
-      // Group-scoped and stable across rebuilds → no re-fetch flash, no cross-group
-      // collisions on the per-server media ids.
-      cacheKey: 'media-${account?.id ?? ''}-$mediaId',
+      imageUrl: api.imageUrl(mediaId, variant: variant),
+      // Group-scoped, variant-scoped, and stable across rebuilds → no re-fetch flash, no
+      // cross-group collisions on the per-server media ids, no clip/poster collision.
+      cacheKey: 'media-${account?.id ?? ''}-$mediaId${variant == null ? '' : '-$variant'}',
       httpHeaders: api.authHeaders,
       fit: fit,
       fadeInDuration: Duration.zero,
