@@ -132,8 +132,12 @@ func (s *Server) handleUserPosts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"posts": posts})
 }
 
+// createPostReq deliberately gains no fields as media types are added. Servers reject
+// unknown fields, so anything new here would make a new client unable to post to a server
+// that has not been updated yet - and nothing new is needed: what the attachments are is
+// already knowable from the attachments themselves.
 type createPostReq struct {
-	Kind      string  `json:"kind"`      // "text" or "image"
+	Kind      string  `json:"kind"`      // client's claim about the post; validated, not stored
 	Body      string  `json:"body"`      // text body or image caption
 	MediaID   *int64  `json:"mediaId"`   // legacy single image (older app builds)
 	MediaIDs  []int64 `json:"mediaIds"`  // one or more images, ordered
@@ -156,6 +160,9 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 	if len(mediaIDs) == 0 && req.MediaID != nil {
 		mediaIDs = []int64{*req.MediaID}
 	}
+	// The client's kind is a claim to check, not a value to store: CreatePost derives the
+	// stored kind from what is actually attached, so a post can never describe itself as
+	// something it is not.
 	switch req.Kind {
 	case "text":
 		if req.Body == "" {
@@ -163,17 +170,17 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		mediaIDs = nil
-	case "image":
+	case "image", "video":
 		if len(mediaIDs) == 0 {
-			writeErr(w, http.StatusBadRequest, "image posts need at least one image")
+			writeErr(w, http.StatusBadRequest, "media posts need at least one attachment")
 			return
 		}
 		if len(mediaIDs) > 10 {
-			writeErr(w, http.StatusBadRequest, "too many images (max 10)")
+			writeErr(w, http.StatusBadRequest, "too many attachments (max 10)")
 			return
 		}
 	default:
-		writeErr(w, http.StatusBadRequest, "kind must be 'text' or 'image'")
+		writeErr(w, http.StatusBadRequest, "kind must be 'text', 'image' or 'video'")
 		return
 	}
 	if len(req.Body) > 5000 {
@@ -194,9 +201,11 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Coarse, optional, image-only place label. Trim, cap length, and drop if blank.
+	// Coarse, optional place label, allowed on any post with an attachment. Video mirrors
+	// photos here: the member chose to share where the clip was taken, and the file itself
+	// is stripped either way. Trim, cap length, and drop if blank.
 	var location *string
-	if req.Location != nil && req.Kind == "image" {
+	if req.Location != nil && len(mediaIDs) > 0 {
 		if loc := strings.TrimSpace(*req.Location); loc != "" {
 			if len(loc) > 120 {
 				loc = loc[:120]
@@ -206,9 +215,9 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	me := userFrom(r)
-	post, err := s.db.CreatePost(r.Context(), me.ID, req.Kind, req.Body, mediaIDs, location, req.PeopleIDs, crossPostID)
+	post, err := s.db.CreatePost(r.Context(), me.ID, req.Body, mediaIDs, location, req.PeopleIDs, crossPostID)
 	if errors.Is(err, db.ErrNotOwned) {
-		writeErr(w, http.StatusBadRequest, "one or more images are not yours")
+		writeErr(w, http.StatusBadRequest, "one or more attachments are not yours")
 		return
 	}
 	if err != nil {

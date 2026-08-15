@@ -118,6 +118,7 @@ func (s *Server) Router() http.Handler {
 
 		r.Post("/api/media", s.handleUploadMedia)
 		r.Get("/api/media/{id}", s.handleServeMedia)
+		r.Post("/api/media/{id}/poster", s.handleSetMediaPoster)
 
 		// Admin-only.
 		r.Group(func(r chi.Router) {

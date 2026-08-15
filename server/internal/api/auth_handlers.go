@@ -42,6 +42,10 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		"color":       s.serverColor(r.Context()),
 		"initialized": initialized,
 		"publicUrl":   s.cfg.PublicURL,
+		// What this server will accept an upload of. A client uses it to hide the video
+		// option against a self-hosted server that has not been updated yet; older clients
+		// ignore the key.
+		"mediaTypes": []string{"image", "gif", "video"},
 	})
 }
 
@@ -310,6 +314,17 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A profile picture attached during signup is optional, but it has to be an image: an
+	// avatar that turns out to be a video clip breaks rendering everywhere a member's face
+	// appears, which is nearly every screen.
+	if req.MediaID != nil {
+		media, err := s.db.GetMedia(r.Context(), *req.MediaID)
+		if err != nil || !isImage(media.Mime) {
+			writeErr(w, http.StatusBadRequest, "a profile photo has to be an image")
+			return
+		}
+	}
+
 	hash, err := auth.HashPassword(password)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
@@ -500,6 +515,10 @@ func (s *Server) handleSetProfilePhoto(w http.ResponseWriter, r *http.Request) {
 	}
 	if media.OwnerID == nil || *media.OwnerID != u.ID {
 		writeErr(w, http.StatusForbidden, "that image isn't yours")
+		return
+	}
+	if !isImage(media.Mime) {
+		writeErr(w, http.StatusBadRequest, "a profile photo has to be an image")
 		return
 	}
 	if err := s.db.SetUserProfileMedia(r.Context(), u.ID, req.MediaID); err != nil {

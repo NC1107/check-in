@@ -79,27 +79,44 @@ func (p NotifyPrefs) Normalize() NotifyPrefs {
 	return p
 }
 
-// Media is an uploaded image (post image or profile picture).
+// Media is an uploaded file: a post image, a video clip, or a profile picture.
 type Media struct {
-	ID        int64     `json:"id"`
-	OwnerID   *int64    `json:"ownerId,omitempty"`
-	Path      string    `json:"-"`
-	Mime      string    `json:"mime"`
-	Width     int       `json:"width"`
-	Height    int       `json:"height"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID      int64  `json:"id"`
+	OwnerID *int64 `json:"ownerId,omitempty"`
+	Path    string `json:"-"`
+	Mime    string `json:"mime"`
+	Width   int    `json:"width"`
+	Height  int    `json:"height"`
+	// DurationMs is how long a clip runs; 0 for a still image.
+	DurationMs int `json:"durationMs"`
+	// PosterPath is the still frame shown for a video that is not playing. Empty when
+	// there is none, which is also every image's state.
+	PosterPath string    `json:"-"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+// PostMedia is one attachment as a post carries it: everything a client needs to choose a
+// renderer before it has fetched a single byte of the file.
+type PostMedia struct {
+	ID         int64  `json:"id"`
+	Mime       string `json:"mime"`
+	Width      int    `json:"width"`
+	Height     int    `json:"height"`
+	DurationMs int    `json:"durationMs"`
+	HasPoster  bool   `json:"hasPoster"`
 }
 
 // Post is a single check-in: either a text-only update or an image with a caption.
 type Post struct {
-	ID        int64     `json:"id"`
-	AuthorID  int64     `json:"authorId"`
-	Kind      string    `json:"kind"`
-	Body      string    `json:"body"`
-	MediaID   *int64    `json:"mediaId,omitempty"`  // cover (first image), for older clients
-	MediaIDs  []int64   `json:"mediaIds,omitempty"` // full ordered set for multi-photo posts
-	Location  *string   `json:"location,omitempty"` // coarse "City, Country", optional
-	CreatedAt time.Time `json:"createdAt"`
+	ID        int64       `json:"id"`
+	AuthorID  int64       `json:"authorId"`
+	Kind      string      `json:"kind"`
+	Body      string      `json:"body"`
+	MediaID   *int64      `json:"mediaId,omitempty"`  // cover (first image), for older clients
+	MediaIDs  []int64     `json:"mediaIds,omitempty"` // full ordered set, for clients predating Media
+	Media     []PostMedia `json:"media,omitempty"`    // the same set, typed
+	Location  *string     `json:"location,omitempty"` // coarse "City, Country", optional
+	CreatedAt time.Time   `json:"createdAt"`
 
 	// CrossPostID groups the copies of one post shared to several groups at once, so the
 	// multi-group client can collapse them into a single card. Null for a single-group post.
@@ -113,6 +130,23 @@ type Post struct {
 	LikedByViewer   bool             `json:"likedByViewer"`
 	CommentsPreview []CommentPreview `json:"commentsPreview,omitempty"`
 	People          []TaggedPerson   `json:"people,omitempty"` // members tagged as appearing in the post
+}
+
+// applyMedia decodes the attachment array a post query returns and derives the flat id
+// list from it. Clients published before the typed array existed read only that list, so
+// it has to keep being emitted - deriving it here rather than querying for it separately
+// is what stops the two from ever disagreeing.
+func (p *Post) applyMedia(raw []byte) {
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &p.Media)
+	}
+	if len(p.Media) == 0 {
+		return
+	}
+	p.MediaIDs = make([]int64, len(p.Media))
+	for i, m := range p.Media {
+		p.MediaIDs[i] = m.ID
+	}
 }
 
 // TaggedPerson is a member manually tagged as appearing in a post (id for filtering,
