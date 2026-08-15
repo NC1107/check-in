@@ -39,6 +39,19 @@ class VideoNative {
     if (lat == null || lng == null) return null;
     return (lat: lat, lng: lng);
   }
+
+  /// Switches the app's audio session to a category that honors the Ring/Silent switch, so a
+  /// clip's audio follows the ringer rather than playing through silent mode. video_player
+  /// forces the playback category (sound even when silenced) on its first init and never
+  /// downgrades, so this is re-asserted once a clip is ready to play. Best-effort: hosts
+  /// without the native handler (Android, tests) no-op. Device-verified on iOS.
+  Future<void> respectSilentSwitch() async {
+    try {
+      await _channel.invokeMethod<void>('respectSilentSwitch');
+    } catch (_) {
+      // No native handler: the platform's own default already respects the silent switch.
+    }
+  }
 }
 
 /// A native video op failed in a way the compose flow can catch without crashing the post.
