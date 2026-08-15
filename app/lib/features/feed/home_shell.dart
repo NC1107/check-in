@@ -597,8 +597,9 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   /// to decode a full-resolution image. Location is already resolved from the original by
   /// this point. Falls back to uploading the original if compression isn't available.
   Future<int> _uploadCompressed(ApiClient api, XFile x) async {
+    List<int>? bytes;
     try {
-      var bytes = _compressedCache[x.path];
+      bytes = _compressedCache[x.path];
       if (bytes == null) {
         bytes = await FlutterImageCompress.compressWithFile(
           x.path,
@@ -609,10 +610,12 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
         );
         if (bytes != null) _compressedCache[x.path] = bytes;
       }
-      if (bytes != null) return api.uploadImageBytes(bytes);
     } catch (_) {
       // Unsupported source/platform - fall through and let the server try the original.
     }
+    // Outside the try: only compression gets the fallback. An upload that fails must
+    // surface, not silently re-upload the full-resolution original.
+    if (bytes != null) return api.uploadImageBytes(bytes);
     return api.uploadImage(x.path);
   }
 
