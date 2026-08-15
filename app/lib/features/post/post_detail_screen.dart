@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
@@ -108,6 +110,22 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       if (mounted) _snack('Allow photo access to save this');
     } catch (_) {
       if (mounted) _snack('Could not save the photo');
+    }
+  }
+
+  /// Saves the post's clip to the gallery. Gal.putVideo takes a file path, so the downloaded
+  /// bytes are staged in a temp file first.
+  Future<void> _saveVideo(int mediaId) async {
+    try {
+      final bytes = await ref.read(contentApiProvider(widget.groupId)).downloadMedia(mediaId);
+      final file = File('${Directory.systemTemp.path}/checkin_clip_$mediaId.mp4');
+      await file.writeAsBytes(bytes);
+      await Gal.putVideo(file.path);
+      if (mounted) _snack('Saved to your photos');
+    } on GalException catch (_) {
+      if (mounted) _snack('Allow photo access to save this');
+    } catch (_) {
+      if (mounted) _snack('Could not save the video');
     }
   }
 
@@ -591,13 +609,18 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
               ],
             ),
           ),
-          // A clip is not offered: Gal writes the bytes as they arrive, so it would land in
-          // the gallery as a file that will not open.
+          // A photo saves as-is; a clip takes its own putVideo path (staged to a temp file).
           if (post.imageMedia.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.download_outlined, size: 22, color: kFgSecondary),
               tooltip: 'Save photo',
               onPressed: () => _savePhoto(post.imageMedia.first.id),
+            ),
+          if (post.videoMedia.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.download_outlined, size: 22, color: kFgSecondary),
+              tooltip: 'Save video',
+              onPressed: () => _saveVideo(post.videoMedia.first.id),
             ),
         ],
       ),
