@@ -29,6 +29,13 @@ String? inviteServerFromUri(Uri uri) {
   return null;
 }
 
+/// The page to send someone so they can join the group served at [baseUrl]. Its "Open in
+/// Check-In" button carries the checkin:// link this file parses back.
+String joinLinkFor(String baseUrl) {
+  final base = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+  return '$base/join';
+}
+
 /// An invite that arrived before the app could route it (EULA not yet accepted, or a
 /// cold start straight from the link). The auth screen picks it up as its prefill.
 final pendingInviteServerProvider = StateProvider<String?>((ref) => null);
