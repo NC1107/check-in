@@ -31,6 +31,11 @@ import UIKit
     }
     NSLog("[CHECKIN-NATIVE] preRegister configured=\(FirebaseApp.app() != nil)")
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+    // Our own channel rides the same registry the generated plugins do, so it is wired up
+    // regardless of how the UIScene template creates the FlutterViewController.
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "VideoPlugin") {
+      VideoPlugin.register(with: registrar)
+    }
     NSLog("[CHECKIN-NATIVE] postRegister configured=\(FirebaseApp.app() != nil)")
   }
 
