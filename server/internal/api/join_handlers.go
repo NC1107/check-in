@@ -140,7 +140,12 @@ var joinTmpl = template.Must(template.New("join").Parse(`<!doctype html>
        font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
        display:flex;min-height:100vh;align-items:center;justify-content:center;}
   main{width:100%;max-width:400px;text-align:center;}
-  .mark{width:54px;height:54px;margin:0 auto 20px;border-radius:17px;background:var(--accent);}
+  .mark{display:block;width:58px;height:58px;margin:0 auto 20px;}
+  .mark circle,.mark path{fill:none;stroke:var(--accent);}
+  .mark .r1{opacity:.3;stroke-width:3;}
+  .mark .r2{opacity:.62;stroke-width:3.5;}
+  .mark .core{fill:var(--accent);}
+  .mark .tick{stroke:#0A0A0A;stroke-width:3.6;stroke-linecap:round;stroke-linejoin:round;}
   h1{margin:0 0 10px;font-size:23px;line-height:1.3;font-weight:700;}
   h1 span{color:var(--accent);}
   .lede{margin:0 0 22px;color:#A1A1AA;font-size:15px;}
@@ -159,7 +164,12 @@ var joinTmpl = template.Must(template.New("join").Parse(`<!doctype html>
   .foot{margin:20px 0 0;color:#8B8B93;font-size:13px;}
 </style></head>
 <body><main>
-  <div class="mark"></div>
+  <svg class="mark" viewBox="0 0 64 64" aria-hidden="true">
+    <circle class="r1" cx="32" cy="32" r="29"/>
+    <circle class="r2" cx="32" cy="32" r="21"/>
+    <circle class="core" cx="32" cy="32" r="13"/>
+    <path class="tick" d="M26 32.5l4.6 4.6L38.6 28"/>
+  </svg>
   <h1>You're invited to <span>{{.GroupName}}</span></h1>
   <p class="lede">{{.GroupName}} shares private check-ins on its own Check-In server. Open this
      invite in the app to join.</p>
