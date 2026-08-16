@@ -494,4 +494,112 @@ void main() {
     expect(tester.takeException(), isNull);
     expect(find.text('Ada'), findsNWidgets(2));
   });
+
+  /// The founder-reported round-3 regression: the Wall's grid overflowed a single 4:3 deck
+  /// page, so with 4 cards only the top row was ever visible - the bottom row was clipped,
+  /// unreachable, no scroll. The fix chunks the collage across its own deck pages (see
+  /// RecapDeckState._buildPages) instead of overflowing one; these run it at every card
+  /// count from 1 up to the monthly cap (20) and confirm every single card is reachable by
+  /// swiping, with nothing throwing (no RenderFlex overflow) along the way.
+  for (final n in [1, 2, 4, 5, 9, 20]) {
+    testWidgets(
+        'the Wall paginates across deck pages instead of clipping: $n card(s), every card '
+        'reachable by swiping, nothing overflows', (tester) async {
+      final cards = [
+        for (var i = 1; i <= n; i++) quoteCard(authorId: i, authorName: 'Member $i', rank: i),
+      ];
+      final recap = RecapPayload(
+        periodLabel: 'August 2026',
+        cadence: 'monthly',
+        groupName: 'Ridgeway Family',
+        groupColor: 'coral',
+        stats: stats(),
+        panels: [RecapCollagePanel(title: 'The Wall', cards: cards)],
+      );
+      await pumpDeck(tester, recap);
+      expect(tester.takeException(), isNull);
+
+      // The chunk size (4 cards/page) is load-bearing here, not incidental: reverting to a
+      // single grid page per panel would make this itemCount 2 (cover + one Wall page)
+      // regardless of n, failing this assertion for every n above 4.
+      final wallPages = (n / 4).ceil();
+      final totalPages = wallPages + 1;
+      final pageView = tester.widget<PageView>(find.byType(PageView));
+      expect((pageView.childrenDelegate as SliverChildBuilderDelegate).estimatedChildCount,
+          totalPages);
+
+      // Swipe through every page one at a time - the same gesture a real viewer uses -
+      // asserting no exception (in particular no RenderFlex overflow) at each stop.
+      for (var i = 1; i < totalPages; i++) {
+        await tester.drag(find.byType(PageView), const Offset(-400, 0));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull,
+            reason: 'page $i of $totalPages must render without overflow/clipping ($n cards)');
+      }
+
+      // The deck's very last card must be reachable, not silently clipped off behind an
+      // unreachable second grid row - the exact bug the founder hit.
+      expect(find.text('Member $n'), findsOneWidget);
+    });
+  }
+
+  testWidgets('the Wall panel title is shown once, on the chunk\'s first page only',
+      (tester) async {
+    // 5 cards -> 2 wall pages at 4/page. The title must not repeat on the second page - it
+    // would eat into the tight vertical space a 4:3 page has for the tiles themselves.
+    final cards = [for (var i = 1; i <= 5; i++) quoteCard(authorId: i, authorName: 'Member $i')];
+    final recap = RecapPayload(
+      periodLabel: 'August 2026',
+      cadence: 'monthly',
+      groupName: 'Ridgeway Family',
+      groupColor: 'coral',
+      stats: stats(),
+      panels: [RecapCollagePanel(title: 'The Wall', cards: cards)],
+    );
+    await pumpDeck(tester, recap);
+    await swipeToPage(tester, find.byType(PageView), 1);
+    expect(find.text('The Wall'), findsOneWidget);
+
+    await swipeToPage(tester, find.byType(PageView), 1);
+    expect(find.text('The Wall'), findsNothing);
+  });
+
+  testWidgets('the page-dot row compresses to a bounded window once page count is large',
+      (tester) async {
+    // Only reachable with an oversized group: collageCardCap's memberCount floor can push
+    // the Wall's card cap (and so its page count) well past the 20-card monthly default -
+    // here 36 members forces a 36-card cap, 9 wall pages, 10 pages total with the cover.
+    final cards = [for (var i = 1; i <= 36; i++) quoteCard(authorId: i, authorName: 'Member $i')];
+    final recap = RecapPayload(
+      periodLabel: 'August 2026',
+      cadence: 'monthly',
+      groupName: 'Ridgeway Family',
+      groupColor: 'coral',
+      stats: stats(),
+      panels: [RecapCollagePanel(title: 'The Wall', cards: cards)],
+    );
+    await pumpDeck(tester, recap);
+    expect(tester.takeException(), isNull);
+
+    // Every dot the row renders is a Container with an explicit 6px height (the inactive
+    // dot's own height - the active one shares it too, just a wider width) - a marker no
+    // other widget in the tree sets, so counting them is a direct read of how many dots are
+    // actually on screen. 10 pages total (cover + 9 wall pages) is past the row's
+    // uncompressed ceiling (9): it must render its bounded 7-dot window, not one dot per
+    // page, or the row risks overflowing outright.
+    final dots = find.byWidgetPredicate((w) => w is Container && w.constraints?.maxHeight == 6.0);
+    expect(dots, findsNWidgets(7),
+        reason: 'past the uncompressed ceiling the row must show its bounded window, not one '
+            'dot per page');
+
+    // Swipe to the last page and confirm it's still reachable without overflow, which is
+    // what actually matters - the dot row degrading gracefully must never come at the cost
+    // of a page becoming unreachable.
+    for (var i = 0; i < 9; i++) {
+      await tester.drag(find.byType(PageView), const Offset(-400, 0));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    }
+    expect(find.text('Member 36'), findsOneWidget);
+  });
 }

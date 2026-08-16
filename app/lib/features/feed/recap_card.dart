@@ -94,16 +94,17 @@ class RecapDeckState extends State<RecapDeck> {
     if (panels.isEmpty) {
       return _RecapStatsFallback(recap: widget.recap);
     }
-    // Page 0 is always the cover - a system moment, not a normal post header - with every
-    // recognised panel following after it in the order the payload carries them.
-    final pageCount = panels.length + 1;
+    final pages = _buildPages();
+    final pageCount = pages.length;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         AspectRatio(
           // A normal media-frame aspect (matching post_image_carousel's own default), not
           // the tall hero the cover used to render at - the deck reads as a normal post's
-          // footprint now, distinguished by its accent outline, not its size.
+          // footprint now, distinguished by its accent outline, not its size. Every page,
+          // including a chunked Wall page, renders inside this exact same footprint - see
+          // _buildPages and _WallPanel for how a chunk is kept from ever exceeding it.
           aspectRatio: 4 / 3,
           child: PageView.builder(
             controller: _controller,
@@ -111,53 +112,107 @@ class RecapDeckState extends State<RecapDeck> {
             onPageChanged: (i) => setState(() => _page = i),
             itemBuilder: (context, index) => RepaintBoundary(
               key: _keyFor(index),
-              child: index == 0
-                  ? _RecapCoverPage(
-                      recap: widget.recap, groupId: widget.groupId, postId: widget.postId)
-                  : _RecapPanelView(panel: panels[index - 1], groupId: widget.groupId),
+              child: pages[index],
             ),
           ),
         ),
         // Page dots only - saving now lives in the post card's overflow menu, alongside
         // every other post's save action (see PostCard's PopupMenuButton and
         // RecapDeckState.saveCurrentPage).
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              for (var i = 0; i < pageCount; i++)
-                Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 3),
-                  width: i == _page ? 16 : 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    color: i == _page ? context.accent : _border,
-                    borderRadius: BorderRadius.circular(3),
-                  ),
-                ),
-            ],
-          ),
-        ),
+        _PageDots(pageCount: pageCount, page: _page),
       ],
     );
   }
+
+  /// Flattens the recap's panels into the deck's actual pages: the cover, then one page per
+  /// panel - except the collage ("The Wall"), which chunks its cards across as many pages as
+  /// it takes to stay inside the deck's fixed 4:3 footprint instead of overflowing a single
+  /// page (see _WallPanel's doc comment for why a page can only ever hold one chunk's worth
+  /// of cards). This is what fixes the round-3 regression: a 4-card (or 20-card) collage no
+  /// longer clips its lower cards behind an unreachable, unscrollable grid - it gets its own
+  /// extra deck pages instead, reachable the same way every other page already is: swiping.
+  List<Widget> _buildPages() {
+    final pages = <Widget>[
+      _RecapCoverPage(recap: widget.recap, groupId: widget.groupId, postId: widget.postId),
+    ];
+    for (final panel in widget.recap.panels) {
+      switch (panel) {
+        case RecapCollagePanel p:
+          final chunks = _chunkCards(p.cards, _wallCardsPerPage);
+          for (var i = 0; i < chunks.length; i++) {
+            // The panel title is shown once, on the chunk's first page only - repeating it
+            // on every chunk would eat into the exact vertical space that was clipping
+            // cards in the first place.
+            pages.add(_WallPanel(
+                title: i == 0 ? p.title : null, cards: chunks[i], groupId: widget.groupId));
+          }
+        case RecapAwardsPanel p:
+          pages.add(_AwardsPanel(panel: p, groupId: widget.groupId));
+      }
+    }
+    return pages;
+  }
 }
 
-/// Dispatches to the right panel renderer. panel is one of the two v1 subtypes
-/// ([RecapCollagePanel], [RecapAwardsPanel]) by construction - [RecapPanel.tryParse] never
-/// hands back anything else - so the switch is exhaustive with no default case.
-class _RecapPanelView extends StatelessWidget {
-  const _RecapPanelView({required this.panel, required this.groupId});
+/// How many Wall cards share one deck page. A single row (see _WallPanel) rather than a
+/// grid, so this is really "how many columns", not a height-derived limit - four reads as a
+/// proper collage row without the tiles going so narrow they stop reading as photos, and it
+/// matches what a monthly recap's 20-card cap works out to: 5 Wall pages, 6 dots total with
+/// the cover - the founder's own back-of-envelope number for what "up to 6 dots" should be.
+const _wallCardsPerPage = 4;
 
-  final RecapPanel panel;
-  final String? groupId;
+/// Splits [cards] into consecutive groups of at most [size], preserving order.
+List<List<RecapCard>> _chunkCards(List<RecapCard> cards, int size) {
+  final out = <List<RecapCard>>[];
+  for (var i = 0; i < cards.length; i += size) {
+    out.add(cards.sublist(i, math.min(i + size, cards.length)));
+  }
+  return out;
+}
+
+/// The deck's page-dot row. At or under [_maxDots] pages, every page still gets its own dot
+/// - unchanged from before. Past it - only reachable with an oversized group, since
+/// collageCardCap's memberCount floor can push the Wall's card cap (and so its page count)
+/// well above the 20-card monthly default - the row instead shows a fixed-size sliding
+/// window centred on the current page, so its rendered width stays bounded rather than
+/// growing without limit and overflowing the row.
+class _PageDots extends StatelessWidget {
+  const _PageDots({required this.pageCount, required this.page});
+
+  final int pageCount;
+  final int page;
+
+  static const _maxDots = 9;
+  static const _window = 7;
 
   @override
-  Widget build(BuildContext context) => switch (panel) {
-        RecapCollagePanel p => _WallPanel(panel: p, groupId: groupId),
-        RecapAwardsPanel p => _AwardsPanel(panel: p, groupId: groupId),
-      };
+  Widget build(BuildContext context) {
+    final indices =
+        pageCount <= _maxDots ? [for (var i = 0; i < pageCount; i++) i] : _windowedIndices();
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          for (final i in indices)
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 3),
+              width: i == page ? 16 : 6,
+              height: 6,
+              decoration: BoxDecoration(
+                color: i == page ? context.accent : _border,
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  List<int> _windowedIndices() {
+    final start = (page - _window ~/ 2).clamp(0, pageCount - _window);
+    return [for (var i = 0; i < _window; i++) start + i];
+  }
 }
 
 /// The deck's first page: a system moment, not a normal post header. A dimmed, blurred hero
@@ -480,12 +535,22 @@ class _OverflowBubble extends StatelessWidget {
   }
 }
 
-/// "The Wall": the ranked collage, fridge-door style - a grid of tiles each carrying the
-/// author's name (and, for a text-only guaranteed slot, a quote card instead of a photo).
+/// "The Wall": the ranked collage, fridge-door style - one deck page per chunk of up to
+/// [_wallCardsPerPage] cards (see RecapDeckState._buildPages), laid out as a single
+/// horizontal row rather than a multi-row grid. That's deliberate, not cosmetic: a grid's
+/// row count grows with the chunk size, so its total height can exceed the page's fixed 4:3
+/// footprint - exactly the round-3 regression (a 2x2 grid's second row landing almost
+/// entirely below the visible page, unreachable, no scroll). A single row's height is
+/// always exactly the page's own available height, via Expanded/stretch, however many tiles
+/// are in it - so it can never clip, by construction, not by having tuned the numbers to
+/// happen to fit.
 class _WallPanel extends StatelessWidget {
-  const _WallPanel({required this.panel, required this.groupId});
+  const _WallPanel({required this.title, required this.cards, required this.groupId});
 
-  final RecapCollagePanel panel;
+  /// Null on every wall page after the chunk's first - the title is shown once per panel,
+  /// not repeated on every chunked page, so it doesn't eat into the space the tiles have.
+  final String? title;
+  final List<RecapCard> cards;
   final String? groupId;
 
   @override
@@ -497,23 +562,22 @@ class _WallPanel extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-              child: Text(panel.title,
-                  style: const TextStyle(
-                      color: _fgPrimary, fontWeight: FontWeight.w800, fontSize: 18)),
-            ),
+            if (title != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                child: Text(title!,
+                    style: const TextStyle(
+                        color: _fgPrimary, fontWeight: FontWeight.w800, fontSize: 18)),
+              ),
             Expanded(
-              child: GridView.builder(
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  mainAxisSpacing: 8,
-                  crossAxisSpacing: 8,
-                  childAspectRatio: 0.85,
-                ),
-                itemCount: panel.cards.length,
-                itemBuilder: (context, i) => _WallTile(card: panel.cards[i], groupId: groupId),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (var i = 0; i < cards.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 8),
+                    Expanded(child: _WallTile(card: cards[i], groupId: groupId)),
+                  ],
+                ],
               ),
             ),
           ],
