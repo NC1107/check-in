@@ -21,6 +21,7 @@ import '../../notifications/push_messaging.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/feed_autoplay.dart';
 import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
 import '../profile/profile_screen.dart';
@@ -266,7 +267,11 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     // Admin/member management is reached from the profile (host badge + Members button),
     // so it isn't a bottom-nav destination.
     final pages = <Widget>[
-      const FeedScreen(),
+      // Clips in the feed autoplay, and this scope is what holds the whole feed to a single
+      // player. It also has to be told when the feed is not the visible tab: an IndexedStack
+      // keeps the other page alive but stops painting it, so nothing inside the page would
+      // ever learn it went off screen.
+      FeedAutoplayScope(enabled: _index == 0, child: const FeedScreen()),
       // One profile for the one human: merged across every signed-in group.
       if (me != null) const MyProfileScreen(),
     ];
