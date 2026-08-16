@@ -366,9 +366,10 @@ class ApiClient {
     return (r.data as Map<String, dynamic>)['id'] as int;
   }
 
-  /// uploadImageBytes sends already-encoded JPEG bytes (from a client-side downscale /
-  /// transcode) and returns the new media id. Used so the server never has to decode a
-  /// full-resolution photo or an iPhone HEIC it can't read.
+  /// uploadImageBytes sends already-encoded bytes and returns the new media id. [filename]'s
+  /// extension picks the upload's content type (see uploadContentType), so this carries
+  /// either a downscaled/transcoded JPEG (so the server never has to decode a full-resolution
+  /// photo or an iPhone HEIC it can't read) or a gif re-hosted byte-for-byte from Klipy.
   Future<int> uploadImageBytes(List<int> bytes, {String filename = 'upload.jpg'}) async {
     final form = FormData.fromMap({
       'file': MultipartFile.fromBytes(bytes,
