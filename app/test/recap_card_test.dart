@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:checkin/api/models.dart';
 import 'package:checkin/features/feed/recap_card.dart';
 import 'package:checkin/state/app_state.dart';
+import 'package:checkin/widgets/user_avatar.dart';
 
 /// RecapDeck is the swipeable panel deck a recap post renders in place of ordinary media
 /// (see post_card.dart's `if (recap != null)` branch). These tests build the payload from
@@ -22,18 +23,19 @@ void main() {
     user: user,
   );
 
-  Future<void> pumpDeck(WidgetTester tester, RecapPayload recap) async {
+  Future<void> pumpDeck(WidgetTester tester, RecapPayload recap, {int postId = 1}) async {
     final controller =
         MultiSessionController.seeded(MultiSession(groups: [account], restored: true));
     await tester.pumpWidget(ProviderScope(
       overrides: [multiSessionProvider.overrideWith(() => controller)],
       child: MaterialApp(
         // A phone-width column, like the card the deck actually lives in (post_card.dart's
-        // feed-width card). The deck's 4:5 AspectRatio page needs a bounded width to avoid
+        // feed-width card). The deck's 4:3 AspectRatio page needs a bounded width to avoid
         // overflowing the test surface's fixed 600-tall viewport.
         home: Scaffold(
           body: SingleChildScrollView(
-            child: SizedBox(width: 340, child: RecapDeck(recap: recap, groupId: account.id)),
+            child: SizedBox(
+                width: 340, child: RecapDeck(recap: recap, groupId: account.id, postId: postId)),
           ),
         ),
       ),
@@ -97,13 +99,29 @@ void main() {
     );
     await pumpDeck(tester, recap);
 
-    // The group name and stats line are on the cover, visible without swiping - and the
-    // Wall's own content ("The Wall" panel title, "Ada") is not, because it sits on the
-    // page after it.
-    expect(find.text('Ridgeway Family'), findsOneWidget);
+    // The stats line is on the cover, visible without swiping - and the Wall's own content
+    // ("The Wall" panel title, "Ada") is not, because it sits on the page after it. The
+    // group name is deliberately absent (see the dedicated test below) - it now lives only
+    // in the post card's header, not duplicated onto the cover.
     expect(find.textContaining('check-ins'), findsOneWidget);
     expect(find.text('The Wall'), findsNothing);
     expect(find.text('Ada'), findsNothing);
+  });
+
+  testWidgets('the cover does not repeat the group name - that lives in the post header now',
+      (tester) async {
+    final recap = RecapPayload(
+      periodLabel: 'Aug 10-16',
+      cadence: 'weekly',
+      groupName: 'Ridgeway Family',
+      groupColor: 'coral',
+      stats: stats(),
+      panels: [
+        RecapCollagePanel(title: 'The Wall', cards: [quoteCard(authorId: 1, authorName: 'Ada')]),
+      ],
+    );
+    await pumpDeck(tester, recap);
+    expect(find.text('Ridgeway Family'), findsNothing);
   });
 
   testWidgets('the cover eyebrow reflects cadence, and the period label is shown too',
@@ -143,7 +161,7 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(find.text('MONTHLY RECAP'), findsOneWidget);
-    expect(find.text('Ridgeway Family'), findsOneWidget);
+    expect(find.text('Aug 10-16'), findsOneWidget);
   });
 
   testWidgets('the cover shows a hero backdrop when the Wall\'s #1 pick has a photo',
@@ -166,6 +184,102 @@ void main() {
     expect(tester.takeException(), isNull);
     // ImageFiltered wraps the blurred hero backdrop - present only when there is one to show.
     expect(find.byType(ImageFiltered), findsOneWidget);
+  });
+
+  RecapPayload payloadWithPeople(List<RecapPerson> people) => RecapPayload(
+        periodLabel: 'Aug 10-16',
+        cadence: 'weekly',
+        groupName: 'Ridgeway Family',
+        groupColor: 'coral',
+        stats: stats(),
+        panels: [
+          RecapCollagePanel(title: 'The Wall', cards: [quoteCard(authorId: 1, authorName: 'Ada')]),
+        ],
+        people: people,
+      );
+
+  /// The top-left of every avatar bubble currently on screen, in the order [find.byType]
+  /// resolves them - used to compare a cluster's layout across two separate builds.
+  List<Offset> bubblePositions(WidgetTester tester) {
+    final finder = find.byType(UserAvatar);
+    final count = finder.evaluate().length;
+    return [for (var i = 0; i < count; i++) tester.getTopLeft(finder.at(i))];
+  }
+
+  testWidgets('the cover renders an avatar bubble per poster, sized by their post count',
+      (tester) async {
+    final recap = payloadWithPeople([
+      RecapPerson(userId: 1, name: 'Ada', posts: 6),
+      RecapPerson(userId: 2, name: 'Ben', posts: 3),
+      RecapPerson(userId: 3, name: 'Cy', posts: 1),
+    ]);
+    await pumpDeck(tester, recap);
+
+    expect(tester.takeException(), isNull);
+    expect(find.byType(UserAvatar), findsNWidgets(3));
+    final sizes = tester.widgetList<UserAvatar>(find.byType(UserAvatar)).map((w) => w.size).toSet();
+    expect(sizes.length, greaterThan(1),
+        reason: 'the top contributor (6 posts) must render a visibly bigger bubble than the '
+            'others (3, 1 posts) - equal sizes would mean the metric was never applied');
+  });
+
+  testWidgets('a payload recorded before People existed falls back to no bubble cluster',
+      (tester) async {
+    // No `people:` given - RecapPayload's default is the empty list, exactly what
+    // RecapPayload.fromJson produces when a stored payload predates this field.
+    final recap = RecapPayload(
+      periodLabel: 'Aug 10-16',
+      cadence: 'weekly',
+      groupName: 'Ridgeway Family',
+      groupColor: 'coral',
+      stats: stats(),
+      panels: [
+        RecapCollagePanel(title: 'The Wall', cards: [quoteCard(authorId: 1, authorName: 'Ada')]),
+      ],
+    );
+    await pumpDeck(tester, recap);
+
+    // Must not throw - in particular, _BubbleCluster's empty-list guard must still be in
+    // place, or reading `.first` off an empty shown-list below would.
+    expect(tester.takeException(), isNull);
+    expect(find.byType(UserAvatar), findsNothing);
+  });
+
+  testWidgets('posters past the cap collapse into a single "+N" overflow bubble', (tester) async {
+    final recap = payloadWithPeople([
+      for (var i = 1; i <= 10; i++) RecapPerson(userId: i, name: 'Member $i', posts: 11 - i),
+    ]);
+    await pumpDeck(tester, recap);
+
+    expect(tester.takeException(), isNull);
+    // 10 posters, cap 7: 7 avatar bubbles plus one "+3" overflow bubble for the rest.
+    expect(find.byType(UserAvatar), findsNWidgets(7));
+    expect(find.text('+3'), findsOneWidget);
+  });
+
+  testWidgets(
+      'the bubble cluster lays out identically across two separate builds of the '
+      'same recap', (tester) async {
+    final recap = payloadWithPeople([
+      RecapPerson(userId: 1, name: 'Ada', posts: 6),
+      RecapPerson(userId: 2, name: 'Ben', posts: 4),
+      RecapPerson(userId: 3, name: 'Cy', posts: 3),
+      RecapPerson(userId: 4, name: 'Dee', posts: 1),
+    ]);
+
+    await pumpDeck(tester, recap, postId: 42);
+    final first = bubblePositions(tester);
+    expect(first, isNotEmpty);
+
+    // A fresh pumpWidget tears down and rebuilds the whole tree - a brand new
+    // _BubbleCluster.build() call, not merely a repaint of the same instance - so this
+    // actually exercises whether the layout's seed is deterministic rather than cached.
+    await pumpDeck(tester, recap, postId: 42);
+    final second = bubblePositions(tester);
+
+    expect(second, first,
+        reason: 'the same recap (same postId, same people) must pack into the exact same '
+            'positions every time - an unseeded math.Random() in the packer would fail this');
   });
 
   testWidgets(
@@ -357,7 +471,7 @@ void main() {
     );
     final controller =
         MultiSessionController.seeded(MultiSession(groups: [account], restored: true));
-    // Tall enough that both decks (each ~450-500px, per the 4:5 aspect ratio at this
+    // Tall enough that both decks (each ~250-350px, per the 4:3 aspect ratio at this
     // width) sit inside the default cache extent - otherwise the second is never built,
     // which would make this a test of the viewport, not of the layout.
     await tester.binding.setSurfaceSize(const Size(400, 1600));
@@ -367,8 +481,8 @@ void main() {
       child: MaterialApp(
         home: Scaffold(
           body: ListView(children: [
-            SizedBox(width: 340, child: RecapDeck(recap: recap, groupId: account.id)),
-            SizedBox(width: 340, child: RecapDeck(recap: recap, groupId: account.id)),
+            SizedBox(width: 340, child: RecapDeck(recap: recap, groupId: account.id, postId: 1)),
+            SizedBox(width: 340, child: RecapDeck(recap: recap, groupId: account.id, postId: 2)),
           ]),
         ),
       ),

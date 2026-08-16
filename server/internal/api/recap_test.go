@@ -250,6 +250,42 @@ func TestRecapWireShape(t *testing.T) {
 	}
 }
 
+// TestRecapPayloadCarriesPeopleOrderedByPostCount pins the wire shape of the cover's
+// avatar-bubble roster: every distinct poster appears once, ordered by their post count in
+// the period (highest first) - the metric the client's cluster scales bubble size by.
+func TestRecapPayloadCarriesPeopleOrderedByPostCount(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+	member := h.member(admin, "Sam")
+	// Sam posts three times, Robin once - Sam must lead the roster despite being the
+	// non-admin, non-first-created actor.
+	h.createPost(admin, map[string]any{"kind": "text", "body": "one"})
+	h.createPost(member, map[string]any{"kind": "text", "body": "two"})
+	h.createPost(member, map[string]any{"kind": "text", "body": "three"})
+	h.createPost(member, map[string]any{"kind": "text", "body": "four"})
+
+	start := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	end := time.Now().Add(1 * time.Hour).UTC().Format(time.RFC3339)
+	var post db.Post
+	h.post("/api/admin/recaps", admin.Token,
+		map[string]any{"periodStart": start, "periodEnd": end, "panels": []string{"collage"}}).
+		expect(http.StatusCreated).decode(&post)
+
+	if post.Recap == nil {
+		t.Fatal("recap payload is nil")
+	}
+	people := post.Recap.People
+	if len(people) != 2 {
+		t.Fatalf("got %d people, want 2 (one per distinct poster)", len(people))
+	}
+	if people[0].UserID != member.ID || people[0].Posts != 3 {
+		t.Errorf("people[0] = %+v, want Sam (id %d) with 3 posts", people[0], member.ID)
+	}
+	if people[1].UserID != admin.ID || people[1].Posts != 1 {
+		t.Errorf("people[1] = %+v, want Robin (id %d) with 1 post", people[1], admin.ID)
+	}
+}
+
 // TestRecapSurvivesBlockingTheAdmin pins the Feed blocked-author fix: a member who blocks
 // the admin (the recap's author_id) must still see the group's recaps, even though every
 // other post by that author is now hidden from them.
