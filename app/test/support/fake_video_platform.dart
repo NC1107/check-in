@@ -16,6 +16,11 @@ class FakeVideoPlatform extends VideoPlayerPlatform {
   /// URL fragments this platform refuses to open, for the failure path.
   final Set<String> refuse = {};
 
+  /// Every data source the platform was asked to open, in order - attempts included. A
+  /// player handed from the feed to the full-screen viewer must not add an entry: building
+  /// a second one for the same clip is the stall this hand-off exists to remove.
+  final List<String> created = [];
+
   /// What the player was told to do, in order: `'seek:0:00:02.000000'`, `'play'`,
   /// `'volume:0.0'`. Order is the point for seek-then-play, so it is one log rather than
   /// three lists.
@@ -33,6 +38,7 @@ class FakeVideoPlatform extends VideoPlayerPlatform {
   @override
   Future<int?> createWithOptions(VideoCreationOptions options) async {
     final uri = options.dataSource.uri ?? '';
+    created.add(uri);
     if (refuse.any(uri.contains)) {
       throw PlatformException(code: 'VideoError', message: 'no player for $uri');
     }
