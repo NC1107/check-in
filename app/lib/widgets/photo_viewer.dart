@@ -23,6 +23,7 @@ class PhotoViewerScreen extends StatefulWidget {
     required this.media,
     this.initialIndex = 0,
     this.groupId,
+    this.initialClipPositions = const {},
   });
 
   /// Every attachment reachable from this viewer (e.g. all of a post's media). A
@@ -37,6 +38,12 @@ class PhotoViewerScreen extends StatefulWidget {
   /// authenticated request and cache key resolve to the right server. See [MediaFrame].
   final String? groupId;
 
+  /// Where a clip should pick up from, by media id. A clip tapped while it was autoplaying
+  /// in the feed carries its position here so full screen continues rather than restarting;
+  /// a clip with no entry (every other one on a multi-media post) opens at the start. See
+  /// `FeedAutoplayScope.continuation`, which is what fills this in.
+  final Map<int, Duration> initialClipPositions;
+
   /// Pushes the viewer over everything (above the bottom nav). The backdrop is painted by
   /// the viewer itself so it can fade as the photo is dragged away, so the route barrier
   /// stays transparent.
@@ -45,14 +52,19 @@ class PhotoViewerScreen extends StatefulWidget {
     required List<PostMedia> media,
     int initialIndex = 0,
     String? groupId,
+    Map<int, Duration> initialClipPositions = const {},
   }) {
     return Navigator.of(context, rootNavigator: true).push(
       PageRouteBuilder(
         opaque: false,
         barrierColor: Colors.transparent,
         transitionDuration: const Duration(milliseconds: 180),
-        pageBuilder: (_, __, ___) =>
-            PhotoViewerScreen(media: media, initialIndex: initialIndex, groupId: groupId),
+        pageBuilder: (_, __, ___) => PhotoViewerScreen(
+          media: media,
+          initialIndex: initialIndex,
+          groupId: groupId,
+          initialClipPositions: initialClipPositions,
+        ),
         transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
       ),
     );
@@ -151,7 +163,12 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTicker
                       // one controller and only while it is the visible page (active), so
                       // paging away tears it down - the strict lifecycle the plan calls for.
                       if (m.isVideo) {
-                        return _VideoPage(media: m, groupId: widget.groupId, active: i == _page);
+                        return _VideoPage(
+                          media: m,
+                          groupId: widget.groupId,
+                          active: i == _page,
+                          startAt: widget.initialClipPositions[m.id],
+                        );
                       }
                       return _ZoomablePhoto(
                         media: m,
@@ -289,7 +306,10 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> {
 
 /// One clip inside the viewer's [PageView]: plays the stored MP4 (the main file, not the
 /// poster variant) over its own poster, which stays visible until the first frame decodes so
-/// there is no black flash. Tap toggles play/pause; a corner button mutes.
+/// there is no black flash. A clip tapped mid-autoplay resumes from [startAt] rather than
+/// restarting the bit the viewer has already seen. Tap toggles play/pause; the corner
+/// button carries the same sticky mute the feed tiles use ([clipsMutedProvider]), so sound
+/// is one choice across the app rather than one per player.
 ///
 /// The lifecycle is the whole point. There is exactly one controller and only while this is
 /// the active page: it is created when the page becomes active and torn down the moment it
@@ -297,11 +317,14 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> {
 /// That keeps the app off the ListView-controller scar and inside Android's small pool of
 /// hardware video decoders.
 class _VideoPage extends ConsumerStatefulWidget {
-  const _VideoPage({required this.media, required this.active, this.groupId});
+  const _VideoPage({required this.media, required this.active, this.groupId, this.startAt});
 
   final PostMedia media;
   final String? groupId;
   final bool active;
+
+  /// Where the feed had got to in this clip when it was tapped, if it was playing there.
+  final Duration? startAt;
 
   @override
   ConsumerState<_VideoPage> createState() => _VideoPageState();
@@ -310,7 +333,6 @@ class _VideoPage extends ConsumerStatefulWidget {
 class _VideoPageState extends ConsumerState<_VideoPage> with WidgetsBindingObserver {
   VideoPlayerController? _controller;
   bool _initialized = false;
-  bool _muted = false;
 
   @override
   void initState() {
@@ -354,19 +376,32 @@ class _VideoPageState extends ConsumerState<_VideoPage> with WidgetsBindingObser
       httpHeaders: api.authHeaders,
     );
     _controller = controller;
-    controller.initialize().then((_) {
+    unawaited(_start(controller));
+  }
+
+  /// Brings the player up and starts it where the feed left off.
+  ///
+  /// The seek has to land before play, or the clip shows the opening frames the viewer has
+  /// already watched and reads as a restart - the whole point of carrying the position over.
+  /// The poster stays up until then, which is a beat of still picture rather than a jump.
+  Future<void> _start(VideoPlayerController controller) async {
+    try {
+      await controller.initialize();
       if (!mounted || _controller != controller) return;
-      controller.setLooping(true);
-      controller.setVolume(_muted ? 0 : 1);
+      await controller.setLooping(true);
+      await controller.setVolume(ref.read(clipsMutedProvider) ? 0 : 1);
       // Make the clip's audio follow the Ring/Silent switch (ambient category) rather than
       // playing through silent mode, which is video_player's forced default. Re-asserted here
       // because that default is set on the plugin's first init and never downgrades.
       unawaited(const VideoNative().respectSilentSwitch());
-      if (widget.active) controller.play();
+      final startAt = widget.startAt;
+      if (startAt != null && startAt > Duration.zero) await controller.seekTo(startAt);
+      if (!mounted || _controller != controller) return;
+      if (widget.active) unawaited(controller.play());
       setState(() => _initialized = true);
-    }).catchError((_) {
+    } catch (_) {
       // No platform player (test/unsupported): keep showing the poster, no crash.
-    });
+    }
   }
 
   void _teardown() {
@@ -385,19 +420,12 @@ class _VideoPageState extends ConsumerState<_VideoPage> with WidgetsBindingObser
     });
   }
 
-  void _toggleMute() {
-    final controller = _controller;
-    if (controller == null) return;
-    setState(() {
-      _muted = !_muted;
-      controller.setVolume(_muted ? 0 : 1);
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
     final playing = _initialized && controller != null && controller.value.isPlaying;
+    final muted = ref.watch(clipsMutedProvider);
+    ref.listen(clipsMutedProvider, (_, next) => _controller?.setVolume(next ? 0 : 1));
     return GestureDetector(
       onTap: _togglePlay,
       child: Stack(
@@ -425,10 +453,10 @@ class _VideoPageState extends ConsumerState<_VideoPage> with WidgetsBindingObser
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: IconButton(
-                    icon: Icon(_muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                    icon: Icon(muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
                         color: Colors.white, size: 26),
-                    tooltip: _muted ? 'Unmute' : 'Mute',
-                    onPressed: _toggleMute,
+                    tooltip: muted ? 'Unmute' : 'Mute',
+                    onPressed: () => ref.read(clipsMutedProvider.notifier).toggle(),
                   ),
                 ),
               ),

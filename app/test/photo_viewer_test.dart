@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
 import 'package:checkin/api/models.dart';
 import 'package:checkin/state/app_state.dart';
 import 'package:checkin/widgets/media_frame.dart';
 import 'package:checkin/widgets/photo_viewer.dart';
+
+import 'support/fake_video_platform.dart';
 
 /// A multi-image check-in's full-screen viewer must let the viewer swipe between every
 /// photo on the post, not just the one they tapped into - that was the reported bug. A
@@ -122,5 +126,69 @@ void main() {
     // ...and the poster (a MediaFrame) is shown underneath until a frame decodes, which it
     // never will here - so it stays put rather than flashing black.
     expect(find.byType(MediaFrame), findsOneWidget);
+  });
+
+  // Tapping an autoplaying feed clip must not send it back to its first frame. The feed
+  // hands over the position it had reached and the viewer has to be playing from there, so
+  // these run against a stand-in platform player that records what it was told to do.
+  group('a clip opened from the feed', () {
+    const clip = PostMedia(id: 8, mime: 'video/mp4', width: 1080, height: 1920, durationMs: 8000);
+
+    late FakeVideoPlatform platform;
+    late VideoPlayerPlatform original;
+
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      original = VideoPlayerPlatform.instance;
+      platform = FakeVideoPlatform();
+      VideoPlayerPlatform.instance = platform;
+    });
+
+    // The other tests in this file want the plugin-less host, where a clip stays a poster.
+    tearDown(() => VideoPlayerPlatform.instance = original);
+
+    Future<void> open(WidgetTester tester, {Map<int, Duration> at = const {}}) async {
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          multiSessionProvider.overrideWith(
+            () => MultiSessionController.seeded(
+              MultiSession(groups: [account], restored: true),
+            ),
+          ),
+        ],
+        child: MaterialApp(
+          home: PhotoViewerScreen(
+            media: const [clip],
+            groupId: 'alpha.invalid',
+            initialClipPositions: at,
+          ),
+        ),
+      ));
+      await settle(tester);
+    }
+
+    testWidgets('continues from where the feed had got to, before it plays', (tester) async {
+      await open(tester, at: {8: const Duration(seconds: 3)});
+
+      final seeked = platform.calls.indexOf('seek:${const Duration(seconds: 3)}');
+      final played = platform.calls.indexOf('play');
+      expect(seeked, isNonNegative, reason: 'the threaded position was never applied');
+      // Playing first would show the opening frames the viewer has already watched - the
+      // restart this whole hand-off exists to remove.
+      expect(seeked, lessThan(played));
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('opened cold (no feed position) it starts at the beginning', (tester) async {
+      await open(tester);
+
+      expect(platform.calls.where((c) => c.startsWith('seek')), isEmpty);
+      expect(platform.calls, contains('play'));
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
   });
 }
