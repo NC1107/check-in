@@ -22,6 +22,12 @@ type Server struct {
 	push    push.Notifier // nil when push isn't configured (direct FCM or relay)
 	authLim *rateLimiter  // limits signup/login attempts, per IP
 	content contentLimits // limits what a member can create, per user
+
+	// klipyTimeout bounds how long the gif-search proxy waits on Klipy. Zero (the value New
+	// leaves every other Server field at in tests that build one by hand) means "use the
+	// default" - see klipyTimeoutOrDefault - so a test only has to set this when it wants a
+	// short timeout to exercise the upstream-unreachable path quickly.
+	klipyTimeout time.Duration
 }
 
 // New constructs a Server. A nil notifier disables push; pass a genuinely nil interface
@@ -123,6 +129,8 @@ func (s *Server) Router() http.Handler {
 		r.With(s.rateLimitUser(s.content.media)).Post("/api/media", s.handleUploadMedia)
 		r.Get("/api/media/{id}", s.handleServeMedia)
 		r.With(s.rateLimitUser(s.content.media)).Post("/api/media/{id}/poster", s.handleSetMediaPoster)
+
+		r.With(s.rateLimitUser(s.content.gifs)).Get("/api/gifs/search", s.handleGifSearch)
 
 		// Admin-only.
 		r.Group(func(r chi.Router) {

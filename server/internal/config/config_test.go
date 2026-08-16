@@ -42,3 +42,31 @@ func TestRelayURLCustomValue(t *testing.T) {
 		t.Errorf("RelayURL = %q, want the configured value", cfg.RelayURL)
 	}
 }
+
+// An unset key must default to off (empty), so a self-hoster who hasn't set up Klipy gets a
+// clean "not configured" from the gif proxy rather than an accidental key leak from some
+// other default.
+func TestKlipyKeyDefaultsEmpty(t *testing.T) {
+	os.Unsetenv("CHECKIN_KLIPY_KEY")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.KlipyKey != "" {
+		t.Errorf("KlipyKey = %q, want empty when unset", cfg.KlipyKey)
+	}
+	if cfg.KlipyBaseURL != DefaultKlipyBaseURL {
+		t.Errorf("KlipyBaseURL = %q, want the default %q", cfg.KlipyBaseURL, DefaultKlipyBaseURL)
+	}
+}
+
+func TestKlipyKeyFromEnv(t *testing.T) {
+	t.Setenv("CHECKIN_KLIPY_KEY", "test-key")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.KlipyKey != "test-key" {
+		t.Errorf("KlipyKey = %q, want the configured value", cfg.KlipyKey)
+	}
+}
