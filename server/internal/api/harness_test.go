@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/gif"
 	"image/png"
 	"io"
 	"mime/multipart"
@@ -142,6 +143,14 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	return newHarnessWithConfig(t, nil)
+}
+
+// newHarnessWithConfig is newHarness with a chance to tweak the config before the server is
+// built - for the handful of tests that need something newHarness's fixed cfg doesn't set
+// (e.g. a Klipy key), without disturbing every other test's baseline config.
+func newHarnessWithConfig(t *testing.T, mutate func(*config.Config)) *harness {
+	t.Helper()
 	database := openTestDB(t)
 	resetDB(t, database)
 
@@ -156,6 +165,9 @@ func newHarness(t *testing.T) *harness {
 		MaxUploadBytes:     testMaxImageBytes,
 		MaxVideoBytes:      testMaxVideoBytes,
 		DefaultCountryCode: "1",
+	}
+	if mutate != nil {
+		mutate(&cfg)
 	}
 	// A genuinely nil Notifier, so every notify* helper returns before touching the database.
 	// Push has its own tests; here it would only add goroutines racing the test's end.
@@ -375,6 +387,29 @@ func (h *harness) uploadImage(token string) db.Media {
 	h.t.Helper()
 	var media db.Media
 	h.uploadFile("/api/media", token, "photo.png", pngBytes(h.t, 640, 480)).
+		expect(http.StatusCreated).decode(&media)
+	return media
+}
+
+// gifBytes encodes a tiny single-frame animated GIF, small and simple enough to sit well
+// under the harness's upload limit while still round-tripping through the server's gif
+// pipeline (which stores animations as-is rather than re-encoding them).
+func gifBytes(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewPaletted(image.Rect(0, 0, 4, 4), color.Palette{color.Black, color.White})
+	var buf bytes.Buffer
+	if err := gif.EncodeAll(&buf, &gif.GIF{Image: []*image.Paletted{img}, Delay: []int{0}}); err != nil {
+		t.Fatalf("encode gif: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// uploadGif stores a small animated gif and returns the media the server recorded for it -
+// what a re-hosted Klipy pick looks like once the client has downloaded and uploaded it.
+func (h *harness) uploadGif(token string) db.Media {
+	h.t.Helper()
+	var media db.Media
+	h.uploadFile("/api/media", token, "pick.gif", gifBytes(h.t)).
 		expect(http.StatusCreated).decode(&media)
 	return media
 }

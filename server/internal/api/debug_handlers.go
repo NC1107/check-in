@@ -168,9 +168,13 @@ func (s *Server) handleDebugCommentDelete(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	if err := s.db.AdminDeleteComment(r.Context(), id); err != nil {
+	orphans, err := s.db.AdminDeleteComment(r.Context(), id)
+	if err != nil {
 		s.renderDebug(w, r, "Could not delete that comment.")
 		return
+	}
+	for _, p := range orphans {
+		_ = s.store.Delete(p)
 	}
 	s.renderDebug(w, r, "Comment deleted.")
 }
