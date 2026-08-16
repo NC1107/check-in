@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
@@ -168,6 +169,23 @@ func TestGenerateRecapQualityBarSkip(t *testing.T) {
 		expect(http.StatusUnprocessableEntity)
 }
 
+// TestGenerateRecapRejectsOverlongCustomPeriod pins the 366-day cap on an on-demand
+// recap's custom period: without it, a client bug (or a hostile request) could ask for a
+// query spanning the whole table.
+func TestGenerateRecapRejectsOverlongCustomPeriod(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+
+	start := time.Now().Add(-400 * 24 * time.Hour).UTC().Format(time.RFC3339)
+	end := time.Now().UTC().Format(time.RFC3339)
+	res := h.post("/api/admin/recaps", admin.Token,
+		map[string]any{"periodStart": start, "periodEnd": end, "panels": []string{"collage"}}).
+		expect(http.StatusBadRequest)
+	if !strings.Contains(res.errorMessage(), "366") {
+		t.Errorf("error = %q, want it to mention the 366-day limit", res.errorMessage())
+	}
+}
+
 // TestRecapWireShape pins the back-compat contract in the actual bytes the server sends: a
 // recap post reports kind == "recap", carries no media ids at all, and has a non-empty
 // body. This is exactly what makes a v1.5.4 client (gates on kind == 'image') and a v1.9.x
@@ -262,5 +280,200 @@ func TestRecapSurvivesBlockingTheAdmin(t *testing.T) {
 	}
 	if !byst {
 		t.Error("the recap is missing from a bystander's feed")
+	}
+}
+
+// floatOrNaN renders a coordinate pointer for a test failure message without a nil-pointer
+// panic; NaN prints clearly as "not set" without being confused for a real value.
+func floatOrNaN(v *float64) float64 {
+	if v == nil {
+		return math.NaN()
+	}
+	return *v
+}
+
+// TestCreatePostNormalizesCoordinates pins that lat/lng are clamped and rounded to 2
+// decimal places server-side, regardless of what the client sends - the client already
+// rounds before sending (home_shell.dart's _roundCoord), but that is advisory only. This
+// data accumulates permanently once a post exists, so the server, not the client, is the
+// actual guarantee.
+func TestCreatePostNormalizesCoordinates(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+
+	t.Run("full precision is rounded to 2 decimal places", func(t *testing.T) {
+		photo := h.uploadImage(admin.Token)
+		created := h.createPost(admin, map[string]any{
+			"kind":     "image",
+			"body":     "high precision GPS",
+			"mediaIds": []int64{photo.ID},
+			"lat":      38.123456789,
+			"lng":      -9.987654321,
+		})
+		if created.Lat == nil || *created.Lat != 38.12 {
+			t.Errorf("lat = %v, want 38.12", floatOrNaN(created.Lat))
+		}
+		if created.Lng == nil || *created.Lng != -9.99 {
+			t.Errorf("lng = %v, want -9.99", floatOrNaN(created.Lng))
+		}
+
+		// Round-trips through the feed exactly as created - not just accepted once and
+		// then dropped or recomputed differently on read.
+		feed := onlyPost(t, h.feed(admin))
+		if feed.Lat == nil || *feed.Lat != 38.12 {
+			t.Errorf("feed lat = %v, want 38.12", floatOrNaN(feed.Lat))
+		}
+		if feed.Lng == nil || *feed.Lng != -9.99 {
+			t.Errorf("feed lng = %v, want -9.99", floatOrNaN(feed.Lng))
+		}
+	})
+
+	t.Run("out-of-range coordinates are clamped, not rejected", func(t *testing.T) {
+		photo := h.uploadImage(admin.Token)
+		created := h.createPost(admin, map[string]any{
+			"kind":     "image",
+			"body":     "garbage coordinates",
+			"mediaIds": []int64{photo.ID},
+			"lat":      999.0,
+			"lng":      -999.0,
+		})
+		if created.Lat == nil || *created.Lat != 90 {
+			t.Errorf("lat = %v, want 90 (clamped to the valid range)", floatOrNaN(created.Lat))
+		}
+		if created.Lng == nil || *created.Lng != -180 {
+			t.Errorf("lng = %v, want -180 (clamped to the valid range)", floatOrNaN(created.Lng))
+		}
+	})
+}
+
+// TestServerInfoAdvertisesRecapCapability pins the capability signal a client gates
+// lat/lng (and the recap settings PATCH fields) on: without it, a new client sending those
+// fields to an old server would 400 every post (DisallowUnknownFields).
+func TestServerInfoAdvertisesRecapCapability(t *testing.T) {
+	h := newHarness(t)
+	h.admin("Robin")
+
+	var info struct {
+		Recap        bool   `json:"recap"`
+		RecapCadence string `json:"recapCadence"`
+		RecapWeekday int    `json:"recapWeekday"`
+		RecapHour    int    `json:"recapHour"`
+		RecapOffset  int    `json:"recapOffset"`
+	}
+	h.get("/api/server-info", "").expect(http.StatusOK).decode(&info)
+
+	if !info.Recap {
+		t.Error(`server-info "recap" = false, want true`)
+	}
+	if info.RecapCadence != "weekly" {
+		t.Errorf("recapCadence = %q, want the schema default %q", info.RecapCadence, "weekly")
+	}
+	if info.RecapWeekday != 1 {
+		t.Errorf("recapWeekday = %d, want the schema default 1 (Monday)", info.RecapWeekday)
+	}
+	if info.RecapHour != 19 {
+		t.Errorf("recapHour = %d, want the schema default 19", info.RecapHour)
+	}
+	if info.RecapOffset != 0 {
+		t.Errorf("recapOffset = %d, want the schema default 0", info.RecapOffset)
+	}
+}
+
+// TestUserPostsExcludesRecaps pins the product decision that a recap - a group artifact -
+// never appears on the authoring admin's own profile timeline, even though author_id is
+// genuinely theirs (so the admin's delete-recap-via-DELETE-/posts still works). It stays
+// everywhere else: the main feed, GetPost, search.
+func TestUserPostsExcludesRecaps(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+	member := h.member(admin, "Sam")
+	seedRecapActivity(h, admin, member)
+
+	start := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	end := time.Now().Add(1 * time.Hour).UTC().Format(time.RFC3339)
+	var recap db.Post
+	h.post("/api/admin/recaps", admin.Token,
+		map[string]any{"periodStart": start, "periodEnd": end, "panels": []string{"collage"}}).
+		expect(http.StatusCreated).decode(&recap)
+
+	var page struct {
+		Posts []db.Post `json:"posts"`
+	}
+	h.get("/api/users/"+itoa(admin.ID)+"/posts", admin.Token).expect(http.StatusOK).decode(&page)
+
+	for _, p := range page.Posts {
+		if p.ID == recap.ID {
+			t.Fatal("the recap post appears on the admin's own profile timeline - it is a group artifact, not a personal post")
+		}
+		if p.Kind == "recap" {
+			t.Errorf("post %d on the profile timeline has kind 'recap', want none at all", p.ID)
+		}
+	}
+
+	// It is still very much present in the main feed and directly by id.
+	foundInFeed := false
+	for _, p := range h.feed(admin) {
+		if p.ID == recap.ID {
+			foundInFeed = true
+		}
+	}
+	if !foundInFeed {
+		t.Error("the recap is missing from the main feed - it should only be excluded from the profile timeline")
+	}
+	h.get("/api/posts/"+itoa(recap.ID), admin.Token).expect(http.StatusOK)
+}
+
+// TestCreateRecapPostManualOriginDeduplicatesUnderLock calls db.CreateRecapPost directly
+// twice with the exact same manual spec and no replace - what two concurrent identical
+// on-demand requests would each attempt after both saw "nothing exists yet" from the
+// handler's cheap pre-check (FindManualRecap). Before this fix, CreateRecapPost's advisory
+// lock and existence re-check only ran for origin == "scheduled", so both calls would
+// insert; this pins that the manual path is now covered by the same guarantee.
+func TestCreateRecapPostManualOriginDeduplicatesUnderLock(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+	member := h.member(admin, "Sam")
+	seedRecapActivity(h, admin, member)
+
+	spec := db.RecapSpec{
+		PeriodStart: time.Now().Add(-1 * time.Hour),
+		PeriodEnd:   time.Now().Add(1 * time.Hour),
+		Panels:      []string{"collage"},
+		Cadence:     "custom",
+		Origin:      "manual",
+	}
+	payload, err := h.db.BuildRecap(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("BuildRecap: %v", err)
+	}
+
+	firstID, inserted, _, err := h.db.CreateRecapPost(context.Background(), admin.ID, spec, payload, nil)
+	if err != nil {
+		t.Fatalf("first CreateRecapPost: %v", err)
+	}
+	if !inserted || firstID == 0 {
+		t.Fatalf("first CreateRecapPost: inserted=%v id=%d, want a fresh insert", inserted, firstID)
+	}
+
+	secondID, inserted2, conflictID, err := h.db.CreateRecapPost(context.Background(), admin.ID, spec, payload, nil)
+	if err != nil {
+		t.Fatalf("second CreateRecapPost: %v", err)
+	}
+	if inserted2 {
+		t.Fatalf("second CreateRecapPost inserted a duplicate (id=%d) instead of detecting the first (id=%d)",
+			secondID, firstID)
+	}
+	if conflictID != firstID {
+		t.Errorf("conflictID = %d, want the first post's id %d", conflictID, firstID)
+	}
+
+	recaps := 0
+	for _, p := range h.feed(admin) {
+		if p.Kind == "recap" {
+			recaps++
+		}
+	}
+	if recaps != 1 {
+		t.Errorf("recap posts in feed = %d, want exactly 1", recaps)
 	}
 }
