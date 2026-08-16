@@ -108,8 +108,9 @@ func (d *DB) BuildRecap(ctx context.Context, spec RecapSpec) (RecapPayload, erro
 			Label:   recapPeriodLabel(spec.Cadence, spec.PeriodStart, spec.PeriodEnd),
 			Cadence: spec.Cadence,
 		},
-		Group: RecapGroup{Name: groupName, Color: groupColor},
-		Stats: recapStats(candidates, memberCount),
+		Group:  RecapGroup{Name: groupName, Color: groupColor},
+		Stats:  recapStats(candidates, memberCount),
+		People: recapPeople(candidates),
 	}
 
 	for _, panel := range spec.Panels {

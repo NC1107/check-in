@@ -168,6 +168,49 @@ func candidateToCard(c recapCandidate, rank int, guaranteed bool) RecapCard {
 	return card
 }
 
+// recapPeople summarises a period's candidates into one roster entry per distinct author,
+// ordered by post count desc (ties broken by user id asc, matching every other recap
+// ranking's determinism convention) - the cover's avatar-bubble cluster, sized by
+// contribution.
+//
+// Post count is the metric, not a member's best-post like count: the bubble pile is meant
+// to answer "who showed up this period", not "whose one post did best" - selectCollageCards
+// already has a like-ranked view of the period (the Wall), so the cover's own roster reads
+// better as a second, complementary lens (presence) rather than repeating the same
+// popularity ordering. It also means a quiet member who checked in five times gets a bigger
+// bubble than someone who posted once and went viral, which matches the "pile of the
+// people in the group" brief better than a likes-based size would.
+func recapPeople(candidates []recapCandidate) []RecapPerson {
+	type agg struct {
+		name    string
+		photoID *int64
+		posts   int
+	}
+	order := make([]int64, 0, len(candidates))
+	byAuthor := make(map[int64]*agg, len(candidates))
+	for _, c := range candidates {
+		a, ok := byAuthor[c.AuthorID]
+		if !ok {
+			a = &agg{name: c.AuthorName, photoID: c.AuthorPhotoID}
+			byAuthor[c.AuthorID] = a
+			order = append(order, c.AuthorID)
+		}
+		a.posts++
+	}
+	people := make([]RecapPerson, len(order))
+	for i, id := range order {
+		a := byAuthor[id]
+		people[i] = RecapPerson{UserID: id, Name: a.name, PhotoID: a.photoID, Posts: a.posts}
+	}
+	sort.Slice(people, func(i, j int) bool {
+		if people[i].Posts != people[j].Posts {
+			return people[i].Posts > people[j].Posts
+		}
+		return people[i].UserID < people[j].UserID
+	})
+	return people
+}
+
 // ---- Awards Night ----
 
 // awardEntry is one member's qualifying showing for one superlative, or the zero value
