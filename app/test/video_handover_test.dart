@@ -257,6 +257,61 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('paging past the lent clip and back finds the same player, paused meanwhile',
+      (tester) async {
+    const other = PostMedia(
+      id: 9,
+      mime: 'video/mp4',
+      width: 1920,
+      height: 1080,
+      durationMs: 4000,
+      hasPoster: true,
+    );
+    await tester.pumpWidget(host(posts: [
+      post(media: const [clip, other])
+    ]));
+    await settle(tester);
+    expect(built.length, 1);
+
+    await tester.tapAt(tester.getCenter(find.byType(FeedClip)));
+    await settle(tester);
+    final lent = built.single;
+    expect(identical(tester.widget<VideoPlayer>(viewerVideo()).controller, lent), isTrue);
+
+    final pager = find.descendant(
+      of: find.byType(PhotoViewerScreen),
+      matching: find.byType(PageView),
+    );
+    await tester.fling(pager, const Offset(-600, 0), 1200);
+    await settle(tester);
+
+    // The second clip is the viewer's own to build and to bin. The lent one is only
+    // stopped: handing it home now would have the feed playing it behind the viewer, and
+    // swiping back would then cost a whole new player.
+    expect(platform.created.length, 2);
+    expect(lent.value.isPlaying, isFalse);
+    await drain(tester);
+    expect(platform.disposed, isEmpty);
+
+    await tester.fling(pager, const Offset(600, 0), 1200);
+    await settle(tester);
+
+    expect(identical(tester.widget<VideoPlayer>(viewerVideo()).controller, lent), isTrue);
+    expect(lent.value.isPlaying, isTrue);
+    expect(platform.created.length, 2, reason: 'the lent player was rebuilt instead of resumed');
+    await drain(tester);
+    expect(platform.disposed.length, 1, reason: "only the viewer's own player is disposed");
+
+    Navigator.of(tester.element(find.byType(PhotoViewerScreen))).pop();
+    await settle(tester);
+    await drain(tester);
+    expect(identical(tester.widget<VideoPlayer>(feedVideo()).controller, lent), isTrue);
+    expect(platform.disposed.length, 1);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('muting in full screen is still muted when the clip lands back in the feed',
       (tester) async {
     await openFromFeed(tester);
