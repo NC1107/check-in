@@ -96,6 +96,18 @@ bool clipNeedsTrim(int durationMs) => durationMs > kMaxClipMs;
   return (startMs: start, endMs: end);
 }
 
+/// Slides a chosen trim window along the clip by [deltaMs], the way dragging the region
+/// between the two handles does: start and end move together and the span between them is
+/// preserved exactly. The window is stopped at the ends of the clip rather than squeezed, so
+/// a drag that runs off either edge keeps the length the user picked. A shift that changed
+/// the span would silently re-trim a window that was already settled.
+({int startMs, int endMs}) shiftTrimWindow(int startMs, int endMs, int deltaMs, int durationMs) {
+  final duration = durationMs < 0 ? 0 : durationMs;
+  final span = (endMs - startMs).clamp(0, duration);
+  final start = (startMs + deltaMs).clamp(0, duration - span);
+  return (startMs: start, endMs: start + span);
+}
+
 /// Whether a group's server accepts video, so compose can offer a clip only where it would
 /// be stored rather than uploading into a rejection. A server predating typed media reports
 /// images-only (see [ServerInfo.mediaTypes]).
@@ -1501,10 +1513,12 @@ class _TagPeopleSheetState extends State<_TagPeopleSheet> {
 /// Trims a clip down to a <=10s window before it is posted. A filmstrip of frames spans the
 /// whole clip; two independent handles pick the window - the left sets the start, the right
 /// sets the end, each freely draggable - so any span from 1s up to the 10s cap can be chosen.
-/// The preview plays the selected [start, end] range so the pick can be reviewed before Trim.
-/// Every drag is clamped through [clampTrimWindow], which moves only the dragged edge and can
-/// never let the window exceed the cap or run off the clip. Returns (startMs, endMs) on Trim,
-/// or null on cancel.
+/// Dragging between the handles slides that window along the clip at a fixed length. The
+/// preview plays the selected [start, end] range so the pick can be reviewed before Trim.
+/// An edge drag is clamped through [clampTrimWindow], which moves only the dragged edge and
+/// can never let the window exceed the cap or run off the clip; a middle drag goes through
+/// [shiftTrimWindow], which keeps the span. Returns (startMs, endMs) on Trim, or null on
+/// cancel.
 class _TrimSheet extends StatefulWidget {
   const _TrimSheet({required this.path, required this.durationMs});
 
@@ -1622,6 +1636,18 @@ class _TrimSheetState extends State<_TrimSheet> {
     _seekPreview(_startMs);
   }
 
+  // Dragging between the handles slides the window as a whole (see [shiftTrimWindow]): both
+  // edges move, the span is untouched, and the ends of the clip stop it.
+  void _shiftWindow(int deltaMs) {
+    final window = shiftTrimWindow(_startMs, _endMs, deltaMs, widget.durationMs);
+    if (window.startMs == _startMs) return;
+    setState(() {
+      _startMs = window.startMs;
+      _endMs = window.endMs;
+    });
+    _seekPreview(_startMs);
+  }
+
   // The right handle moves only the end; the start stays put.
   void _setEnd(int ms) {
     final window = clampTrimWindow(_startMs, ms, widget.durationMs, moved: TrimEdge.end);
@@ -1686,7 +1712,9 @@ class _TrimSheetState extends State<_TrimSheet> {
               SizedBox(height: 56, child: _filmstrip()),
               const SizedBox(height: 8),
               const Text(
-                'Drag either end to pick 1 to 10 seconds. Tap play to preview.',
+                'Drag the ends to pick 1 to 10 seconds, or the middle to slide the window. '
+                'Tap play to preview.',
+                textAlign: TextAlign.center,
                 style: TextStyle(color: _fgMuted, fontSize: 12),
               ),
             ],
@@ -1775,6 +1803,27 @@ class _TrimSheetState extends State<_TrimSheet> {
                     child: const ColoredBox(color: Colors.black54),
                   ),
                 ],
+              ),
+            ),
+            // The selected region itself: dragging it moves the whole window, so a window
+            // that is already the right length can be slid to a different moment without
+            // rebuilding it edge by edge. Framed top and bottom so it reads as one draggable
+            // block. Below the handles in the stack, so an edge drag stays an edge drag.
+            Positioned(
+              left: (startFrac * width).clamp(0.0, width),
+              width: ((endFrac - startFrac) * width).clamp(0.0, width),
+              top: 0,
+              bottom: 0,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onHorizontalDragUpdate: (d) => _shiftWindow(_dxToMs(d.delta.dx, width)),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border.symmetric(
+                      horizontal: BorderSide(color: context.accent, width: 2),
+                    ),
+                  ),
+                ),
               ),
             ),
             // Left handle: slides the whole window's start.
