@@ -136,6 +136,10 @@ type harness struct {
 	store    *storage.Store
 	mediaDir string
 	http     *httptest.Server
+	// srv is the same *Server instance the httptest server routes to, exposed so
+	// package-internal tests can call unexported methods directly (e.g. the recap
+	// scheduler's tick) rather than waiting on a real ticker.
+	srv *Server
 
 	// phoneSeq hands out distinct phone numbers so tests never collide on the unique index.
 	phoneSeq int
@@ -171,10 +175,11 @@ func newHarnessWithConfig(t *testing.T, mutate func(*config.Config)) *harness {
 	}
 	// A genuinely nil Notifier, so every notify* helper returns before touching the database.
 	// Push has its own tests; here it would only add goroutines racing the test's end.
-	ts := httptest.NewServer(New(cfg, database, store, nil).Router())
+	srv := New(cfg, database, store, nil)
+	ts := httptest.NewServer(srv.Router())
 	t.Cleanup(ts.Close)
 
-	return &harness{t: t, db: database, store: store, mediaDir: dir, http: ts}
+	return &harness{t: t, db: database, store: store, mediaDir: dir, http: ts, srv: srv}
 }
 
 // itoa renders an id for a URL path.
@@ -439,6 +444,12 @@ func (h *harness) feed(a actor) []db.Post {
 	}
 	h.get("/api/feed", a.Token).expect(http.StatusOK).decode(&page)
 	return page.Posts
+}
+
+// like has [actor] like a post, failing the test unless the server accepts it.
+func (h *harness) like(a actor, postID int64) {
+	h.t.Helper()
+	h.post("/api/posts/"+itoa(postID)+"/like", a.Token, nil).expect(http.StatusNoContent)
 }
 
 // mediaPaths reads the stored file paths of a media row straight from the database, so a

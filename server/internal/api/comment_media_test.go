@@ -48,6 +48,36 @@ func TestServerInfoCommentMediaAlwaysTrue(t *testing.T) {
 	}
 }
 
+// A single /api/server-info response must carry the gif feature's capability signals
+// alongside the recap feature's, not one or the other - the two were built independently
+// and merged into the same handler, so this pins that the merge kept both rather than one
+// side's edit clobbering the other's.
+func TestServerInfoUnionOfGifAndRecapCapabilities(t *testing.T) {
+	h := newHarnessWithKlipyKey(t, "test-key")
+	h.admin("Robin")
+
+	var info struct {
+		GifSearch    bool   `json:"gifSearch"`
+		CommentMedia bool   `json:"commentMedia"`
+		Recap        bool   `json:"recap"`
+		RecapCadence string `json:"recapCadence"`
+	}
+	h.get("/api/server-info", "").expect(http.StatusOK).decode(&info)
+
+	if !info.GifSearch {
+		t.Error(`server-info "gifSearch" = false, want true once a key is configured`)
+	}
+	if !info.CommentMedia {
+		t.Error(`server-info "commentMedia" = false, want true`)
+	}
+	if !info.Recap {
+		t.Error(`server-info "recap" = false, want true`)
+	}
+	if info.RecapCadence != "weekly" {
+		t.Errorf("recapCadence = %q, want the schema default %q", info.RecapCadence, "weekly")
+	}
+}
+
 // commentResp mirrors what /api/posts/{id}/comments returns, including the mediaId this
 // feature adds.
 type commentResp struct {

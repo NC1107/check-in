@@ -8,6 +8,7 @@ import '../../theme/group_color.dart';
 import '../../theme/tokens.dart';
 import '../admin/admin_screen.dart';
 import '../onboarding/auth_screen.dart';
+import 'recap_settings_screen.dart';
 
 /// The one home for group management, reached from Settings > Edit groups: every
 /// signed-in group (hosts marked), each opening its editor ([EditGroupScreen]), plus
@@ -375,6 +376,16 @@ class EditGroupScreen extends ConsumerWidget {
                 MaterialPageRoute(builder: (_) => AdminScreen(groupId: groupId)),
               ),
             ),
+            // Hidden against a server that predates the feature: it has nowhere to send
+            // the recap fields, and this server rejects unknown JSON fields.
+            if (account?.recapCapable ?? false)
+              _tile(
+                icon: Icons.auto_awesome_outlined,
+                label: 'Recaps',
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => RecapSettingsScreen(groupId: groupId)),
+                ),
+              ),
           ] else
             _tile(
               icon: Icons.drive_file_rename_outline,

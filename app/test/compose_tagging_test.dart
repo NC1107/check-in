@@ -28,6 +28,8 @@ class _FakeApi extends ApiClient {
     String? location,
     List<int>? peopleIds,
     String? crossPostId,
+    double? lat,
+    double? lng,
   }) async {
     posted = true;
     // The client omits an empty list, and so must this fake: "nobody tagged" and "these

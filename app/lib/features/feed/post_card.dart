@@ -19,6 +19,7 @@ import '../../widgets/tagged_people_line.dart';
 import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
 import '../profile/profile_screen.dart';
+import 'recap_card.dart';
 
 // Report reasons shown in the bottom sheet.
 const _reportReasons = [
@@ -608,12 +609,18 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
             )
           else
             const SizedBox(height: 10),
+          // A recap post carries its deck instead of ordinary attachments (it has none -
+          // see 0018_recap.sql for why). Checked before the media carousel so a recap never
+          // falls through to the "no media" caption-only layout on a client new enough to
+          // render it.
+          if (p.recap case final recap?)
+            RecapDeck(recap: recap, groupId: p.groupId)
           // Attachments - the carousel sizes itself (a single one keeps its own clamped
           // aspect ratio); the heart burst overlays it.
           // Gated on the attachments themselves, not on kind: a post with a clip on it is
           // kind 'video', and a card that checked for 'image' would render it as caption
           // only.
-          if (p.media.isNotEmpty)
+          else if (p.media.isNotEmpty)
             Stack(
               alignment: Alignment.center,
               children: [
