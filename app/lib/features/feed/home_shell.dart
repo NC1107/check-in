@@ -19,6 +19,7 @@ import '../../media/video_native.dart';
 import '../../notifications/birthday_notifier.dart';
 import '../../notifications/push_messaging.dart';
 import '../../state/app_state.dart';
+import '../../state/taggable_people.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/feed_autoplay.dart';
@@ -241,7 +242,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
-      builder: (_) => const _ComposeSheet(),
+      builder: (_) => const ComposeSheet(),
     ).then((posted) {
       if (posted == true) {
         ref.invalidate(feedProvider); // surface the new post immediately
@@ -377,15 +378,16 @@ class _NavItem extends StatelessWidget {
   }
 }
 
-/// Inline compose bottom sheet matching the design.
-class _ComposeSheet extends ConsumerStatefulWidget {
-  const _ComposeSheet();
+/// Inline compose bottom sheet matching the design. Shown as a modal from the feed's
+/// compose button; public so the sheet's own behavior can be exercised on its own.
+class ComposeSheet extends ConsumerStatefulWidget {
+  const ComposeSheet({super.key});
 
   @override
-  ConsumerState<_ComposeSheet> createState() => _ComposeSheetState();
+  ConsumerState<ComposeSheet> createState() => _ComposeSheetState();
 }
 
-class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
+class _ComposeSheetState extends ConsumerState<ComposeSheet> {
   static const _maxImages = 10;
   final _bodyCtrl = TextEditingController();
   final List<XFile> _images = [];
@@ -400,8 +402,9 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   // than a bare play badge on a black box before it is posted.
   Uint8List? _clipPosterPreview;
   bool _processingClip = false;
-  // Members the author tags as appearing in the post (id + name + photo for chip display).
-  final List<({int id, String name, int? photoId})> _tagged = [];
+  // The humans the author tags as appearing in the post. Each carries the member id it has
+  // in every selected group, so a cross-post can tag the same person on every server.
+  final List<TaggablePerson> _tagged = [];
   String? _location; // coarse "City, Country" read from the photos, if any
   String? _locationSource; // path of the photo that supplied _location
   bool _locationCleared = false; // user removed the location manually; don't auto-refill
@@ -449,9 +452,9 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     HapticFeedback.selectionClick();
     setState(() {
       if (!_targets.remove(groupId)) _targets.add(groupId);
-      // People tags are per-server user ids - they only make sense for a single target
-      // group, so drop them as soon as the selection isn't exactly one group.
-      if (_targets.length != 1) _tagged.clear();
+      // A tag survives a change of targets as long as the person still has an account in
+      // one of them; dropping the last group that knows them leaves nothing to tag.
+      _tagged.removeWhere((t) => !t.idsByGroup.keys.any(_targets.contains));
       _error = null;
     });
   }
@@ -765,22 +768,44 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     );
   }
 
-  /// Opens the member picker, seeding it with the current selection. Excludes the author -
-  /// the post is implicitly theirs. Members (and their ids) belong to the single target
-  /// group, so tagging is only available when exactly one group is selected.
+  /// The groups this compose will actually post to: the selected ones, minus any that
+  /// already accepted the post in a partial-failure retry.
+  List<ServerAccount> _selectedTargets() => [
+        for (final g in ref.read(multiSessionProvider).signedIn)
+          if (_targets.contains(g.id) && !_posted.contains(g.id)) g
+      ];
+
+  /// The taggable people of [targets]: every roster merged into one entry per human, so the
+  /// picker offers people rather than accounts. A group whose roster can't be fetched simply
+  /// contributes nobody, exactly as it does in the feed's people filter.
+  Future<List<TaggablePerson>> _loadTaggablePeople(List<ServerAccount> targets) async {
+    final lists = await Future.wait([
+      for (final g in targets)
+        ref.read(groupMembersProvider(g.id).future).catchError((_) => <User>[]),
+    ]);
+    return mergeTaggablePeople(
+      {for (var i = 0; i < targets.length; i++) targets[i].id: lists[i]},
+      excludeByGroup: {
+        for (final g in targets)
+          if (g.user != null) g.id: g.user!.id
+      },
+    );
+  }
+
+  /// Opens the member picker over every selected group's roster, merged into one entry per
+  /// human. Excludes the author - the post is implicitly theirs.
   Future<void> _pickPeople() async {
-    if (_targets.length != 1) return;
-    final groupId = _targets.first;
-    final me = ref.read(multiSessionProvider).byId(groupId)?.user;
-    final result = await showModalBottomSheet<List<({int id, String name, int? photoId})>>(
+    final targets = _selectedTargets();
+    if (targets.isEmpty) return;
+    final result = await showModalBottomSheet<List<TaggablePerson>>(
       context: context,
       isScrollControlled: true,
       backgroundColor: _bgMain,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
       builder: (_) => _TagPeopleSheet(
-        api: ref.read(apiForGroupProvider(groupId)),
-        excludeId: me?.id,
+        people: _loadTaggablePeople(targets),
+        groupNames: {for (final g in targets) g.id: g.displayName},
         initial: _tagged,
       ),
     );
@@ -851,11 +876,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   /// with an honest report and turns Share into a retry of only the failed groups.
   Future<void> _submit() async {
     if (_images.isEmpty && _clip == null && _bodyCtrl.text.trim().isEmpty) return;
-    final session = ref.read(multiSessionProvider);
-    final targets = [
-      for (final g in session.signedIn)
-        if (_targets.contains(g.id) && !_posted.contains(g.id)) g
-    ];
+    final targets = _selectedTargets();
     if (targets.isEmpty) {
       setState(() => _error = 'Pick at least one group to share to.');
       return;
@@ -884,7 +905,13 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     for (final g in targets) {
       try {
         final api = ref.read(apiForGroupProvider(g.id));
-        final peopleIds = [for (final t in _tagged) t.id];
+        // Tags are this group's own user ids: send each tagged human the id they hold here,
+        // and skip the ones with no account on this server. Sending another group's ids
+        // would tag whoever happens to own those numbers here.
+        final peopleIds = [
+          for (final t in _tagged)
+            if (t.idIn(g.id) case final id?) id
+        ];
         if (_clip != null) {
           final mediaId = await api.uploadImage(_clipEncodedPath ?? _clip!.path);
           final poster = _clipPoster;
@@ -938,7 +965,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     }
     final failedNames = [for (final g in failed) g.displayName].join(', ');
     final postedNames = [
-      for (final g in session.signedIn)
+      for (final g in ref.read(multiSessionProvider).signedIn)
         if (_posted.contains(g.id)) g.displayName
     ].join(', ');
     // Never surface a raw server string for a clip failure: a message like "video is longer
@@ -1206,9 +1233,9 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
               ),
             ),
             // Tag people - who's in this post (drives the feed's "include posts they're in").
-            // Member ids are per-server, so tagging needs exactly one target group; when it
-            // isn't available the picker is simply hidden.
-            if (session.signedIn.length <= 1 || _targets.length == 1)
+            // The picker merges the rosters of every selected group, so a cross-post tags the
+            // same humans in each of them; with no group picked there is no roster to offer.
+            if (_targets.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
                 child: InkWell(
@@ -1361,32 +1388,57 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
   }
 }
 
-/// Multi-select member picker for tagging who appears in a post. Loads the active roster
-/// once, filters by a search box, and returns the chosen members (or null on cancel).
+/// Multi-select picker for tagging who appears in a post. One row per human, merged across
+/// every group the post is going to, filtered by a search box; returns the chosen people
+/// (or null on cancel). A person the post's other groups don't know is still taggable - the
+/// row says which groups they're missing from, and their copies there go out without them.
 class _TagPeopleSheet extends StatefulWidget {
-  const _TagPeopleSheet({required this.api, required this.excludeId, required this.initial});
+  const _TagPeopleSheet({required this.people, required this.groupNames, required this.initial});
 
-  final ApiClient api;
-  final int? excludeId;
-  final List<({int id, String name, int? photoId})> initial;
+  final Future<List<TaggablePerson>> people;
+
+  /// The groups this post is going to: id -> display name, in the order they're posted to.
+  final Map<String, String> groupNames;
+
+  final List<TaggablePerson> initial;
 
   @override
   State<_TagPeopleSheet> createState() => _TagPeopleSheetState();
 }
 
 class _TagPeopleSheetState extends State<_TagPeopleSheet> {
-  late Future<List<User>> _roster;
-  final _selected = <int, ({int id, String name, int? photoId})>{};
+  final _selected = <String, TaggablePerson>{};
   String _query = '';
 
   @override
   void initState() {
     super.initState();
     for (final t in widget.initial) {
-      _selected[t.id] = t;
+      _selected[t.key] = t;
     }
-    // Empty search returns all active members.
-    _roster = widget.api.searchUsers('');
+    // The roster decides which id a person holds in which group, so a selection carried in
+    // from before the targets changed has a stale id map. Re-bind every selection to the
+    // freshly merged entry, and drop anyone no selected group knows any more - there would
+    // be no id left to tag them with. Load errors surface through the FutureBuilder.
+    unawaited(widget.people.then((people) {
+      if (!mounted) return;
+      final byKey = {for (final p in people) p.key: p};
+      setState(() {
+        _selected
+          ..removeWhere((key, _) => !byKey.containsKey(key))
+          ..updateAll((key, _) => byKey[key]!);
+      });
+    }, onError: (_) {}));
+  }
+
+  /// The light note under a name: which of the post's groups have no account for this
+  /// person. Silent when the post only goes to one group - there is nothing to compare.
+  String _missingNote(TaggablePerson p) {
+    if (widget.groupNames.length < 2) return '';
+    final missing = [
+      for (final id in p.missingFrom(widget.groupNames.keys)) widget.groupNames[id]!
+    ];
+    return missing.isEmpty ? '' : 'not in ${missing.join(', ')}';
   }
 
   @override
@@ -1459,8 +1511,8 @@ class _TagPeopleSheetState extends State<_TagPeopleSheet> {
             ),
             const SizedBox(height: 8),
             Expanded(
-              child: FutureBuilder<List<User>>(
-                future: _roster,
+              child: FutureBuilder<List<TaggablePerson>>(
+                future: widget.people,
                 builder: (context, snap) {
                   if (snap.connectionState == ConnectionState.waiting) {
                     return Center(child: CircularProgressIndicator(color: context.accent));
@@ -1470,33 +1522,43 @@ class _TagPeopleSheetState extends State<_TagPeopleSheet> {
                         child:
                             Text('Could not load members.', style: TextStyle(color: _fgSecondary)));
                   }
-                  final members = (snap.data ?? [])
-                      .where((u) => u.id != widget.excludeId)
-                      .where((u) => _query.isEmpty || u.name.toLowerCase().contains(_query))
-                      .toList();
-                  if (members.isEmpty) {
+                  final people = [
+                    for (final p in snap.data ?? const <TaggablePerson>[])
+                      if (_query.isEmpty || p.name.toLowerCase().contains(_query)) p
+                  ];
+                  if (people.isEmpty) {
                     return const Center(
                         child: Text('No members found.', style: TextStyle(color: _fgMuted)));
                   }
                   return ListView.builder(
                     controller: scrollCtrl,
                     padding: const EdgeInsets.only(bottom: 16),
-                    itemCount: members.length,
+                    itemCount: people.length,
                     itemBuilder: (_, i) {
-                      final u = members[i];
-                      final on = _selected.containsKey(u.id);
+                      final p = people[i];
+                      final on = _selected.containsKey(p.key);
+                      final note = _missingNote(p);
                       return ListTile(
                         onTap: () => setState(() {
                           if (on) {
-                            _selected.remove(u.id);
+                            _selected.remove(p.key);
                           } else {
-                            _selected[u.id] = (id: u.id, name: u.name, photoId: u.profileMediaId);
+                            _selected[p.key] = p;
                           }
                         }),
                         leading: UserAvatar(
-                            name: u.name, size: 38, mediaId: u.profileMediaId, colorSeed: u.id),
+                            name: p.name,
+                            size: 38,
+                            mediaId: p.photoId,
+                            groupId: p.photoGroupId,
+                            // Seeded from the group the name came from, so an initial wears
+                            // the same color the feed already gives that person there.
+                            colorSeed: p.idsByGroup.values.first),
                         title:
-                            Text(u.name, style: const TextStyle(color: _fgPrimary, fontSize: 15)),
+                            Text(p.name, style: const TextStyle(color: _fgPrimary, fontSize: 15)),
+                        subtitle: note.isEmpty
+                            ? null
+                            : Text(note, style: const TextStyle(color: _fgMuted, fontSize: 12)),
                         trailing: Icon(
                           on ? Icons.check_circle : Icons.circle_outlined,
                           color: on ? context.accent : _fgMuted,
