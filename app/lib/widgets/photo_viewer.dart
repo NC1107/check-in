@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:video_player/video_player.dart';
 
 import '../api/models.dart';
+import '../features/post/post_detail_screen.dart';
 import '../media/video_native.dart';
 import '../state/app_state.dart';
 import 'media_frame.dart';
@@ -26,6 +27,7 @@ class PhotoViewerScreen extends StatefulWidget {
     this.initialClipPositions = const {},
     this.adoptedControllers = const {},
     this.onReleaseAdopted,
+    this.postId,
   });
 
   /// Every attachment reachable from this viewer (e.g. all of a post's media). A
@@ -39,6 +41,13 @@ class PhotoViewerScreen extends StatefulWidget {
   /// The connected group the media belongs to (null = the current group), so the
   /// authenticated request and cache key resolve to the right server. See [MediaFrame].
   final String? groupId;
+
+  /// The post this attachment belongs to, when the viewer was opened somewhere other than
+  /// that post's own detail screen (a recap's Wall card, say) - shows a "Go to post" button
+  /// so the person who just tapped a photo can reach its comments and likes. Null (the
+  /// common case: a post's own carousel, a profile photo) hides the button entirely, since
+  /// the caller is already on - or doesn't have - a post to go to.
+  final int? postId;
 
   /// Where a clip should pick up from, by media id. A clip tapped while it was autoplaying
   /// in the feed carries its position here so full screen continues rather than restarting;
@@ -69,6 +78,7 @@ class PhotoViewerScreen extends StatefulWidget {
     Map<int, Duration> initialClipPositions = const {},
     Map<int, VideoPlayerController> adoptedControllers = const {},
     void Function(int mediaId, VideoPlayerController controller)? onReleaseAdopted,
+    int? postId,
   }) {
     return Navigator.of(context, rootNavigator: true).push(
       PageRouteBuilder(
@@ -82,6 +92,7 @@ class PhotoViewerScreen extends StatefulWidget {
           initialClipPositions: initialClipPositions,
           adoptedControllers: adoptedControllers,
           onReleaseAdopted: onReleaseAdopted,
+          postId: postId,
         ),
         transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
       ),
@@ -142,6 +153,19 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTicker
       }
     }
     _adopted.clear();
+  }
+
+  /// Closes the viewer and pushes the post it came from - the "Go to post" button. Grabs
+  /// the navigator before popping rather than after: this widget's own [context] is on its
+  /// way out once the pop completes, but the [NavigatorState] itself stays good to push on.
+  void _openPost() {
+    final postId = widget.postId;
+    if (postId == null) return;
+    final navigator = Navigator.of(context, rootNavigator: true);
+    navigator.pop();
+    navigator.push(MaterialPageRoute(
+      builder: (_) => PostDetailScreen(postId: postId, groupId: widget.groupId),
+    ));
   }
 
   void _onDragStart(DragStartDetails _) => _reset.stop();
@@ -253,7 +277,51 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTicker
                 ),
               ),
             ),
+          if (widget.postId != null)
+            SafeArea(
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 20),
+                  child: _OpenPostButton(onTap: _openPost),
+                ),
+              ),
+            ),
         ],
+      ),
+    );
+  }
+}
+
+/// The "Go to post" pill shown over a photo the viewer was opened for from somewhere other
+/// than that post's own detail screen (see [PhotoViewerScreen.postId]) - the founder's own
+/// ask for a recap Wall card: land on the photo, then a clear way to reach its comments and
+/// likes rather than having to hunt for the original check-in.
+class _OpenPostButton extends StatelessWidget {
+  const _OpenPostButton({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.55),
+      shape: const StadiumBorder(),
+      child: InkWell(
+        customBorder: const StadiumBorder(),
+        onTap: onTap,
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.open_in_new_rounded, color: Colors.white, size: 16),
+              SizedBox(width: 6),
+              Text('Go to post',
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
+            ],
+          ),
+        ),
       ),
     );
   }
