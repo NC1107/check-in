@@ -92,6 +92,43 @@ void main() {
     });
   });
 
+  group('sliding the whole trim window', () {
+    test('a drag from the middle moves both edges by the same amount', () {
+      final moved = shiftTrimWindow(2000, 8000, 1500, 30000);
+      expect(moved.startMs, 3500);
+      expect(moved.endMs, 9500);
+      // The point of the gesture: the length the user already picked survives it. Moving
+      // only one edge (or letting the clamp squeeze the other) fails right here.
+      expect(moved.endMs - moved.startMs, 6000);
+    });
+
+    test('dragging backwards past the start stops at zero, still the same length', () {
+      final moved = shiftTrimWindow(2000, 8000, -5000, 30000);
+      expect(moved.startMs, 0);
+      expect(moved.endMs, 6000);
+      expect(moved.endMs - moved.startMs, 6000);
+    });
+
+    test('dragging past the end of the clip stops at the end, still the same length', () {
+      final moved = shiftTrimWindow(20000, 26000, 9000, 30000);
+      expect(moved.startMs, 24000);
+      expect(moved.endMs, 30000);
+      expect(moved.endMs - moved.startMs, 6000);
+    });
+
+    test('a window as long as the clip cannot move at all', () {
+      final moved = shiftTrimWindow(0, 8000, 3000, 8000);
+      expect(moved.startMs, 0);
+      expect(moved.endMs, 8000);
+    });
+
+    test('a zero drag is a no-op', () {
+      final moved = shiftTrimWindow(4000, 9000, 0, 30000);
+      expect(moved.startMs, 4000);
+      expect(moved.endMs, 9000);
+    });
+  });
+
   group('video group gating', () {
     ServerAccount group(String id, List<String> mediaTypes) => ServerAccount(
           id: id,

@@ -1,0 +1,472 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:video_player/video_player.dart';
+import 'package:video_player_platform_interface/video_player_platform_interface.dart';
+
+import 'package:checkin/api/models.dart';
+import 'package:checkin/state/app_state.dart';
+import 'package:checkin/widgets/feed_autoplay.dart';
+import 'package:checkin/widgets/feed_clip.dart';
+import 'package:checkin/widgets/media_frame.dart';
+
+/// Feed autoplay. The rule the whole design hangs on is that exactly one clip in the feed
+/// holds a player: Android's decoder pool is small and this feed has a history of paying
+/// for per-item state. So the manager's decisions are asserted directly, and the tiles are
+/// asserted against a stand-in platform player - one picture on screen, posters everywhere
+/// else, and nothing left running once the feed is not what the user is looking at.
+void main() {
+  group('the manager', () {
+    FeedAutoplayController manager() {
+      final c = FeedAutoplayController();
+      addTearDown(c.dispose);
+      return c;
+    }
+
+    testWidgets('the most visible clip takes the slot, and it is the only one', (tester) async {
+      final autoplay = manager();
+      final first = Object();
+      final second = Object();
+
+      autoplay.report(first, 0.95);
+      autoplay.report(second, 0.80); // also well past the threshold
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(autoplay.activeSlot, first);
+      expect(autoplay.isActive(first), isTrue);
+      // The invariant: "visible enough" is not a licence to play. Hand the slot to every
+      // clip over the threshold and this is the line that fails.
+      expect(autoplay.isActive(second), isFalse);
+    });
+
+    testWidgets('a clip only half on screen is not enough to start one', (tester) async {
+      final autoplay = manager();
+      final slot = Object();
+
+      autoplay.report(slot, 0.5);
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(autoplay.activeSlot, isNull);
+    });
+
+    testWidgets('nothing starts until the scroll settles', (tester) async {
+      final autoplay = manager();
+      final slot = Object();
+
+      autoplay.report(slot, 0.9);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(autoplay.activeSlot, isNull); // still moving
+
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(autoplay.activeSlot, slot);
+    });
+
+    testWidgets('a clip scrolled straight past never gets a player', (tester) async {
+      final autoplay = manager();
+      final passed = Object();
+      final landed = Object();
+      final slots = <Object?>[];
+      autoplay.addListener(() => slots.add(autoplay.activeSlot));
+
+      autoplay.report(passed, 0.9);
+      await tester.pump(const Duration(milliseconds: 100));
+      autoplay.report(passed, 0.05);
+      autoplay.report(landed, 0.9);
+      await tester.pump(const Duration(milliseconds: 250));
+
+      // One decision, not three: the clip that was mid-flight was never activated and so
+      // never cost a controller.
+      expect(slots, [landed]);
+    });
+
+    testWidgets('a clip keeps the slot while a newcomer is more visible', (tester) async {
+      final autoplay = manager();
+      final playing = Object();
+      final newcomer = Object();
+
+      autoplay.report(playing, 0.9);
+      await tester.pump(const Duration(milliseconds: 250));
+
+      autoplay.report(playing, 0.5); // still mostly there
+      autoplay.report(newcomer, 1.0);
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(autoplay.activeSlot, playing);
+      expect(autoplay.isActive(newcomer), isFalse);
+    });
+
+    testWidgets('the slot moves on once the playing clip is mostly gone', (tester) async {
+      final autoplay = manager();
+      final leaving = Object();
+      final arriving = Object();
+
+      autoplay.report(leaving, 0.9);
+      await tester.pump(const Duration(milliseconds: 250));
+
+      autoplay.report(leaving, 0.2);
+      autoplay.report(arriving, 0.9);
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(autoplay.activeSlot, arriving);
+      expect(autoplay.isActive(leaving), isFalse);
+    });
+
+    testWidgets('a tile that goes away frees the slot', (tester) async {
+      final autoplay = manager();
+      final slot = Object();
+
+      autoplay.report(slot, 0.9);
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(autoplay.activeSlot, slot);
+
+      autoplay.forget(slot);
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(autoplay.activeSlot, isNull);
+    });
+
+    testWidgets('leaving the feed stops playback, coming back resumes it', (tester) async {
+      final autoplay = manager();
+      final slot = Object();
+
+      autoplay.report(slot, 0.9);
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(autoplay.activeSlot, slot);
+
+      autoplay.setEnabled(false);
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(autoplay.activeSlot, isNull);
+
+      autoplay.setEnabled(true);
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(autoplay.activeSlot, slot);
+    });
+  });
+
+  group('the tiles', () {
+    const account = ServerAccount(
+      id: 'alpha.invalid',
+      baseUrl: 'https://alpha.invalid',
+      serverName: 'Alpha',
+      token: 't1',
+    );
+    const first = PostMedia(
+      id: 8,
+      mime: 'video/mp4',
+      width: 1080,
+      height: 1920,
+      durationMs: 6000,
+      hasPoster: true,
+    );
+    const second = PostMedia(
+      id: 9,
+      mime: 'video/mp4',
+      width: 1080,
+      height: 1920,
+      durationMs: 4000,
+      hasPoster: true,
+    );
+
+    late _FakePlayerPlatform platform;
+    late List<VideoPlayerController> built;
+
+    setUp(() {
+      platform = _FakePlayerPlatform();
+      VideoPlayerPlatform.instance = platform;
+      built = [];
+    });
+
+    // Two clips in a scrolling list, sized so the first fills the 600pt test viewport and
+    // only the head of the second peeks in under it. Real visibility drives these, the same
+    // way scrolling the feed does.
+    Widget host({bool enabled = true}) => ProviderScope(
+          overrides: [
+            multiSessionProvider.overrideWith(
+              () => MultiSessionController.seeded(
+                const MultiSession(groups: [account], restored: true),
+              ),
+            ),
+            feedVideoFactoryProvider.overrideWithValue((url, headers) {
+              final controller = VideoPlayerController.networkUrl(url, httpHeaders: headers);
+              built.add(controller);
+              return controller;
+            }),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              body: FeedAutoplayScope(
+                enabled: enabled,
+                child: ListView(
+                  children: const [
+                    SizedBox(
+                      height: 500,
+                      child: MediaFrame(media: first, groupId: 'alpha.invalid'),
+                    ),
+                    SizedBox(
+                      height: 500,
+                      child: MediaFrame(media: second, groupId: 'alpha.invalid'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+
+    // Visibility is batched and the manager waits for the scroll to settle, so several
+    // frames have to pass before anything is decided.
+    Future<void> settle(WidgetTester tester) async {
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 150));
+      }
+    }
+
+    // Tearing a player down runs through the platform and finishes off the test's fake
+    // clock, so real async has to be let through before asking whether the decoder came
+    // back.
+    Future<void> drain(WidgetTester tester) async {
+      await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+      await tester.pump();
+    }
+
+    testWidgets('only the clip in view hosts a player; the rest stay posters', (tester) async {
+      await tester.pumpWidget(host());
+      await settle(tester);
+
+      expect(find.byType(VideoPlayer), findsOneWidget);
+      expect(
+        find.descendant(of: find.byType(FeedClip).first, matching: find.byType(VideoPlayer)),
+        findsOneWidget,
+      );
+      // The clip barely peeking in below it never asked for a player at all.
+      expect(built.length, 1);
+      // ...and still shows its poster with a play badge, not a black hole.
+      expect(
+        find.descendant(
+          of: find.byType(FeedClip).last,
+          matching: find.byIcon(Icons.play_arrow_rounded),
+        ),
+        findsOneWidget,
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('the feed plays muted and looping, and says so', (tester) async {
+      await tester.pumpWidget(host());
+      await settle(tester);
+
+      final controller = built.single;
+      expect(controller.value.isPlaying, isTrue);
+      expect(controller.value.volume, 0); // Instagram behaviour: sound lives in the viewer
+      expect(controller.value.isLooping, isTrue);
+      expect(find.byIcon(Icons.volume_off_rounded), findsOneWidget);
+      // The play badge gives way to the picture rather than sitting on top of it.
+      expect(
+        find.descendant(
+          of: find.byType(FeedClip).first,
+          matching: find.byIcon(Icons.play_arrow_rounded),
+        ),
+        findsNothing,
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('scrolling hands the one player on to the next clip', (tester) async {
+      await tester.pumpWidget(host());
+      await settle(tester);
+      expect(find.byType(VideoPlayer), findsOneWidget);
+
+      await tester.drag(find.byType(ListView), const Offset(0, -600));
+      await settle(tester);
+
+      // Still exactly one player, now the second clip's, and the first one's decoder was
+      // handed back rather than left running off screen.
+      expect(find.byType(VideoPlayer), findsOneWidget);
+      expect(
+        find.descendant(of: find.byType(FeedClip).last, matching: find.byType(VideoPlayer)),
+        findsOneWidget,
+      );
+      expect(built.length, 2);
+      await drain(tester);
+      expect(platform.disposed.length, 1);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('a route opened over the feed releases the player', (tester) async {
+      await tester.pumpWidget(host());
+      await settle(tester);
+      expect(find.byType(VideoPlayer), findsOneWidget);
+
+      // Tapping a clip opens the full-screen viewer, which plays its own copy with sound.
+      // The feed's copy must be gone by then, not decoding away behind it.
+      final navigator = tester.state<NavigatorState>(find.byType(Navigator));
+      unawaited(navigator.push(MaterialPageRoute<void>(builder: (_) => const SizedBox())));
+      await settle(tester);
+
+      expect(find.byType(VideoPlayer), findsNothing);
+      await drain(tester);
+      expect(platform.disposed.length, 1);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('backgrounding the app stops the clip', (tester) async {
+      await tester.pumpWidget(host());
+      await settle(tester);
+      expect(built.single.value.isPlaying, isTrue);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
+      expect(built.single.value.isPlaying, isFalse);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      expect(built.single.value.isPlaying, isTrue);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('leaving the feed tears the player down', (tester) async {
+      await tester.pumpWidget(host());
+      await settle(tester);
+      expect(find.byType(VideoPlayer), findsOneWidget);
+
+      await tester.pumpWidget(host(enabled: false));
+      await settle(tester);
+
+      expect(find.byType(VideoPlayer), findsNothing);
+      expect(find.byIcon(Icons.play_arrow_rounded), findsNWidgets(2));
+      await drain(tester);
+      expect(platform.disposed.length, 1);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('a clip that will not play keeps its poster, quietly', (tester) async {
+      platform.refuse.add('/api/media/8');
+      await tester.pumpWidget(host());
+      await settle(tester);
+
+      expect(find.byType(VideoPlayer), findsNothing);
+      // Both tiles look exactly as they did before autoplay existed - no error card.
+      expect(find.byIcon(Icons.play_arrow_rounded), findsNWidgets(2));
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('outside a feed a clip is a poster and nothing else', (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            multiSessionProvider.overrideWith(
+              () => MultiSessionController.seeded(
+                const MultiSession(groups: [account], restored: true),
+              ),
+            ),
+          ],
+          child: const MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                height: 200,
+                child: MediaFrame(media: first, groupId: 'alpha.invalid'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byType(FeedClip), findsNothing);
+      expect(find.byType(VideoPlayer), findsNothing);
+      expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+    });
+  });
+}
+
+/// Stands in for the platform video player. A widget test has none, so without this every
+/// clip would fall into the poster fallback and the interesting half of autoplay could not
+/// be asserted at all.
+class _FakePlayerPlatform extends VideoPlayerPlatform {
+  final List<int> disposed = [];
+
+  /// URL fragments this platform refuses to open, for the failure path.
+  final Set<String> refuse = {};
+
+  final Map<int, StreamController<VideoEvent>> _events = {};
+  int _nextId = 0;
+
+  @override
+  Future<void> init() async {}
+
+  @override
+  Future<int?> createWithOptions(VideoCreationOptions options) async {
+    final uri = options.dataSource.uri ?? '';
+    if (refuse.any(uri.contains)) {
+      throw PlatformException(code: 'VideoError', message: 'no player for $uri');
+    }
+    final id = ++_nextId;
+    final events = StreamController<VideoEvent>.broadcast();
+    // Announce readiness only once someone is listening: a broadcast stream drops whatever
+    // was sent before that, and the controller subscribes after create returns.
+    events.onListen = () => scheduleMicrotask(() {
+          if (events.isClosed) return;
+          events.add(VideoEvent(
+            eventType: VideoEventType.initialized,
+            duration: const Duration(seconds: 6),
+            size: const Size(720, 1280),
+          ));
+        });
+    _events[id] = events;
+    return id;
+  }
+
+  @override
+  Future<void> dispose(int playerId) async {
+    disposed.add(playerId);
+    await _events.remove(playerId)?.close();
+  }
+
+  @override
+  Stream<VideoEvent> videoEventsFor(int playerId) =>
+      _events[playerId]?.stream ?? const Stream<VideoEvent>.empty();
+
+  @override
+  Future<void> setLooping(int playerId, bool looping) async {}
+
+  @override
+  Future<void> play(int playerId) async {}
+
+  @override
+  Future<void> pause(int playerId) async {}
+
+  @override
+  Future<void> setVolume(int playerId, double volume) async {}
+
+  @override
+  Future<void> setPlaybackSpeed(int playerId, double speed) async {}
+
+  @override
+  Future<void> seekTo(int playerId, Duration position) async {}
+
+  @override
+  Future<Duration> getPosition(int playerId) async => Duration.zero;
+
+  @override
+  Future<void> setMixWithOthers(bool mixWithOthers) async {}
+
+  @override
+  Widget buildViewWithOptions(VideoViewOptions options) => const SizedBox.expand();
+}

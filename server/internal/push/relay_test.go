@@ -19,6 +19,7 @@ type fakeRelay struct {
 	sendCalls   atomic.Int32
 	lastAuth    string
 	lastReq     relaySendReq
+	lastBody    string // raw JSON, so a test can tell an absent field from a zero one
 	lastPublic  string
 	registerKey string
 	registerErr int // non-zero HTTP status to return from /v1/register
@@ -29,8 +30,10 @@ func (f *fakeRelay) server() *httptest.Server {
 	mux.HandleFunc("/v1/send", func(w http.ResponseWriter, r *http.Request) {
 		f.sendCalls.Add(1)
 		f.lastAuth = r.Header.Get("Authorization")
+		raw, _ := io.ReadAll(r.Body)
+		f.lastBody = string(raw)
 		var req relaySendReq
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.Unmarshal(raw, &req)
 		f.lastReq = req
 		results := make([]relayResult, len(req.Messages))
 		for i, m := range req.Messages {
@@ -62,7 +65,7 @@ func TestRelaySendForwardsBatch(t *testing.T) {
 
 	rs := NewRelaySender(ts.URL, "ckr_secret")
 	rs.Send(context.Background(), []string{"a", "b"}, "Alice checked in", "at the gym",
-		map[string]string{"type": "post"})
+		map[string]string{"type": "post"}, "")
 
 	if f.sendCalls.Load() != 1 {
 		t.Fatalf("want 1 send call, got %d", f.sendCalls.Load())
@@ -79,6 +82,38 @@ func TestRelaySendForwardsBatch(t *testing.T) {
 	}
 }
 
+// A self-hoster in relay mode gets the same dedup as a direct-FCM one, so the cross-post id
+// has to survive the extra hop.
+func TestRelaySendForwardsCollapseID(t *testing.T) {
+	f := &fakeRelay{}
+	ts := f.server()
+	defer ts.Close()
+
+	NewRelaySender(ts.URL, "k").Send(context.Background(), []string{"a"}, "t", "b", nil, "xpost-42")
+
+	if len(f.lastReq.Messages) != 1 {
+		t.Fatalf("want 1 message, got %d", len(f.lastReq.Messages))
+	}
+	if got := f.lastReq.Messages[0].CollapseID; got != "xpost-42" {
+		t.Errorf("collapse id = %q, want xpost-42", got)
+	}
+}
+
+// With nothing to collapse the field is left out entirely, keeping the request identical to
+// what relays accepted before collapsing existed - they reject unknown fields, so the
+// wire shape is worth pinning.
+func TestRelaySendOmitsAnEmptyCollapseID(t *testing.T) {
+	f := &fakeRelay{}
+	ts := f.server()
+	defer ts.Close()
+
+	NewRelaySender(ts.URL, "k").Send(context.Background(), []string{"a"}, "t", "b", nil, "")
+
+	if strings.Contains(f.lastBody, "collapseId") {
+		t.Errorf("request carries collapseId with nothing to collapse: %s", f.lastBody)
+	}
+}
+
 func TestRelaySendChunks(t *testing.T) {
 	f := &fakeRelay{}
 	ts := f.server()
@@ -88,7 +123,7 @@ func TestRelaySendChunks(t *testing.T) {
 	for i := range tokens {
 		tokens[i] = "t"
 	}
-	NewRelaySender(ts.URL, "k").Send(context.Background(), tokens, "t", "b", nil)
+	NewRelaySender(ts.URL, "k").Send(context.Background(), tokens, "t", "b", nil, "")
 
 	if f.sendCalls.Load() != 3 {
 		t.Errorf("250 tokens at batch 100 should be 3 requests, got %d", f.sendCalls.Load())
@@ -97,12 +132,12 @@ func TestRelaySendChunks(t *testing.T) {
 
 func TestRelaySendNilAndEmptyAreNoOps(t *testing.T) {
 	var rs *RelaySender
-	rs.Send(context.Background(), []string{"a"}, "t", "b", nil) // nil receiver
+	rs.Send(context.Background(), []string{"a"}, "t", "b", nil, "") // nil receiver
 
 	f := &fakeRelay{}
 	ts := f.server()
 	defer ts.Close()
-	NewRelaySender(ts.URL, "k").Send(context.Background(), nil, "t", "b", nil) // no tokens
+	NewRelaySender(ts.URL, "k").Send(context.Background(), nil, "t", "b", nil, "") // no tokens
 	if f.sendCalls.Load() != 0 {
 		t.Errorf("a send with no tokens should not hit the relay, got %d calls", f.sendCalls.Load())
 	}
@@ -120,7 +155,7 @@ func TestRelaySendNeverLogsContent(t *testing.T) {
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
 
 	NewRelaySender(ts.URL, "k").Send(context.Background(),
-		[]string{"secret-token"}, "Alice checked in", "at the climbing gym", nil)
+		[]string{"secret-token"}, "Alice checked in", "at the climbing gym", nil, "")
 
 	for _, secret := range []string{"secret-token", "Alice", "climbing gym"} {
 		if strings.Contains(buf.String(), secret) {

@@ -224,7 +224,11 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not create post")
 		return
 	}
-	go s.notifyPost(me.ID, me.Name, post.ID)
+	sharedID := ""
+	if post.CrossPostID != nil {
+		sharedID = *post.CrossPostID
+	}
+	go s.notifyPost(me.ID, me.Name, post.ID, sharedID)
 	writeJSON(w, http.StatusCreated, post)
 }
 

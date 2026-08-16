@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+// noCollapse marks a notification that already stands alone on a member's device: a comment,
+// a reply, a like, or the daily digest each reach one person once. Only a cross-posted
+// check-in fans out into several notifications about the same thing.
+const noCollapse = ""
+
 type deviceReq struct {
 	Token    string `json:"token"`
 	Platform string `json:"platform"` // "ios" | "android"
@@ -108,7 +113,12 @@ func (s *Server) handleUpdateNotificationPrefs(w http.ResponseWriter, r *http.Re
 
 // notifyPost pushes a new-post notification to everyone opted in except the author. It
 // runs in its own goroutine off the request path, so it uses a background context.
-func (s *Server) notifyPost(authorID int64, authorName string, postID int64) {
+//
+// crossPostID is the shared id of a check-in posted to several groups at once, or empty for
+// an ordinary post. Every copy notifies its own group, so someone in more than one of them
+// would otherwise get the same check-in announced several times; collapsing on that id
+// leaves one notification on their device.
+func (s *Server) notifyPost(authorID int64, authorName string, postID int64, crossPostID string) {
 	if s.push == nil {
 		return
 	}
@@ -127,7 +137,7 @@ func (s *Server) notifyPost(authorID int64, authorName string, postID int64) {
 		return
 	}
 	s.push.Send(ctx, tokens, s.serverName(ctx), authorName+" shared a check-in",
-		s.pushData("post", postID))
+		s.pushData("post", postID), crossPostID)
 }
 
 // notifyReply pushes a reply notification to the post's author.
@@ -147,7 +157,7 @@ func (s *Server) notifyReply(commenterName string, postID, commenterID int64) {
 		return
 	}
 	s.push.Send(ctx, tokens, s.serverName(ctx), commenterName+" commented on your check-in",
-		s.pushData("comment", postID))
+		s.pushData("comment", postID), noCollapse)
 }
 
 // notifyCommentReply pushes a reply notification to the author of the comment being replied
@@ -169,7 +179,7 @@ func (s *Server) notifyCommentReply(replierName string, postID, parentCommentID,
 		return
 	}
 	s.push.Send(ctx, tokens, s.serverName(ctx), replierName+" replied to your comment",
-		s.pushData("reply", postID))
+		s.pushData("reply", postID), noCollapse)
 }
 
 // notifyLike pushes a like notification to the post's author.
@@ -189,7 +199,7 @@ func (s *Server) notifyLike(likerName string, postID, likerID int64) {
 		return
 	}
 	s.push.Send(ctx, tokens, s.serverName(ctx), likerName+" liked your check-in",
-		s.pushData("like", postID))
+		s.pushData("like", postID), noCollapse)
 }
 
 // pushData builds the data payload for a push message. Besides the post reference it
