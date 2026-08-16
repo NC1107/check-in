@@ -32,6 +32,14 @@ const kMemoriesOpenThreshold = 0.35;
 /// closes) the surface from a short drag, the way a drawer or bottom sheet settles.
 const kMemoriesFlickVelocity = 500.0;
 
+/// The handle's tappable/draggable slot width - at least Apple's 44pt touch-target
+/// guidance, well past the 4px-wide visible pill it centers (see [MemoriesHandle]). Fixed
+/// and unconditional (not shrunk to 0 when incapable - the capability check instead decides
+/// what renders *inside* this slot) so the bottom bar's layout, notably the FAB notch's
+/// horizontal centering, never shifts depending on whether any shown group advertises the
+/// capability - see home_shell.dart's matching trailing spacer.
+const kMemoriesHandleWidth = 44.0;
+
 /// Decides whether an in-progress interactive drag of the Memories surface should settle
 /// open (1.0) or closed (0.0) once the finger lifts. [position] is the drag's current
 /// progress (0=closed..1=open); [velocityPxPerSec] is the horizontal velocity at release
@@ -131,7 +139,11 @@ class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
   Widget build(BuildContext context) {
     final capable =
         ref.watch(multiSessionProvider.select((s) => s.memoriesCapableShownGroups.isNotEmpty));
-    if (!capable) return const SizedBox(width: 0, height: 64);
+    // The slot itself is always kMemoriesHandleWidth - only what renders inside it depends
+    // on capability - so toggling capability (a group's server updating, or switching which
+    // groups are shown) never shifts the Feed tab or the FAB notch. See
+    // kMemoriesHandleWidth's doc comment.
+    if (!capable) return const SizedBox(width: kMemoriesHandleWidth, height: 64);
 
     final width = MediaQuery.sizeOf(context).width;
     final reduceMotion = MediaQuery.of(context).disableAnimations;
@@ -145,8 +157,10 @@ class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
         onHorizontalDragUpdate: (d) => _drag.update(d, width, reduceMotion),
         onHorizontalDragEnd: (d) => _drag.end(d, reduceMotion),
         child: SizedBox(
-          width: 28,
+          width: kMemoriesHandleWidth,
           height: 64,
+          // The visible pill stays exactly 4x26, centered in the wider tap target - only the
+          // grabbable area grows, never the look.
           child: Center(
             child: Container(
               width: 4,
@@ -319,6 +333,12 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
     }
     // Uniformly across every capable group in view, not just the current one - a multi-group
     // member's memories should draw from all of them, same as the feed does.
+    //
+    // Picked once, here, and reused after the await below rather than re-read from
+    // provider state at that point: the shown-group selection can change while the request
+    // is in flight (switching groups, a filter change), and the fetched post has to stay
+    // tagged with the group it actually came from - not whatever happens to be selected by
+    // the time the response lands. See memories_test.dart's mid-flight selection-change test.
     final group = capable[Random().nextInt(capable.length)];
     setState(() {
       _loading = true;

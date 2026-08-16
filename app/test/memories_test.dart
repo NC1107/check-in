@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,6 +27,18 @@ class _FakeMemoriesApi extends ApiClient {
     calls++;
     return r;
   }
+}
+
+/// A fake ApiClient whose randomMemory() doesn't resolve until the test completes
+/// [completer] - lets a test hold a fetch open mid-flight to change other state (e.g. the
+/// active group selection) before letting it land.
+class _DelayedMemoriesApi extends ApiClient {
+  _DelayedMemoriesApi(this.completer) : super(baseUrl: 'https://x.invalid');
+
+  final Completer<Post?> completer;
+
+  @override
+  Future<Post?> randomMemory() => completer.future;
 }
 
 /// Mirrors home_shell.dart's wiring: one AnimationController shared by the handle (in a
@@ -90,23 +104,56 @@ void main() {
 
   /// Pumps [_MemoriesHost] with [groups] as the signed-in session (and any active group's
   /// [ServerAccount.memoriesCapable] driving the handle's visibility), returning a key onto
-  /// the host's controller.
+  /// the host's controller. [disableAnimations] wraps the tree in a [MediaQuery] reporting
+  /// reduced motion, pinned to the test binding's default 800x600 logical surface so a
+  /// test can reason about drag fractions against a known width.
   Future<GlobalKey<MemoriesHostState>> pumpHost(
     WidgetTester tester, {
     List<ServerAccount> groups = const [],
     ApiClient Function(String groupId)? api,
+    bool disableAnimations = false,
   }) async {
     final key = GlobalKey<MemoriesHostState>();
+    Widget home = _MemoriesHost(key: key);
+    if (disableAnimations) {
+      home = MediaQuery(
+        data: const MediaQueryData(size: Size(800, 600), disableAnimations: true),
+        child: home,
+      );
+    }
     await tester.pumpWidget(ProviderScope(
       overrides: [
         multiSessionProvider.overrideWith(
             () => MultiSessionController.seeded(MultiSession(groups: groups, restored: true))),
         if (api != null) apiForGroupProvider.overrideWith((ref, id) => api(id)),
       ],
-      child: MaterialApp(home: _MemoriesHost(key: key)),
+      child: MaterialApp(home: home),
     ));
     await tester.pump();
     return key;
+  }
+
+  /// Drags [finder] by [totalOffset] over [duration] as several incremental moves (mirroring
+  /// how tester.timedDrag itself steps a drag) rather than one single jump - a lone giant
+  /// moveBy can land as just the slop-crossing move that starts the gesture, with nothing
+  /// left over to report as an update. Returns the still-down [TestGesture] so a caller can
+  /// inspect state before releasing it with `gesture.up(timeStamp: duration)`.
+  Future<TestGesture> stepDrag(
+    WidgetTester tester,
+    Finder finder,
+    Offset totalOffset,
+    Duration duration, {
+    int steps = 10,
+  }) async {
+    final gesture = await tester.startGesture(tester.getCenter(finder));
+    for (var i = 1; i <= steps; i++) {
+      await gesture.moveBy(
+        Offset(totalOffset.dx / steps, totalOffset.dy / steps),
+        timeStamp: duration * i ~/ steps,
+      );
+      await tester.pump();
+    }
+    return gesture;
   }
 
   group('memoryAgeLabel', () {
@@ -138,6 +185,58 @@ void main() {
     testWidgets('the handle is present when a shown group advertises memories', (tester) async {
       await pumpHost(tester, groups: [account('a.invalid', memoriesCapable: true)]);
       expect(find.bySemanticsLabel('Memories'), findsOneWidget);
+    });
+  });
+
+  group('layout stability', () {
+    testWidgets(
+        'the handle occupies the same width whether or not it is capable, so the Feed tab '
+        "and the FAB-notch spacer never shift", (tester) async {
+      // Mirrors the actual bottom bar Row in home_shell.dart: the handle, two Expanded nav
+      // items either side of a fixed notch spacer, and the trailing mirror spacer that
+      // balances the handle's width. Built directly (rather than pumping the whole app)
+      // so this measures the Row's geometry, not anything about HomeShell's other state.
+      Future<double> feedLeftEdge(bool capable) async {
+        // Tear the previous variant's tree down first: pumping a new ProviderScope over an
+        // existing one updates the same element in place, and a NotifierProvider's
+        // overrideWith factory only ever runs once for that element - so without this, the
+        // second call would keep reading the first variant's (already-initialized)
+        // MultiSessionController instead of a fresh one seeded with the new capability.
+        await tester.pumpWidget(const SizedBox.shrink());
+
+        final controller = AnimationController(vsync: const TestVSync());
+        addTearDown(controller.dispose);
+        await tester.pumpWidget(ProviderScope(
+          overrides: [
+            multiSessionProvider.overrideWith(() => MultiSessionController.seeded(MultiSession(
+                groups: [account('a.invalid', memoriesCapable: capable)], restored: true))),
+          ],
+          child: MaterialApp(
+            home: Scaffold(
+              bottomNavigationBar: SizedBox(
+                height: 64,
+                child: Row(
+                  children: [
+                    MemoriesHandle(controller: controller),
+                    const Expanded(child: SizedBox(key: Key('feed'))),
+                    const SizedBox(width: 64), // FAB notch
+                    const Expanded(child: SizedBox(key: Key('you'))),
+                    const SizedBox(width: kMemoriesHandleWidth), // mirrors home_shell.dart
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ));
+        await tester.pump();
+        return tester.getTopLeft(find.byKey(const Key('feed'))).dx;
+      }
+
+      final incapableEdge = await feedLeftEdge(false);
+      final capableEdge = await feedLeftEdge(true);
+
+      expect(capableEdge, incapableEdge,
+          reason: 'the handle becoming visible/interactive must not move where Feed starts');
     });
   });
 
@@ -197,6 +296,56 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(key.currentState!.controller.value, 1);
+    });
+
+    testWidgets(
+        'reduced motion: dragging right does not move the controller live, but still opens '
+        'past the threshold on release', (tester) async {
+      final key = await pumpHost(tester,
+          groups: [account('a.invalid', memoriesCapable: true)],
+          api: (id) => _FakeMemoriesApi([null]),
+          disableAnimations: true);
+
+      // width is pinned to 800 by pumpHost's disableAnimations MediaQuery override. 480px
+      // (60% of 800) at t=1500ms: past kMemoriesOpenThreshold, and its ~320px/s average
+      // stays under kMemoriesFlickVelocity, so only the position-based path is in play.
+      const duration = Duration(milliseconds: 1500);
+      final gesture =
+          await stepDrag(tester, find.bySemanticsLabel('Memories'), const Offset(480, 0), duration);
+
+      expect(key.currentState!.controller.value, 0,
+          reason: 'reduced motion must not live-track the drag mid-gesture');
+
+      await gesture.up(timeStamp: duration);
+      await tester.pumpAndSettle();
+
+      expect(key.currentState!.controller.value, 1,
+          reason: 'release past the threshold must still commit open, just without the live '
+              'tracking that got it there');
+    });
+
+    testWidgets('reduced motion: a short drag released below the threshold still snaps closed',
+        (tester) async {
+      final key = await pumpHost(tester,
+          groups: [account('a.invalid', memoriesCapable: true)],
+          api: (id) => _FakeMemoriesApi([null]),
+          disableAnimations: true);
+
+      // 120px (15% of 800) at t=1500ms: below kMemoriesOpenThreshold, ~80px/s - nowhere near
+      // a flick either.
+      const duration = Duration(milliseconds: 1500);
+      final gesture =
+          await stepDrag(tester, find.bySemanticsLabel('Memories'), const Offset(120, 0), duration);
+
+      expect(key.currentState!.controller.value, 0,
+          reason: 'reduced motion must not live-track the drag mid-gesture');
+
+      await gesture.up(timeStamp: duration);
+      await tester.pumpAndSettle();
+
+      expect(key.currentState!.controller.value, 0,
+          reason: 'a drag that never reached the threshold must settle closed even without '
+              'live tracking to show it falling short');
     });
   });
 
@@ -289,6 +438,55 @@ void main() {
       expect(find.text('Nothing to look back on yet.'), findsOneWidget);
       // Never a bare, permanent spinner - see feature spec's empty-state requirement.
       expect(find.byType(CircularProgressIndicator), findsNothing);
+    });
+
+    testWidgets(
+        'a mid-flight fetch keeps the group it was actually fetched from, even if the shown '
+        'selection changes before it resolves', (tester) async {
+      final completer = Completer<Post?>();
+      final groupA = account('a.invalid', memoriesCapable: true);
+      final groupB = account('b.invalid', memoriesCapable: true);
+      // Only A is shown, so the uniform pick among capable shown groups is deterministic.
+      final session = MultiSessionController.seeded(MultiSession(
+          groups: [groupA, groupB], hiddenGroupIds: const {'b.invalid'}, restored: true));
+
+      final key = GlobalKey<MemoriesHostState>();
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          multiSessionProvider.overrideWith(() => session),
+          apiForGroupProvider.overrideWith((ref, id) => id == 'a.invalid'
+              ? _DelayedMemoriesApi(completer)
+              // B's api must never be read: nothing in this test ever shows B while the
+              // fetch is in flight.
+              : _FakeMemoriesApi([memory(999, body: 'should never be seen')])),
+        ],
+        child: MaterialApp(home: _MemoriesHost(key: key)),
+      ));
+      await tester.pump();
+
+      await tester.tap(find.bySemanticsLabel('Memories'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Give me a memory'));
+      await tester.pump(); // starts the fetch against A; leaves it pending on completer
+
+      // The active selection changes mid-flight: A is hidden and B is shown instead - the
+      // exact shape of bug that once double-attached a gif to the wrong cross-post target.
+      await session.setHiddenGroups(const {'a.invalid'});
+      await tester.pump();
+
+      completer.complete(memory(555, body: 'memory from A'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('memory from A'), findsOneWidget,
+          reason: 'the fetch must resolve against the group it was sent to, not whatever is '
+              'shown by the time the response lands');
+
+      await tester.tap(find.bySemanticsLabel('Open this memory'));
+      await tester.pumpAndSettle();
+
+      final detail = tester.widget<PostDetailScreen>(find.byType(PostDetailScreen));
+      expect(detail.postId, 555);
+      expect(detail.groupId, 'a.invalid');
     });
   });
 

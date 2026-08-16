@@ -371,6 +371,11 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
                 selected: _index == 1,
                 onTap: me != null ? () => setState(() => _index = 1) : null,
               ),
+              // Mirrors the handle's fixed-width slot on the other end, so its extra width
+              // on the left is balanced rather than pushing the FAB notch (which centers on
+              // the Row's own midpoint, not the screen's) off true center. Both are fixed
+              // constants - no capability check needed here to stay in sync.
+              const SizedBox(width: kMemoriesHandleWidth),
             ],
           ),
         ),
