@@ -3,7 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +18,13 @@ const gifPerPage = 24
 // defaultKlipyTimeout bounds how long the proxy waits on Klipy when the Server wasn't given
 // a shorter one (see Server.klipyTimeout).
 const defaultKlipyTimeout = 5 * time.Second
+
+// maxKlipyResponseBytes caps how much of Klipy's response body this proxy will read before
+// decoding. A page is at most 24 items of a few hundred bytes of JSON each - 1 MiB is
+// generous headroom - so a misbehaving or malicious upstream streaming an unbounded body
+// can't be turned into a decode-time memory blowup, mirroring the MaxBytesReader idiom the
+// upload handlers already use on the way in.
+const maxKlipyResponseBytes = 1 << 20
 
 // gifItem is one gif as the app renders it: a grid preview plus the full-resolution file to
 // download and re-host. Nothing here ever carries the Klipy key.
@@ -118,9 +127,12 @@ func (s *Server) klipyTimeoutOrDefault() time.Duration {
 func (s *Server) fetchKlipy(ctx context.Context, endpoint, q string, page int) (klipyResponse, error) {
 	var out klipyResponse
 	base := strings.TrimRight(s.cfg.KlipyBaseURL, "/")
-	url := base + "/api/v1/" + s.cfg.KlipyKey + "/gifs/" + endpoint
+	// PathEscape the key: it sits in a URL path segment, and an operator who fat-fingered or
+	// mis-pasted a key (say, one carrying a stray '/' or '?') should get a clean 404/400 from
+	// Klipy instead of that key silently splitting the path into something else entirely.
+	reqURL := base + "/api/v1/" + url.PathEscape(s.cfg.KlipyKey) + "/gifs/" + endpoint
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return out, err
 	}
@@ -140,20 +152,29 @@ func (s *Server) fetchKlipy(ctx context.Context, endpoint, q string, page int) (
 	if resp.StatusCode != http.StatusOK {
 		return out, errKlipyStatus
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	// Bounded read before decode: an unbounded upstream body would otherwise let
+	// json.Decoder buffer as much as Klipy (or anything on that network path) chooses to send.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxKlipyResponseBytes)).Decode(&out); err != nil {
 		return out, err
+	}
+	// Klipy soft-fails with HTTP 200 and result:false (e.g. a bad or expired key), which
+	// would otherwise map silently to an empty page - indistinguishable from a query with
+	// genuinely no matches. Treat it as the upstream failure it is.
+	if !out.Result {
+		return out, errKlipyStatus
 	}
 	return out, nil
 }
 
 var errKlipyStatus = &klipyStatusError{}
 
-// klipyStatusError marks a non-200 upstream response. A distinct type rather than
-// fmt.Errorf, so nothing ever risks interpolating a response body (which, on some upstream
-// error, could itself be an echo of the request URL) into the error string.
+// klipyStatusError marks an upstream response the proxy could not use: a non-200 status, or
+// a 200 that itself reports failure (result:false). A distinct type rather than fmt.Errorf,
+// so nothing ever risks interpolating a response body (which, on some upstream error, could
+// itself be an echo of the request URL) into the error string.
 type klipyStatusError struct{}
 
-func (*klipyStatusError) Error() string { return "klipy: non-200 response" }
+func (*klipyStatusError) Error() string { return "klipy: unusable response" }
 
 // mapKlipyResponse projects Klipy's payload down to the slim shape the app renders, dropping
 // the id's precision-losing float round-trip risk (kept as int64 throughout) along with

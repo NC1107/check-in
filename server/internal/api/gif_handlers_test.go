@@ -1,8 +1,8 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -188,6 +188,38 @@ func TestGifSearchNoKeyConfigured(t *testing.T) {
 	}
 }
 
+// An oversized upstream body must be cut off before it ever reaches the JSON decoder, not
+// buffered in full. The padding is syntactically valid JSON whitespace followed by a
+// genuinely valid response: with the read bounded, the reader is starved before it ever
+// reaches that valid body (truncated mid-padding -> decode error -> 502); without the bound,
+// json.Decoder would happily skim past the padding to the valid payload underneath and
+// succeed - which is exactly the unbounded-read bug this guards against.
+func TestGifSearchOversizedUpstreamBodyIsBounded(t *testing.T) {
+	stub := newKlipyStub(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(bytes.Repeat([]byte(" "), maxKlipyResponseBytes+(1<<20)))
+		_, _ = w.Write([]byte(klipyFixture))
+	})
+	s := gifServer(stub.URL, "test-key", 0)
+	res := doGifSearch(s, "q=cat")
+	if res.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 - an oversized upstream body must be cut off before it decodes, not silently accepted", res.Code)
+	}
+}
+
+// Klipy soft-fails with HTTP 200 and result:false (a bad or expired key, for instance).
+// Answering that as an empty page would be indistinguishable from a query with genuinely no
+// matches, so it must surface as the upstream failure it is.
+func TestGifSearchUpstreamSoftFailureIsAnError(t *testing.T) {
+	stub := newKlipyStub(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"result":false,"data":{"data":[],"current_page":1,"per_page":24,"has_next":false}}`))
+	})
+	s := gifServer(stub.URL, "test-key", 0)
+	res := doGifSearch(s, "q=cat")
+	if res.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 when Klipy reports result:false, not a silent empty page", res.Code)
+	}
+}
+
 func TestGifSearchUpstreamTimeout(t *testing.T) {
 	// The stub sleeps far longer than the configured timeout below. If the handler's context
 	// deadline were dropped, the request would complete only after the full sleep - so the
@@ -247,15 +279,5 @@ func TestGifSearchNeverLeaksTheKey(t *testing.T) {
 				t.Fatalf("response body leaked the key: %s", res.Body)
 			}
 		})
-	}
-}
-
-// Sanity check that the fixture's id (above JSON's float64 precision ceiling) survives the
-// round-trip as a string with every digit intact - the whole reason the wire item and the
-// mapper use int64 rather than a generic numeric decode.
-func TestGifIDSurvivesFullPrecision(t *testing.T) {
-	const bigID = 9017911837986147
-	if fmt.Sprintf("%d", bigID) != "9017911837986147" {
-		t.Fatal("test fixture drifted from the id in klipyFixture")
 	}
 }
