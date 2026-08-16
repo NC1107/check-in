@@ -25,6 +25,7 @@ import '../../theme/tokens.dart';
 import '../../widgets/feed_autoplay.dart';
 import '../../widgets/gif_picker.dart';
 import '../../widgets/user_avatar.dart';
+import '../memories/memories_screen.dart';
 import '../post/post_detail_screen.dart';
 import '../profile/profile_screen.dart';
 import '../whats_new/release_notes.dart';
@@ -176,8 +177,24 @@ class HomeShell extends ConsumerStatefulWidget {
   ConsumerState<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends ConsumerState<HomeShell> {
+class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProviderStateMixin {
   int _index = 0;
+
+  // Drives the hidden Memories surface: 0 = closed, 1 = fully open, tracked live by the
+  // handle's drag and the surface's own dismiss drag (see MemoriesDragDriver). The Android
+  // back interception lives on MemoriesSurface itself, not here - see its doc comment.
+  late final _memoriesController =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 260), value: 0);
+
+  /// Settles the surface shut - the header's close button and Android back (both routed
+  /// through MemoriesSurface's onClose) share this rather than duplicating the
+  /// reduced-motion duration choice.
+  void _closeMemories() {
+    final reduceMotion = MediaQuery.of(context).disableAnimations;
+    _memoriesController.animateTo(0,
+        duration: reduceMotion ? Duration.zero : const Duration(milliseconds: 220),
+        curve: Curves.easeOut);
+  }
 
   @override
   void initState() {
@@ -189,6 +206,12 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       // Show "What's New" once after an update (silent on a fresh install).
       maybeShowWhatsNew(context);
     });
+  }
+
+  @override
+  void dispose() {
+    _memoriesController.dispose();
+    super.dispose();
   }
 
   /// (Re-)registers this device with EVERY signed-in group: push token on each server
@@ -294,7 +317,14 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
     return Scaffold(
       backgroundColor: _bgMain,
-      body: IndexedStack(index: _index, children: pages),
+      body: Stack(
+        children: [
+          IndexedStack(index: _index, children: pages),
+          Positioned.fill(
+            child: MemoriesSurface(controller: _memoriesController, onClose: _closeMemories),
+          ),
+        ],
+      ),
       floatingActionButton: SizedBox(
         height: 58,
         width: 58,
@@ -320,6 +350,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
           decoration: const BoxDecoration(border: Border(top: BorderSide(color: _border))),
           child: Row(
             children: [
+              // The hidden Memories entry point: a small grab handle, not a fourth
+              // destination - see MemoriesHandle's doc comment.
+              MemoriesHandle(controller: _memoriesController),
               _NavItem(
                 icon: Icons.home_outlined,
                 activeIcon: Icons.home_rounded,
@@ -338,6 +371,11 @@ class _HomeShellState extends ConsumerState<HomeShell> {
                 selected: _index == 1,
                 onTap: me != null ? () => setState(() => _index = 1) : null,
               ),
+              // Mirrors the handle's fixed-width slot on the other end, so its extra width
+              // on the left is balanced rather than pushing the FAB notch (which centers on
+              // the Row's own midpoint, not the screen's) off true center. Both are fixed
+              // constants - no capability check needed here to stay in sync.
+              const SizedBox(width: kMemoriesHandleWidth),
             ],
           ),
         ),

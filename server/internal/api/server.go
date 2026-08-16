@@ -99,6 +99,7 @@ func (s *Server) Router() http.Handler {
 		r.Patch("/api/me/notifications", s.handleUpdateNotificationPrefs)
 
 		r.Get("/api/feed", s.handleFeed)
+		r.With(s.rateLimitUser(s.content.memories)).Get("/api/memories/random", s.handleRandomMemory)
 		r.Get("/api/locations", s.handleLocations)
 		r.Get("/api/search", s.handleSearch)
 		r.Get("/api/users", s.handleSearchUsers)
