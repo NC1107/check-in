@@ -336,6 +336,28 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
     ));
   }
 
+  /// Opens the tapped attachment full screen.
+  ///
+  /// A clip that was autoplaying in this card goes up as the player itself, still running:
+  /// full screen then starts on the frame the card was showing rather than pausing to build
+  /// a second player for the same clip. The position is read first and still passed, because
+  /// it is what the viewer falls back to when there is no player to lend - a clip that had
+  /// not finished starting, or another clip on the same post.
+  void _openViewer(int mediaId) {
+    final p = widget.post;
+    final at = FeedAutoplayScope.continuation(context, mediaId: mediaId, groupId: p.groupId);
+    final lent = FeedAutoplayScope.lend(context, mediaId: mediaId, groupId: p.groupId);
+    PhotoViewerScreen.open(
+      context,
+      media: p.media,
+      initialIndex: p.media.indexWhere((m) => m.id == mediaId).clamp(0, p.media.length - 1),
+      groupId: p.groupId,
+      initialClipPositions: at,
+      adoptedControllers: lent == null ? const {} : {lent.mediaId: lent.controller},
+      onReleaseAdopted: lent?.release,
+    );
+  }
+
   /// One tappable feed action (like / comment) with a Material ripple so presses give
   /// clear visual feedback.
   Widget _action({
@@ -599,20 +621,7 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                   media: p.media,
                   groupId: p.groupId,
                   onDoubleTap: _doubleTapLike,
-                  onImageTap: (mediaId) => PhotoViewerScreen.open(
-                    context,
-                    media: p.media,
-                    initialIndex:
-                        p.media.indexWhere((m) => m.id == mediaId).clamp(0, p.media.length - 1),
-                    groupId: p.groupId,
-                    // A clip tapped while it was autoplaying here opens where it had got to,
-                    // not back at its first frame.
-                    initialClipPositions: FeedAutoplayScope.continuation(
-                      context,
-                      mediaId: mediaId,
-                      groupId: p.groupId,
-                    ),
-                  ),
+                  onImageTap: _openViewer,
                 ),
                 Positioned.fill(
                   child: IgnorePointer(child: Center(child: _HeartBurst(_burst))),

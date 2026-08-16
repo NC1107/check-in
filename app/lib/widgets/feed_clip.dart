@@ -16,7 +16,12 @@ import 'feed_autoplay.dart';
 /// poster.
 ///
 /// The tile only ever asks; the manager decides, which is what keeps the whole feed to one
-/// player. Everything else here is about failing quietly: the poster is never removed from
+/// player. Tapping the clip does not end that player: the tile lends it to the full-screen
+/// viewer (see [FeedClipPlayer]) and drops back to its poster, so full screen picks up the
+/// exact frame the feed was on instead of paying for a second player's init and seek. It
+/// comes back when the viewer closes.
+///
+/// Everything else here is about failing quietly: the poster is never removed from
 /// under the video, so there is no black gap while the first frame decodes, and a clip that
 /// will not initialise (offline, an odd codec, a host with no player at all) leaves the
 /// poster exactly as it was. Autoplay is decoration - it must never turn a check-in into an
@@ -50,7 +55,9 @@ class FeedClip extends ConsumerStatefulWidget {
   ConsumerState<FeedClip> createState() => _FeedClipState();
 }
 
-class _FeedClipState extends ConsumerState<FeedClip> with WidgetsBindingObserver {
+class _FeedClipState extends ConsumerState<FeedClip>
+    with WidgetsBindingObserver
+    implements FeedClipPlayer {
   // One key, two jobs: VisibilityDetector needs a unique one, and the manager needs a handle
   // for this tile. Per tile rather than per clip, so the same clip on screen twice (a
   // cross-post seen from two groups) is two slots competing, not one entry they share.
@@ -58,6 +65,10 @@ class _FeedClipState extends ConsumerState<FeedClip> with WidgetsBindingObserver
 
   VideoPlayerController? _controller;
   bool _firstFrame = false;
+
+  // The player this tile lent to the full-screen viewer. Not ours while it is out: not to
+  // drive, not to dispose, and above all not to build a second one alongside.
+  VideoPlayerController? _lentOut;
 
   @override
   void initState() {
@@ -76,6 +87,7 @@ class _FeedClipState extends ConsumerState<FeedClip> with WidgetsBindingObserver
     }
     // A recycled tile now points at a different clip: the player it holds is for the old one.
     if (old.media.id != widget.media.id || old.groupId != widget.groupId) {
+      _lentOut = null; // whatever is out belongs to a clip this tile no longer shows
       _teardown();
       _onSlotChanged();
     }
@@ -86,6 +98,8 @@ class _FeedClipState extends ConsumerState<FeedClip> with WidgetsBindingObserver
     WidgetsBinding.instance.removeObserver(this);
     widget.autoplay.removeListener(_onSlotChanged);
     widget.autoplay.forget(_slot);
+    // A lent player is untouched here on purpose: the viewer still has it, and the release
+    // it holds is what disposes it once there is no tile left to take it back.
     _teardown();
     super.dispose();
   }
@@ -102,9 +116,16 @@ class _FeedClipState extends ConsumerState<FeedClip> with WidgetsBindingObserver
 
   void _onSlotChanged() {
     final active = widget.autoplay.isActive(_slot);
-    if (active && _controller == null) {
+    final controller = _controller;
+    // A tile whose player is out with the viewer waits for it rather than building a second
+    // one: that would be two decoders for one clip, and the wrong one would be on screen
+    // when the viewer closes.
+    if (active && controller == null && _lentOut == null) {
       _create();
-    } else if (!active && _controller != null) {
+    } else if (active && controller != null && _firstFrame && !controller.value.isPlaying) {
+      // Taken back from the viewer before the feed had settled on a slot again.
+      controller.play();
+    } else if (!active && controller != null) {
       _teardown();
       if (mounted) setState(() {});
     }
@@ -127,19 +148,60 @@ class _FeedClipState extends ConsumerState<FeedClip> with WidgetsBindingObserver
       // through silent mode, which is video_player's forced default. Re-asserted here
       // because that default is set on the plugin's first init and never downgrades.
       unawaited(const VideoNative().respectSilentSwitch());
-      // Offer where this clip has got to, so tapping the card opens the viewer there rather
-      // than starting the same clip over.
+      // Offer the running player, so tapping the card opens the viewer on the clip as it is
+      // here rather than starting a second one over.
       widget.autoplay.publish(
         _slot,
         mediaId: widget.media.id,
         groupId: widget.groupId,
-        position: () => controller.value.position,
+        player: this,
       );
       if (widget.autoplay.isActive(_slot)) controller.play();
       setState(() => _firstFrame = true);
     }).catchError((_) {
       // Nothing to show the user: the poster is already what they are looking at.
     });
+  }
+
+  @override
+  Duration get position => _controller?.value.position ?? Duration.zero;
+
+  @override
+  VideoPlayerController? detach() {
+    final controller = _controller;
+    if (controller == null) return null;
+    _controller = null;
+    _firstFrame = false;
+    _lentOut = controller;
+    widget.autoplay.unpublish(_slot);
+    // Back to the poster, which is the same still the video was drawn over: nothing moves
+    // as the viewer takes the picture on.
+    setState(() {});
+    return controller;
+  }
+
+  @override
+  bool reattach(VideoPlayerController controller) {
+    if (!mounted || !identical(_lentOut, controller)) return false;
+    _lentOut = null;
+    _controller = controller;
+    _firstFrame = true;
+    controller.setVolume(ref.read(clipsMutedProvider) ? 0 : 1);
+    widget.autoplay.publish(
+      _slot,
+      mediaId: widget.media.id,
+      groupId: widget.groupId,
+      player: this,
+    );
+    // The feed may well have moved on underneath the viewer, in which case this tile is
+    // holding a player it is not allowed to run yet.
+    if (widget.autoplay.isActive(_slot)) {
+      controller.play();
+    } else {
+      controller.pause();
+    }
+    setState(() {});
+    return true;
   }
 
   void _teardown() {
