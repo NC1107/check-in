@@ -30,7 +30,7 @@ void main() {
       overrides: [multiSessionProvider.overrideWith(() => controller)],
       child: MaterialApp(
         // A phone-width column, like the card the deck actually lives in (post_card.dart's
-        // feed-width card). The deck's 4:3 AspectRatio page needs a bounded width to avoid
+        // feed-width card). The deck's AspectRatio page needs a bounded width to avoid
         // overflowing the test surface's fixed 600-tall viewport.
         home: Scaffold(
           body: SingleChildScrollView(
@@ -577,6 +577,72 @@ void main() {
         expect(aspect, inInclusiveRange(0.6, 1.4),
             reason: 'tile $i of $n rendered at $size (aspect ${aspect.toStringAsFixed(2)}) - '
                 'outside the band a recognisable photo needs');
+      }
+    });
+  }
+
+  /// Pumps the deck at an explicit width and text scale - unlike [pumpDeck]'s fixed 340px,
+  /// used for the clipping-under-text-scale tests below, which specifically need this app's
+  /// narrowest supported width (320dp) and a scale beyond the platform default (this app
+  /// never clamps textScaler - see _deckAspectRatio's doc comment).
+  Future<void> pumpDeckScaled(WidgetTester tester, RecapPayload recap,
+      {required double width, required double textScale}) async {
+    final controller =
+        MultiSessionController.seeded(MultiSession(groups: [account], restored: true));
+    await tester.pumpWidget(ProviderScope(
+      overrides: [multiSessionProvider.overrideWith(() => controller)],
+      child: MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(textScaler: TextScaler.linear(textScale)),
+          child: Scaffold(
+            body: SingleChildScrollView(
+              child: SizedBox(
+                  width: width, child: RecapDeck(recap: recap, groupId: account.id, postId: 1)),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+  }
+
+  /// The gap the tile-aspect-band test above cannot see: tile size comes from the grid
+  /// delegate and is blind to whether its ancestor can actually paint it. 4:5 (an earlier
+  /// value tried for _deckAspectRatio) passed that aspect test cleanly while still clipping
+  /// the second row's tiles by several px at 1.3x text scale on a 320dp-wide device - an
+  /// ordinary accessibility setting this app never clamps against. These assert on each
+  /// tile's actual painted bounds against the page's own bounds instead, at the platform
+  /// default scale and two accessibility scales beyond it.
+  for (final scale in [1.0, 1.3, 1.6]) {
+    testWidgets(
+        "the Wall's second row is never clipped at textScaler ${scale}x on a 320dp-wide "
+        'device', (tester) async {
+      final cards = [for (var i = 1; i <= 4; i++) quoteCard(authorId: i, authorName: 'Member $i')];
+      final recap = RecapPayload(
+        periodLabel: 'August 2026',
+        cadence: 'monthly',
+        groupName: 'Ridgeway Family',
+        groupColor: 'coral',
+        stats: stats(),
+        panels: [RecapCollagePanel(title: 'The Wall', cards: cards)],
+      );
+      await pumpDeckScaled(tester, recap, width: 320, textScale: scale);
+      await swipeToPage(tester, find.byType(PageView), 1);
+      expect(tester.takeException(), isNull);
+
+      // The page's own outer bound - what a viewer's eye treats as "the card" - against
+      // each tile's actual painted rect. A tile whose bottom edge falls past the page's own
+      // is clipped by the PageView/GridView's own Viewport, however clean its "logical"
+      // aspect ratio (measured by the test above) looked.
+      final pageRect = tester.getRect(find.byType(AspectRatio));
+      final tiles = find.byType(ClipRRect);
+      expect(tiles, findsNWidgets(4));
+      for (var i = 0; i < 4; i++) {
+        final tileRect = tester.getRect(tiles.at(i));
+        expect(tileRect.bottom, lessThanOrEqualTo(pageRect.bottom),
+            reason: 'tile $i bottom ${tileRect.bottom} exceeds the page bottom '
+                '${pageRect.bottom} at ${scale}x text scale - clipped by '
+                '${tileRect.bottom - pageRect.bottom}px');
       }
     });
   }

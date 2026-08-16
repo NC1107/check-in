@@ -101,7 +101,7 @@ class RecapDeckState extends State<RecapDeck> {
       children: [
         AspectRatio(
           // Every page - the cover, an awards page, a chunked Wall page - shares this one
-          // footprint; see _deckAspectRatio's own doc comment for why it's 4:5 rather than
+          // footprint; see _deckAspectRatio's own doc comment for why it's 3:4 rather than
           // round 3's 4:3.
           aspectRatio: _deckAspectRatio,
           child: PageView.builder(
@@ -160,23 +160,28 @@ const _wallCardsPerPage = 4;
 
 /// The deck's page footprint: width:height. Portrait, not round 3's 4:3 - a 2x2 grid of
 /// portrait (0.85-aspect) tiles needs more height than a 4:3 page has room for, which is what
-/// let the second row go unreachable in the first place. The arithmetic, page width W and
-/// this ratio R (so page height H = W / R):
-///   - content width after the panel's 10px padding: Wc = W - 20
-///   - each cell (2 columns, 8px crossAxisSpacing): Cw = (Wc - 8) / 2
-///   - each cell's height at childAspectRatio 0.85:    Ch = Cw / 0.85
-///   - two rows plus 8px mainAxisSpacing need:          2*Ch + 8
-///   - available grid height, after the same 10px padding and the panel title's own ~36px
-///     block (present on a chunk's first page, the tightest case): H - 20 - 36
-/// Solving 2*Ch + 8 <= H - 20 - 36 for R leaves R <= ~0.79 at a typical card width - so 4:5
-/// (0.8) is already at the edge of the model, but 4:5 is also "a normal post size" in this
-/// app (an ordinary portrait photo post renders at the same ratio) rather than a bespoke
-/// number invented for this fix, and the widget tests below (the tile-aspect-band test in
-/// particular) are what actually confirm it holds with real text metrics, not just this
-/// estimate.
-const _deckAspectRatio = 4 / 5;
+/// let the second row go unreachable in the first place.
+///
+/// 4:5 (0.8) - the first ratio tried here - looked right on paper but left almost no real
+/// margin: measured at a 320dp-wide device (this app's floor) at the platform's default text
+/// scale, the second row cleared the page by well under a pixel, and at 1.3x text scale (an
+/// ordinary accessibility setting - textScaler is never clamped anywhere in this app) it
+/// clipped outright, by several px per tile. Tile height comes from the grid delegate, not
+/// from the page it sits in, so nothing in the tile-aspect-band test below is sensitive to
+/// this - only measuring a tile's actual painted bounds against the page's is, which is what
+/// the textScaler-parameterised tests do.
+///
+/// 3:4 (0.75) is what's used instead - picked the same way, but leaving real headroom rather
+/// than sitting at the calculated edge again: at 320dp width it clears the second row by
+/// ~27px at the default text scale, ~20px at 1.3x, and ~12px even at 1.6x (a device set
+/// noticeably larger than "large text") - margin wide enough to absorb real font-metric
+/// variance across platforms, not just this one measurement.
+const _deckAspectRatio = 3 / 4;
 
-/// Splits [cards] into consecutive groups of at most [size], preserving order.
+/// Splits [cards] into consecutive groups of at most [size], preserving order. An empty
+/// [cards] is never actually reached here - BuildRecap (recap.go) only ever appends a
+/// collage panel when selectCollageCards returned at least one card - but this still
+/// degrades to zero chunks rather than one empty one if that contract ever changes.
 List<List<RecapCard>> _chunkCards(List<RecapCard> cards, int size) {
   final out = <List<RecapCard>>[];
   for (var i = 0; i < cards.length; i += size) {
