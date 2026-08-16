@@ -78,3 +78,14 @@ flutter pub get
 flutter run            # against a running server; enter its URL on first launch
 ```
 
+The Go suite includes DB-backed tests that drive the real HTTP handlers end to end.
+They skip themselves unless `TESTDB_URL` points at a PostgreSQL database they may wipe, so a plain `go test ./...` still needs nothing installed.
+To run them, point that variable at a throwaway database (CI uses a service container):
+
+```bash
+docker run --rm -d --name checkin-testdb -p 55432:5432 \
+  -e POSTGRES_USER=checkin -e POSTGRES_PASSWORD=checkin -e POSTGRES_DB=checkin_test postgres:16
+cd server
+TESTDB_URL='postgres://checkin:checkin@localhost:55432/checkin_test?sslmode=disable' go test ./... -race
+```
+

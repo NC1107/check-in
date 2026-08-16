@@ -11,6 +11,7 @@ Post _post({
   int comments = 0,
   bool liked = false,
   DateTime? at,
+  List<({int id, String name})> people = const [],
 }) =>
     Post(
       id: id,
@@ -24,6 +25,7 @@ Post _post({
       likedByViewer: liked,
       groupId: group,
       crossPostId: crossPostId,
+      people: people,
     );
 
 void main() {
@@ -59,6 +61,29 @@ void main() {
       ]);
       expect(out, hasLength(2));
       expect(out.every((p) => !p.isCrossPost), isTrue);
+    });
+
+    test("the card carries the representative copy's own tags, with its own group", () {
+      // The same human is tagged in both copies under each server's id for them. A tag id
+      // only means anything against the group it came from, so the copy that renders must
+      // hand its own ids and its own group to the tagged-people line - mixing the two would
+      // link a name to a stranger's profile on the other server.
+      final out = collapseCrossPosts([
+        _post(
+            id: 42,
+            group: 'family',
+            crossPostId: 'x',
+            at: DateTime(2026, 1, 1, 10),
+            people: const [(id: 5, name: 'Ada')]),
+        _post(
+            id: 17,
+            group: 'climbing',
+            crossPostId: 'x',
+            at: DateTime(2026, 1, 1, 11),
+            people: const [(id: 9, name: 'Ada')]),
+      ]);
+      expect(out.single.groupId, 'climbing');
+      expect(out.single.peopleIds, [9]);
     });
 
     test('the newest copy represents the collapsed card', () {

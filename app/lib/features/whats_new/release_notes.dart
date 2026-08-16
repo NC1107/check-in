@@ -19,6 +19,27 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.10',
+    highlights: [
+      'Tag people on a check-in shared to several groups - each group sees its own members tagged, and the picker notes who is not in which group.',
+      'Tapping a playing clip now opens it full screen exactly in place - no restart, no stutter.',
+    ],
+  ),
+  ReleaseNote(
+    version: '1.9',
+    highlights: [
+      'Post video clips - record or pick a video, trim it down to ten seconds, and share it like a photo.',
+      'Clips play right in your feed as you scroll, with sound following your ring/silent switch. Tap one to go full screen exactly where it left off.',
+      'Invite someone with a link - it opens Check-In and fills in the group address for them. Hosts: find yours in the admin panel.',
+      'Joining another group now fills in your name and photo from the account you already have.',
+      "One check-in shared to several groups you're both in sends one notification now, not one per group.",
+      'GIFs animate now instead of freezing on their first frame.',
+      'Save any photo or video from a check-in to your camera roll.',
+      'Tapping a photo flies it into full screen instead of fading.',
+      'Joining a group no longer asks you to pick an app color again (or quietly changes the one you had).',
+    ],
+  ),
+  ReleaseNote(
     version: '1.3',
     highlights: [
       'Share one check-in to several groups at once - it shows up as a single card, not a separate copy in each feed.',

@@ -1,6 +1,6 @@
 # Technical Debt & Audit Findings
 
-Last updated: 2026-06-26 (re-scan via /next-task discovery; resolved + new items below)
+Last updated: 2026-08-15 (stabilization pass; resolved + remaining items below)
 
 Overall the codebase is in good shape: argon2id password hashing with constant-time
 verify, opaque SHA-256-hashed session tokens with server-side expiry + status checks,
@@ -9,7 +9,38 @@ per-IP auth rate limiting with idle eviction, server-side image re-encode that s
 EXIF/GPS, and a sensible secure-headers/CSP baseline. The items below are the gaps found.
 
 ## Summary
-**Fixed in 2026-06-25 pass: 6 · Resolved since: 3 · Remaining (documented): 6** - Critical: 0 · High: 0 · Medium: 2 · Low: 4
+**Fixed in 2026-06-25 pass: 6 · Resolved since: 5 · Remaining (documented): 4** - Critical: 0 · High: 0 · Medium: 1 · Low: 3
+
+---
+
+## Fixed 2026-08-15 (stabilization pass)
+
+- **[testing/medium] No DB-backed handler/integration tests - done** - every `internal/api` test
+  was a pure helper test, so the HTTP handlers had no end-to-end coverage at all.
+  `server/internal/api/harness_test.go` now stands up the production router (`api.New(...).Router()`)
+  in front of a real `db.DB`, applies the embedded migrations, and hands tests helpers for
+  members, JSON calls, multipart uploads and stored-file assertions.
+  Isolation is a catalog-driven `TRUNCATE ... RESTART IDENTITY CASCADE` between tests rather
+  than a rolled-back transaction, because the handlers open their own transactions through the
+  shared pool and there is no outer transaction to wrap them in.
+  The suite skips itself unless `TESTDB_URL` is set, so a local `go test ./...` needs no
+  database; CI supplies a `postgres:16` service container in both `ci.yml` and `release.yml`.
+  First wave in `server/internal/api/integration_test.go`: the signup allowlist gate and
+  first-admin bootstrap, the signup `mediaId` rejection, login/logout and 401 handling, the
+  post-with-media contract end to end (typed array plus the legacy `mediaIds`/`kind`/cover a
+  published client reads), cross-post id and video kind derivation, upload validation
+  (oversize, over-length clip, non-media), media serving (Range 206, `?variant=poster` 404
+  when absent, IDOR on an unposted upload), orphaned clip *and poster* removal on delete,
+  block filtering across feed and direct link, and the public `/join` page's headers.
+- **[security/low] Content endpoints unthrottled - done** - only the auth endpoints had a
+  limiter, so `POST /api/posts`, `/comments`, `/like` and `/media` were bounded by nothing but
+  the body-size cap. `contentLimits` (`server/internal/api/ratelimit.go`) adds a bucket per
+  action, keyed per USER rather than per IP: these routes are authenticated, and a household
+  behind one address must not share a posting budget. 30 posts/min (burst 10), 60 comments/min
+  (burst 20), 60 likes/min (burst 30), 30 uploads/min (burst 20 - a ten-clip check-in is twenty
+  requests, each clip plus its poster, so a smaller burst would reject a post the app let the
+  member build). The limits stop automation rather than pacing anyone, and a drained bucket
+  refills continuously, so the app recovers on its own.
 
 ---
 
@@ -115,18 +146,11 @@ green; `gofmt` clean.
 ## Remaining (documented)
 
 ### Medium
-- **[testing] No DB-backed handler/integration tests** — the new tests cover pure logic and
-  widgets, but the HTTP handlers (signup/login/feed/post flows) aren't exercised end-to-end.
-  *Fix:* stand up a throwaway Postgres in CI (service container) and add httptest-based
-  handler tests. Effort: large.
 - **[performance] Feed correlated subqueries** — `server/internal/db/queries.go` `Feed`
   runs 4 per-row subqueries (like count, comment count, liked-exists, comment preview).
   Fine at current scale; revisit with JOINs/aggregates if the feed grows. Effort: medium.
 
 ### Low
-- **[security] Content endpoints unthrottled** — only auth endpoints are rate-limited;
-  `POST /api/posts`, `/comments`, `/like`, `/media` are not. Trusted group → low risk; add
-  a per-user limiter if the tester pool widens. Effort: small.
 - **[maintenance] Orphan media** — an upload followed by a failed `createPost` leaves an
   unreferenced media row + file (cleanup only runs via `DeletePost`; nothing reclaims an
   upload that never became a post). Add a periodic sweep or make upload+post transactional.
@@ -151,9 +175,9 @@ green; `gofmt` clean.
 - [x] Expired-session cleanup (hourly goroutine, main.go:83)
 - [x] Photo-upload OOM crash fix (downscale-before-orient + 512M)
 - [x] iPhone HEIC upload fix (client-side transcode)
-- [ ] DB-backed handler/integration tests
+- [x] DB-backed handler/integration tests
 - [ ] Feed query optimization
-- [ ] Content-endpoint throttling
+- [x] Content-endpoint throttling
 - [ ] Orphan-media cleanup
 - [ ] Global search pagination
 - [ ] Tap-target Semantics (a11y)
