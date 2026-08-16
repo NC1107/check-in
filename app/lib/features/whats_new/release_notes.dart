@@ -19,6 +19,15 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.11',
+    highlights: [
+      'Weekly recaps: your group now gets a recap post - the week in one swipeable deck, with the most-loved check-ins ranked (everyone who posted makes the wall) and awards like Night Owl and Most Travelled.',
+      'Hosts can change the recap schedule, or generate one on demand for any period, from group settings.',
+      'Save any recap panel to your camera roll to share it.',
+      'GIFs: tap the new GIF button when writing a check-in or a comment to search and attach one.',
+    ],
+  ),
+  ReleaseNote(
     version: '1.10',
     highlights: [
       'Tag people on a check-in shared to several groups - each group sees its own members tagged, and the picker notes who is not in which group.',
