@@ -31,6 +31,11 @@ const postMediaExpr = `, COALESCE((
 		FROM post_media pm JOIN media m ON m.id = pm.media_id
 		WHERE pm.post_id = p.id), '[]'::json)`
 
+// recapExpr appends a recap post's panel-deck payload verbatim (it is already the shape
+// RecapPayload unmarshals into). NULL for the ~49 of 50 rows that aren't a recap, which is
+// why the payload lives in its own table rather than a column on the hot feed row.
+const recapExpr = `, (SELECT r.payload FROM recaps r WHERE r.post_id = p.id)`
+
 // postPeopleExpr appends the members tagged in post p as a JSON array of {id, name},
 // name-sorted. Empty array when no one is tagged.
 const postPeopleExpr = `, COALESCE((
@@ -740,7 +745,11 @@ func (d *DB) SetUserProfileMedia(ctx context.Context, userID, mediaID int64) err
 // CreatePost inserts a post. Its kind is derived from what is attached rather than taken
 // from the caller: the attachments are already being read here to check ownership, and a
 // post whose kind disagrees with its contents is a rendering bug on every client.
-func (d *DB) CreatePost(ctx context.Context, authorID int64, body string, mediaIDs []int64, location *string, peopleIDs []int64, crossPostID *string) (Post, error) {
+//
+// lat/lng are the coordinates the client read at capture time, rounded to 2 decimal
+// places; nil for a post with no GPS, and always nil for a text post (mirrors location).
+// Stored for the v1.5 map panel - nothing reads them back yet.
+func (d *DB) CreatePost(ctx context.Context, authorID int64, body string, mediaIDs []int64, location *string, peopleIDs []int64, crossPostID *string, lat, lng *float64) (Post, error) {
 	var p Post
 	tx, err := d.Pool.Begin(ctx)
 	if err != nil {
@@ -759,10 +768,10 @@ func (d *DB) CreatePost(ctx context.Context, authorID int64, body string, mediaI
 
 	cover := coverFor(attached)
 	err = tx.QueryRow(ctx, `
-		INSERT INTO posts (author_id, kind, body, media_id, location, cross_post_id)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO posts (author_id, kind, body, media_id, location, cross_post_id, lat, lng)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id, author_id, kind, body, media_id, location, created_at, cross_post_id`,
-		authorID, kind, body, cover, location, crossPostID,
+		authorID, kind, body, cover, location, crossPostID, lat, lng,
 	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID)
 	if err != nil {
 		return p, err
@@ -902,21 +911,23 @@ func dedupeExcluding(ids []int64, exclude int64) []int64 {
 func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, locations []string, before *time.Time, beforeID *int64, limit int) ([]Post, error) {
 	rows, err := d.Pool.Query(ctx, `
 		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id,
-		       u.name, u.profile_media_id,
+		       CASE WHEN p.kind = 'recap' THEN sc.name ELSE u.name END,
+		       CASE WHEN p.kind = 'recap' THEN NULL ELSE u.profile_media_id END,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
 		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
-		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+`
+		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+recapExpr+`
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
+		JOIN server_config sc ON sc.id = 1
 		WHERE ($2::bigint IS NULL OR p.author_id = $2)
 		  AND ($3::text[] IS NULL OR p.location = ANY($3::text[]))
 		  AND ($4::timestamptz IS NULL
 		       OR ($6::bigint IS NULL AND p.created_at < $4)
 		       OR ($6::bigint IS NOT NULL AND (p.created_at, p.id) < ($4, $6)))
 		  AND u.status = 'active'
-		  AND p.author_id NOT IN (
-		      SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)
+		  AND (p.kind = 'recap' OR p.author_id NOT IN (
+		      SELECT blocked_id FROM user_blocks WHERE blocker_id = $1))
 		ORDER BY p.created_at DESC, p.id DESC
 		LIMIT $5`, viewerID, authorID, locations, before, limit, beforeID)
 	if err != nil {
@@ -926,9 +937,9 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 	var posts []Post
 	for rows.Next() {
 		var p Post
-		var preview, media, people []byte
+		var preview, media, people, recap []byte
 		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people); err != nil {
+			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people, &recap); err != nil {
 			return nil, err
 		}
 		if len(preview) > 0 {
@@ -938,6 +949,7 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 			_ = json.Unmarshal(people, &p.People)
 		}
 		p.applyMedia(media)
+		p.applyRecap(recap)
 		posts = append(posts, p)
 	}
 	return posts, rows.Err()
@@ -979,15 +991,17 @@ func (d *DB) Locations(ctx context.Context) ([]LocationCount, error) {
 func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limit int) ([]Post, error) {
 	rows, err := d.Pool.Query(ctx, `
 		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id,
-		       u.name, u.profile_media_id,
+		       CASE WHEN p.kind = 'recap' THEN sc.name ELSE u.name END,
+		       CASE WHEN p.kind = 'recap' THEN NULL ELSE u.profile_media_id END,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
 		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
-		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+`
+		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+recapExpr+`
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
+		JOIN server_config sc ON sc.id = 1
 		WHERE u.status = 'active'
-		  AND p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)
+		  AND (p.kind = 'recap' OR p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1))
 		  AND (
 		      p.body ILIKE '%' || $2 || '%'
 		   OR EXISTS (SELECT 1 FROM comments c WHERE c.post_id = p.id AND c.body ILIKE '%' || $2 || '%'
@@ -1002,9 +1016,9 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 	var posts []Post
 	for rows.Next() {
 		var p Post
-		var preview, media, people []byte
+		var preview, media, people, recap []byte
 		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people); err != nil {
+			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people, &recap); err != nil {
 			return nil, err
 		}
 		if len(preview) > 0 {
@@ -1014,6 +1028,7 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 			_ = json.Unmarshal(people, &p.People)
 		}
 		p.applyMedia(media)
+		p.applyRecap(recap)
 		posts = append(posts, p)
 	}
 	return posts, rows.Err()
@@ -1022,19 +1037,23 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 // GetPost returns a single post with engagement counts from the viewer's perspective.
 func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) {
 	var p Post
-	var preview, media, people []byte
+	var preview, media, people, recap []byte
 	err := d.Pool.QueryRow(ctx, `
 		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id,
-		       u.name, u.profile_media_id,
+		       CASE WHEN p.kind = 'recap' THEN sc.name ELSE u.name END,
+		       CASE WHEN p.kind = 'recap' THEN NULL ELSE u.profile_media_id END,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
 		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
-		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+`
-		FROM posts p JOIN users u ON u.id = p.author_id
+		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+recapExpr+`
+		FROM posts p
+		JOIN users u ON u.id = p.author_id
+		JOIN server_config sc ON sc.id = 1
 		WHERE p.id = $2 AND u.status = 'active'
-		  AND p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)`, viewerID, postID,
+		  AND (p.kind = 'recap' OR p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1))`,
+		viewerID, postID,
 	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID,
-		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people)
+		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people, &recap)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, ErrNotFound
 	}
@@ -1046,6 +1065,7 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 	}
 	if err == nil {
 		p.applyMedia(media)
+		p.applyRecap(recap)
 	}
 	return p, err
 }
