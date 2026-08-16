@@ -19,6 +19,17 @@ func seedRecapActivity(h *harness, admin, member actor) {
 	h.createPost(member, map[string]any{"kind": "text", "body": "Wednesday check-in"})
 }
 
+// setUserTitle stamps a member's title directly (bypassing BestowTitles), so a test can pin
+// down a "before" state - an existing title from a prior bestowal - to check it survives
+// (or doesn't) a subsequent one.
+func setUserTitle(t *testing.T, h *harness, userID int64, title string, setAt time.Time) {
+	t.Helper()
+	if _, err := h.db.Pool.Exec(context.Background(),
+		`UPDATE users SET title = $2, title_set_at = $3 WHERE id = $1`, userID, title, setAt); err != nil {
+		t.Fatalf("seed title: %v", err)
+	}
+}
+
 // TestRecapSchedulerIdempotency invokes the scheduled-recap generator twice for the exact
 // same period - as a restart mid-tick, or two ticks landing close together, would - and
 // pins that only one post results. A bug here (e.g. dropping the advisory lock or the
@@ -202,7 +213,7 @@ func TestRecapWireShape(t *testing.T) {
 	start := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
 	end := time.Now().Add(1 * time.Hour).UTC().Format(time.RFC3339)
 	res := h.post("/api/admin/recaps", admin.Token,
-		map[string]any{"periodStart": start, "periodEnd": end, "panels": []string{"collage", "awards"}}).
+		map[string]any{"periodStart": start, "periodEnd": end, "panels": []string{"collage"}}).
 		expect(http.StatusCreated)
 
 	body := string(res.Body)
@@ -475,5 +486,246 @@ func TestCreateRecapPostManualOriginDeduplicatesUnderLock(t *testing.T) {
 	}
 	if recaps != 1 {
 		t.Errorf("recap posts in feed = %d, want exactly 1", recaps)
+	}
+}
+
+// TestGenerateRecapRejectsAwardsPanel pins that Awards Night is fully retired from
+// generation, not merely hidden client-side: the on-demand endpoint 400s a request for it
+// rather than silently accepting and dropping it.
+func TestGenerateRecapRejectsAwardsPanel(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+
+	start := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	end := time.Now().Add(1 * time.Hour).UTC().Format(time.RFC3339)
+	res := h.post("/api/admin/recaps", admin.Token,
+		map[string]any{"periodStart": start, "periodEnd": end, "panels": []string{"awards"}}).
+		expect(http.StatusBadRequest)
+	if !strings.Contains(res.errorMessage(), "awards") {
+		t.Errorf("error = %q, want it to mention the rejected panel type", res.errorMessage())
+	}
+}
+
+// TestGeneratedRecapNeverCarriesAwardsPanel pins that neither generation path - scheduled
+// or manual - can produce an awards panel any more, even though the wire format
+// (RecapPanel.Awards, "awards" as a payload panel type) still exists so an
+// already-published recap from before this version keeps rendering.
+func TestGeneratedRecapNeverCarriesAwardsPanel(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+	member := h.member(admin, "Sam")
+	seedRecapActivity(h, admin, member)
+
+	start := time.Now().Add(-1 * time.Hour)
+	end := time.Now().Add(1 * time.Hour)
+
+	h.srv.generateScheduledRecap(context.Background(), "weekly", start, end)
+	feed := h.feed(admin)
+	var scheduled *db.Post
+	for i := range feed {
+		if feed[i].Kind == "recap" {
+			scheduled = &feed[i]
+			break
+		}
+	}
+	if scheduled == nil {
+		t.Fatal("no scheduled recap in feed")
+	}
+	for _, p := range scheduled.Recap.Panels {
+		if p.Type == "awards" {
+			t.Error("scheduled recap carries an awards panel - it was supposed to be retired")
+		}
+	}
+
+	var manual db.Post
+	h.post("/api/admin/recaps", admin.Token, map[string]any{
+		"periodStart": start.UTC().Format(time.RFC3339),
+		"periodEnd":   end.UTC().Format(time.RFC3339),
+		"panels":      []string{"collage"},
+	}).expect(http.StatusCreated).decode(&manual)
+	for _, p := range manual.Recap.Panels {
+		if p.Type == "awards" {
+			t.Error("manual recap carries an awards panel - it was supposed to be retired")
+		}
+	}
+}
+
+// TestScheduledRecapBestowsTitlesAndPreservesNonQualifying pins the scheduler's automatic
+// bestowal: a member who qualifies for an award this period gets it as their title, and a
+// member who qualifies for nothing keeps whatever title they already had - title persists
+// until replaced, it is never cleared by a quiet period.
+func TestScheduledRecapBestowsTitlesAndPreservesNonQualifying(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+	sam := h.member(admin, "Sam")
+	alex := h.member(admin, "Alex")
+
+	staleSetAt := time.Now().Add(-30 * 24 * time.Hour).UTC().Truncate(time.Second)
+	setUserTitle(t, h, alex.ID, "biggest_fan", staleSetAt)
+
+	h.createPost(admin, map[string]any{"kind": "text", "body": "Monday check-in"})
+	samPost := h.createPost(sam, map[string]any{"kind": "text", "body": "Tuesday check-in"})
+	h.createPost(sam, map[string]any{"kind": "text", "body": "Wednesday check-in"})
+	h.like(admin, samPost.ID) // the only like anyone gets this period - makes Sam the sole most_liked qualifier
+
+	start := time.Now().Add(-1 * time.Hour)
+	end := time.Now().Add(1 * time.Hour)
+	h.srv.generateScheduledRecap(context.Background(), "weekly", start, end)
+
+	samUser, err := h.db.GetUser(context.Background(), sam.ID)
+	if err != nil {
+		t.Fatalf("get sam: %v", err)
+	}
+	if samUser.Title == nil || *samUser.Title != "most_liked" {
+		t.Errorf("sam's title = %v, want most_liked (the only member with any likes this period)", samUser.Title)
+	}
+	if samUser.TitleSetAt == nil {
+		t.Error("sam's titleSetAt is nil after being bestowed a title")
+	}
+
+	alexUser, err := h.db.GetUser(context.Background(), alex.ID)
+	if err != nil {
+		t.Fatalf("get alex: %v", err)
+	}
+	if alexUser.Title == nil || *alexUser.Title != "biggest_fan" {
+		t.Errorf("alex's title = %v, want it untouched at biggest_fan - alex qualified for no award this period", alexUser.Title)
+	}
+	if alexUser.TitleSetAt == nil || !alexUser.TitleSetAt.Equal(staleSetAt) {
+		t.Errorf("alex's titleSetAt changed to %v, want it left at %v", alexUser.TitleSetAt, staleSetAt)
+	}
+}
+
+// TestGenerateRecapBestowTitlesFlag pins the on-demand endpoint's opt-in: a manual recap
+// with no bestowTitles flag never touches titles, and one with bestowTitles: true does.
+func TestGenerateRecapBestowTitlesFlag(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+	member := h.member(admin, "Sam")
+	seedRecapActivity(h, admin, member)
+
+	start := time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	end := time.Now().Add(1 * time.Hour).UTC().Format(time.RFC3339)
+
+	h.post("/api/admin/recaps", admin.Token,
+		map[string]any{"periodStart": start, "periodEnd": end, "panels": []string{"collage"}}).
+		expect(http.StatusCreated)
+
+	adminUser, err := h.db.GetUser(context.Background(), admin.ID)
+	if err != nil {
+		t.Fatalf("get admin: %v", err)
+	}
+	if adminUser.Title != nil {
+		t.Errorf("admin's title = %q after a manual recap with no bestowTitles flag, want nil", *adminUser.Title)
+	}
+
+	h.post("/api/admin/recaps", admin.Token, map[string]any{
+		"periodStart":  start,
+		"periodEnd":    end,
+		"panels":       []string{"collage"},
+		"replace":      true,
+		"bestowTitles": true,
+	}).expect(http.StatusCreated)
+
+	adminUser, err = h.db.GetUser(context.Background(), admin.ID)
+	if err != nil {
+		t.Fatalf("get admin again: %v", err)
+	}
+	if adminUser.Title == nil {
+		t.Error("admin has no title after a manual recap with bestowTitles: true")
+	}
+}
+
+// TestServerInfoAdvertisesTitlesCapability pins the capability signal a client gates the
+// on-demand generate sheet's "bestow titles" toggle on.
+func TestServerInfoAdvertisesTitlesCapability(t *testing.T) {
+	h := newHarness(t)
+	h.admin("Robin")
+
+	var info struct {
+		Titles bool `json:"titles"`
+	}
+	h.get("/api/server-info", "").expect(http.StatusOK).decode(&info)
+	if !info.Titles {
+		t.Error(`server-info "titles" = false, want true`)
+	}
+}
+
+// TestGetUserSerializesTitle pins that both GET /api/users/{id} and GET /api/me include
+// title and titleSetAt once a title has been bestowed, and that the key is absent
+// (omitempty), not present-but-null, before that.
+func TestGetUserSerializesTitle(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+	member := h.member(admin, "Sam")
+
+	res := h.get("/api/users/"+itoa(member.ID), admin.Token).expect(http.StatusOK)
+	if strings.Contains(string(res.Body), `"title"`) {
+		t.Errorf("a member with no title yet serializes a title key at all: %s", res.Body)
+	}
+
+	setAt := time.Now().UTC().Truncate(time.Second)
+	setUserTitle(t, h, member.ID, "night_owl", setAt)
+
+	var user struct {
+		Title      *string    `json:"title"`
+		TitleSetAt *time.Time `json:"titleSetAt"`
+	}
+	h.get("/api/users/"+itoa(member.ID), admin.Token).expect(http.StatusOK).decode(&user)
+	if user.Title == nil || *user.Title != "night_owl" {
+		t.Errorf("title = %v, want night_owl", user.Title)
+	}
+	if user.TitleSetAt == nil || !user.TitleSetAt.Equal(setAt) {
+		t.Errorf("titleSetAt = %v, want %v", user.TitleSetAt, setAt)
+	}
+
+	// /api/me comes off userFrom (UserForToken), a separate query from GetUser - pin it
+	// carries the same fields rather than assuming the two queries stay in sync.
+	var me struct {
+		Title *string `json:"title"`
+	}
+	h.get("/api/me", member.Token).expect(http.StatusOK).decode(&me)
+	if me.Title == nil || *me.Title != "night_owl" {
+		t.Errorf("/api/me title = %v, want night_owl", me.Title)
+	}
+}
+
+// TestOrderedUniquePanelsPreservesRequestOrder pins the fix for the panel-order bug: unlike
+// sortedUniquePanels (the alphabetical form used only as FindManualRecap's lookup key),
+// orderedUniquePanels - the one that becomes RecapSpec.Panels - must preserve the order
+// panels were requested in, deduping without reordering.
+func TestOrderedUniquePanelsPreservesRequestOrder(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []string
+		want  []string
+	}{
+		{"already in request order", []string{"collage", "z-future-panel"}, []string{"collage", "z-future-panel"}},
+		{"reversed order is preserved, not alphabetized", []string{"z-future-panel", "collage"}, []string{"z-future-panel", "collage"}},
+		{"duplicates dropped, first occurrence's position kept", []string{"b", "a", "b"}, []string{"b", "a"}},
+		{"blank entries trimmed away", []string{" b ", "", "a"}, []string{"b", "a"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := orderedUniquePanels(tt.input)
+			if len(got) != len(tt.want) {
+				t.Fatalf("orderedUniquePanels(%v) = %v, want %v", tt.input, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("orderedUniquePanels(%v)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestSortedUniquePanelsStillSorts pins that the separate, alphabetical helper used for the
+// duplicate-recap lookup key is unaffected by the orderedUniquePanels fix above - it must
+// keep normalising to a canonical order regardless of request order.
+func TestSortedUniquePanelsStillSorts(t *testing.T) {
+	got := sortedUniquePanels([]string{"z-future-panel", "collage"})
+	want := []string{"collage", "z-future-panel"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("sortedUniquePanels = %v, want %v (alphabetical)", got, want)
 	}
 }

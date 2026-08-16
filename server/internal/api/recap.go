@@ -21,8 +21,9 @@ const recapTick = 10 * time.Minute
 
 // recapV1Panels is every panel a scheduled recap carries in v1. There's no per-cadence
 // panel picker for the standing schedule (unlike the on-demand endpoint, which lets an
-// admin choose) - the map and social-graph panels are v1.5.
-var recapV1Panels = []string{"awards", "collage"}
+// admin choose) - the map and social-graph panels are v1.5. Awards Night was retired in
+// favour of profile titles (see generateScheduledRecap's BestowTitles call).
+var recapV1Panels = []string{"collage"}
 
 // recapMaxManualSpan bounds an on-demand recap's custom period: a year plus a day of slack
 // for the query's exclusive end, generous enough for any legitimate "this year" request
@@ -154,6 +155,13 @@ func (s *Server) generateScheduledRecap(ctx context.Context, cadence string, sta
 	if !inserted {
 		return // another tick or process already generated this period
 	}
+	// Titles are bestowed in the same flow as every scheduled recap, unconditionally - unlike
+	// the on-demand endpoint there's no per-request opt-in for the standing schedule. A
+	// failure here doesn't unwind the post: the recap itself already exists and is more
+	// valuable than the titles are timely.
+	if err := s.db.BestowTitles(ctx, start, end); err != nil {
+		log.Printf("generateScheduledRecap: bestow titles: %v", err)
+	}
 	go s.notifyRecap(postID)
 }
 
@@ -181,8 +189,10 @@ func (s *Server) notifyRecap(postID int64) {
 		s.pushData("recap", postID), "recap-"+strconv.FormatInt(postID, 10))
 }
 
-// recapValidPanels is every panel type the on-demand endpoint accepts in v1.
-var recapValidPanels = map[string]bool{"collage": true, "awards": true}
+// recapValidPanels is every panel type the on-demand endpoint accepts in v1. Awards Night
+// was retired in favour of profile titles - "awards" is no longer accepted here even though
+// a payload already generated with it (before this version) still round-trips fine.
+var recapValidPanels = map[string]bool{"collage": true}
 
 type generateRecapReq struct {
 	PeriodStart string   `json:"periodStart"` // RFC3339
@@ -191,6 +201,12 @@ type generateRecapReq struct {
 	// Replace, when true and a manual recap already exists for the same period and panel
 	// set, deletes it and inserts the new one in one transaction instead of returning 409.
 	Replace bool `json:"replace"`
+	// BestowTitles, when true, runs the same title-bestowal pass a scheduled recap tick
+	// runs automatically (see generateScheduledRecap) for this manual recap's period.
+	// Omitted (never sent as false) by a client until the server has advertised the
+	// "titles" capability on /api/server-info - this server rejects unknown JSON fields, and
+	// an older server has nowhere to put it.
+	BestowTitles bool `json:"bestowTitles,omitempty"`
 }
 
 // handleGenerateRecap is the on-demand recap endpoint: admin-only, alongside
@@ -220,20 +236,27 @@ func (s *Server) handleGenerateRecap(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "the period can't be longer than 366 days")
 		return
 	}
-	panels := sortedUniquePanels(req.Panels)
-	if len(panels) == 0 {
-		writeErr(w, http.StatusBadRequest, "panels must include at least one of: collage, awards")
+	// requested keeps the order the client asked for - it becomes spec.Panels, which
+	// BuildRecap renders pages in verbatim (see RecapSpec.Panels' doc comment). sorted is a
+	// separate, canonical (alphabetical) view of the exact same set, used only as the
+	// order-independent lookup/storage key FindManualRecap and CreateRecapPost key duplicate
+	// detection on - it must never be the one handed to BuildRecap, or render order would
+	// silently collapse to alphabetical regardless of what was requested.
+	requested := orderedUniquePanels(req.Panels)
+	if len(requested) == 0 {
+		writeErr(w, http.StatusBadRequest, "panels must include at least one of: collage")
 		return
 	}
-	for _, p := range panels {
+	for _, p := range requested {
 		if !recapValidPanels[p] {
 			writeErr(w, http.StatusBadRequest, "unknown panel type: "+p)
 			return
 		}
 	}
+	sorted := sortedUniquePanels(req.Panels)
 
 	ctx := r.Context()
-	existingID, found, err := s.db.FindManualRecap(ctx, start, end, panels)
+	existingID, found, err := s.db.FindManualRecap(ctx, start, end, sorted)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
@@ -246,7 +269,7 @@ func (s *Server) handleGenerateRecap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	spec := db.RecapSpec{PeriodStart: start, PeriodEnd: end, Panels: panels, Cadence: "custom", Origin: "manual"}
+	spec := db.RecapSpec{PeriodStart: start, PeriodEnd: end, Panels: requested, Cadence: "custom", Origin: "manual"}
 	payload, err := s.db.BuildRecap(ctx, spec)
 	if errors.Is(err, db.ErrRecapEmpty) {
 		writeErr(w, http.StatusUnprocessableEntity, "not enough activity in this period yet")
@@ -283,6 +306,14 @@ func (s *Server) handleGenerateRecap(w http.ResponseWriter, r *http.Request) {
 	if replacePostID == nil {
 		go s.notifyRecap(postID)
 	}
+	// Manual generation never touches titles unless the admin explicitly opted in for this
+	// request - unlike the scheduler, there's no standing default here. A bestowal failure
+	// doesn't fail the request: the recap post itself already exists.
+	if req.BestowTitles {
+		if err := s.db.BestowTitles(ctx, start, end); err != nil {
+			log.Printf("handleGenerateRecap: bestow titles: %v", err)
+		}
+	}
 	post, err := s.db.GetPost(ctx, me.ID, postID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
@@ -306,5 +337,26 @@ func sortedUniquePanels(panels []string) []string {
 		out = append(out, p)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// orderedUniquePanels trims and dedupes a requested panel list while preserving the order
+// it was requested in - the order the generated deck renders its pages in (see
+// RecapSpec.Panels). Distinct from sortedUniquePanels, which normalises to a canonical
+// (alphabetical) order for the duplicate-recap lookup/storage key: that's a different
+// concern from render order, and conflating the two (passing the sorted list to BuildRecap)
+// was the bug behind a recap coming back with its panels in alphabetical order regardless
+// of what was requested - see TestOrderedUniquePanelsPreservesRequestOrder.
+func orderedUniquePanels(panels []string) []string {
+	seen := make(map[string]bool, len(panels))
+	out := make([]string, 0, len(panels))
+	for _, p := range panels {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
 	return out
 }

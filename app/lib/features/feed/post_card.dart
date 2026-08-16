@@ -419,83 +419,107 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
     final account = ref.watch(contentAccountProvider(p.groupId));
     final me = account?.user;
     final like = likeView(p, ref.watch(likesProvider));
+    // A recap is a group artifact, not a person's check-in - it wears the group's own
+    // accent (not the viewer's currently active theme accent, which can differ from the
+    // recap's origin group in the merged multi-group feed) so it reads as a system moment
+    // at a glance rather than one more post in the list.
+    final recap = p.recap;
+    final recapAccent = recap == null ? null : accentById(recap.groupColor);
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 14),
       decoration: BoxDecoration(
-        color: _bgSurface,
-        border: Border.all(color: _border),
+        color: recapAccent == null
+            ? _bgSurface
+            : Color.alphaBlend(recapAccent.base.withValues(alpha: 0.05), _bgSurface),
+        border: Border.all(
+          color: recapAccent == null ? _border : recapAccent.base.withValues(alpha: 0.55),
+          width: recapAccent == null ? 1 : 1.4,
+        ),
         borderRadius: BorderRadius.circular(14),
+        boxShadow: recapAccent == null
+            ? null
+            : [
+                BoxShadow(
+                    color: recapAccent.base.withValues(alpha: 0.16),
+                    blurRadius: 18,
+                    spreadRadius: -6)
+              ],
       ),
       clipBehavior: Clip.hardEdge,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header
+          // Header. A recap carries no standard author avatar row - the group name already
+          // fronts its cover page - just a small "RECAP" badge in its place.
           Padding(
             padding: const EdgeInsets.fromLTRB(14, 12, 14, 0),
             child: Row(
               children: [
-                // In the merged view the avatar wears a thin ring in the origin
-                // group's color - the group marker for the whole card. Tapping the
-                // avatar opens the author's profile.
-                GestureDetector(
-                  onTap: () => _openProfile(p.authorId),
-                  child: widget.groupColor != null
-                      ? Semantics(
-                          label: account != null ? 'Group: ${account.displayName}' : 'Group',
-                          // The avatar is decorative here (the author's name sits beside it);
-                          // announce only the group the ring encodes.
-                          excludeSemantics: true,
-                          child: Container(
-                            padding: const EdgeInsets.all(2),
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(color: widget.groupColor!, width: 2),
+                if (recapAccent == null) ...[
+                  // In the merged view the avatar wears a thin ring in the origin
+                  // group's color - the group marker for the whole card. Tapping the
+                  // avatar opens the author's profile.
+                  GestureDetector(
+                    onTap: () => _openProfile(p.authorId),
+                    child: widget.groupColor != null
+                        ? Semantics(
+                            label: account != null ? 'Group: ${account.displayName}' : 'Group',
+                            // The avatar is decorative here (the author's name sits beside it);
+                            // announce only the group the ring encodes.
+                            excludeSemantics: true,
+                            child: Container(
+                              padding: const EdgeInsets.all(2),
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(color: widget.groupColor!, width: 2),
+                              ),
+                              child: UserAvatar(
+                                  name: p.authorName,
+                                  size: 34,
+                                  mediaId: p.authorPhotoId,
+                                  colorSeed: p.authorId,
+                                  groupId: p.groupId),
                             ),
-                            child: UserAvatar(
-                                name: p.authorName,
-                                size: 34,
-                                mediaId: p.authorPhotoId,
-                                colorSeed: p.authorId,
-                                groupId: p.groupId),
-                          ),
-                        )
-                      : UserAvatar(
-                          name: p.authorName,
-                          size: 38,
-                          mediaId: p.authorPhotoId,
-                          colorSeed: p.authorId,
-                          groupId: p.groupId),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      GestureDetector(
-                        onTap: () => _openProfile(p.authorId),
-                        behavior: HitTestBehavior.opaque,
-                        child: Text(
-                          p.authorName,
-                          style: const TextStyle(
-                            color: _fgPrimary,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ),
-                      if (p.people.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 1),
-                          child: TaggedPeopleLine(
-                            people: p.people,
-                            groupId: p.groupId,
-                            style: const TextStyle(color: _fgMuted, fontSize: 12),
-                          ),
-                        ),
-                    ],
+                          )
+                        : UserAvatar(
+                            name: p.authorName,
+                            size: 38,
+                            mediaId: p.authorPhotoId,
+                            colorSeed: p.authorId,
+                            groupId: p.groupId),
                   ),
+                  const SizedBox(width: 10),
+                ],
+                Expanded(
+                  child: recapAccent != null
+                      ? _RecapBadge(accent: recapAccent)
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            GestureDetector(
+                              onTap: () => _openProfile(p.authorId),
+                              behavior: HitTestBehavior.opaque,
+                              child: Text(
+                                p.authorName,
+                                style: const TextStyle(
+                                  color: _fgPrimary,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ),
+                            if (p.people.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 1),
+                                child: TaggedPeopleLine(
+                                  people: p.people,
+                                  groupId: p.groupId,
+                                  style: const TextStyle(color: _fgMuted, fontSize: 12),
+                                ),
+                              ),
+                          ],
+                        ),
                 ),
                 Tooltip(
                   message: fullLocalTime(p.createdAt),
@@ -598,8 +622,10 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                 ],
               ),
             ),
-          // Caption
-          if (p.body.isNotEmpty)
+          // Caption. A recap's body is only the fallback text an old client (one that can't
+          // render the deck at all) ever sees - this client's own cover page already says
+          // the same thing better, so it's skipped here rather than showing both.
+          if (recap == null && p.body.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
               child: Text(
@@ -613,7 +639,7 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
           // see 0018_recap.sql for why). Checked before the media carousel so a recap never
           // falls through to the "no media" caption-only layout on a client new enough to
           // render it.
-          if (p.recap case final recap?)
+          if (recap != null)
             RecapDeck(recap: recap, groupId: p.groupId)
           // Attachments - the carousel sizes itself (a single one keeps its own clamped
           // aspect ratio); the heart burst overlays it.
@@ -782,6 +808,38 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// The small pill a recap card's header wears in place of the usual author avatar row -
+/// the group identifies it, not a person, so there is nothing to name here.
+class _RecapBadge extends StatelessWidget {
+  const _RecapBadge({required this.accent});
+
+  final AccentPalette accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        decoration: BoxDecoration(color: accent.light, borderRadius: BorderRadius.circular(9999)),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.auto_awesome, size: 12, color: accent.base),
+            const SizedBox(width: 4),
+            Text('RECAP',
+                style: TextStyle(
+                    color: accent.base,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 11,
+                    letterSpacing: 0.6)),
+          ],
+        ),
       ),
     );
   }
