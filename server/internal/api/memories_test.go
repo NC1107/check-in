@@ -131,6 +131,29 @@ func TestRandomMemoryExcludesBlockedAuthors(t *testing.T) {
 	}
 }
 
+// TestRandomMemoryExcludesRevokedAuthors pins the other half of the author filter: the query
+// screens on users.status, so a member an admin has since revoked takes their history out of
+// the pool too. Blocking and revoking ride the same predicate but reach it by different
+// routes, and only blocking was covered.
+func TestRandomMemoryExcludesRevokedAuthors(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+	member := h.member(admin, "Sam")
+	post := h.createPost(member, map[string]any{"kind": "text", "body": "old check-in"})
+	backdatePost(t, h, post.ID, time.Now().Add(-oldEnough))
+
+	if got := h.randomMemory(admin.Token); got.Post == nil {
+		t.Fatal("post = nil before revoking, want the seeded memory")
+	}
+
+	h.delete("/api/admin/users/"+itoa(member.ID), admin.Token).expect(http.StatusNoContent)
+
+	got := h.randomMemory(admin.Token)
+	if got.Post != nil {
+		t.Fatalf("post = %+v after revoking the only eligible author, want nil", got.Post)
+	}
+}
+
 // TestRandomMemoryExcludesRecentPosts pins the recency floor: a check-in from this week is
 // not a memory yet, even when it's the only post in the group.
 func TestRandomMemoryExcludesRecentPosts(t *testing.T) {

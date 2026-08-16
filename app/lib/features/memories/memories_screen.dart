@@ -388,11 +388,11 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
             const SizedBox(height: 16),
             const Text('Look back at something from your group\'s history.',
                 textAlign: TextAlign.center, style: TextStyle(color: _fgSecondary, fontSize: 14)),
-            const SizedBox(height: 22),
+            const SizedBox(height: 20),
             PrimaryButton(
                 label: 'Give me a memory', enabled: !_loading, busy: _loading, onTap: _fetch),
             const SizedBox(height: 14),
-            const Text('More ways to look back — coming soon.',
+            const Text('More ways to look back - coming soon.',
                 style: TextStyle(color: _fgMuted, fontSize: 12)),
           ],
         ),
@@ -417,7 +417,7 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
               textAlign: TextAlign.center,
               style: TextStyle(color: _fgMuted, fontSize: 13),
             ),
-            const SizedBox(height: 22),
+            const SizedBox(height: 20),
             PrimaryButton(label: 'Check again', enabled: !_loading, busy: _loading, onTap: _fetch),
           ],
         ),
@@ -436,7 +436,7 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
             const SizedBox(height: 16),
             const Text("Couldn't load a memory.",
                 style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 22),
+            const SizedBox(height: 20),
             PrimaryButton(label: 'Try again', enabled: !_loading, busy: _loading, onTap: _fetch),
           ],
         ),
@@ -487,12 +487,12 @@ class _MemoryCard extends StatelessWidget {
         // the only thing this node needs to say.
         child: ExcludeSemantics(
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(14),
             child: DecoratedBox(
               decoration: BoxDecoration(
                 color: _bgSurface,
                 border: Border.all(color: _border),
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(14),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
