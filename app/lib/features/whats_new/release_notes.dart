@@ -19,6 +19,13 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.10',
+    highlights: [
+      'Tag people on a check-in shared to several groups - each group sees its own members tagged, and the picker notes who is not in which group.',
+      'Tapping a playing clip now opens it full screen exactly in place - no restart, no stutter.',
+    ],
+  ),
+  ReleaseNote(
     version: '1.9',
     highlights: [
       'Post video clips - record or pick a video, trim it down to ten seconds, and share it like a photo.',
