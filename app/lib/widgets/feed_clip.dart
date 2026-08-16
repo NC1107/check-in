@@ -98,9 +98,8 @@ class _FeedClipState extends ConsumerState<FeedClip>
     WidgetsBinding.instance.removeObserver(this);
     widget.autoplay.removeListener(_onSlotChanged);
     widget.autoplay.forget(_slot);
-    // Dropping the claim, not the player: the viewer still has it, and releasing it there is
-    // what disposes it.
-    _lentOut = null;
+    // A lent player is untouched here on purpose: the viewer still has it, and the release
+    // it holds is what disposes it once there is no tile left to take it back.
     _teardown();
     super.dispose();
   }
@@ -195,8 +194,12 @@ class _FeedClipState extends ConsumerState<FeedClip>
       player: this,
     );
     // The feed may well have moved on underneath the viewer, in which case this tile is
-    // holding a player it is no longer allowed to run.
-    widget.autoplay.isActive(_slot) ? controller.play() : controller.pause();
+    // holding a player it is not allowed to run yet.
+    if (widget.autoplay.isActive(_slot)) {
+      controller.play();
+    } else {
+      controller.pause();
+    }
     setState(() {});
     return true;
   }

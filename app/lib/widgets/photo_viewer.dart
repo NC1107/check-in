@@ -430,7 +430,8 @@ class _VideoPageState extends ConsumerState<_VideoPage> with WidgetsBindingObser
       // the pause while it happened is the bug.
       _controller = adopted;
       _initialized = true;
-      if (widget.active && !adopted.value.isPlaying) unawaited(adopted.play());
+      // Playing already, unless the user paged away from it and back inside the viewer.
+      if (!adopted.value.isPlaying) unawaited(adopted.play());
       return;
     }
     // Point at the clip itself (imageUrl with no variant), with the same bearer header the

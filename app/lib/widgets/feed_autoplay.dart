@@ -172,7 +172,8 @@ class FeedAutoplayController extends ChangeNotifier {
     return LentClip(mediaId: mediaId, controller: controller, release: reclaim);
   }
 
-  /// Takes a lent player back from the viewer.
+  /// Takes a lent player back from the viewer. The media id comes along because it is what
+  /// the viewer knows the player by; which player came back is settled by identity here.
   ///
   /// Deferred a frame because the viewer releases from its dispose, which runs inside the
   /// frame's build: re-attaching marks the feed tile dirty, and that is not allowed from
@@ -184,12 +185,13 @@ class FeedAutoplayController extends ChangeNotifier {
 
   void _restore(VideoPlayerController controller) {
     final lent = _lent;
-    final mine = lent != null && identical(lent.controller, controller);
-    if (mine) _lent = null;
+    if (lent != null && identical(lent.controller, controller)) {
+      _lent = null;
+      if (lent.player.reattach(controller)) return;
+    }
     // Nobody left to take it: the tile scrolled away, was recycled onto another clip, or the
-    // whole feed went. Ownership came back here, so this is the last chance to hand the
-    // decoder back.
-    if (mine && lent.player.reattach(controller)) return;
+    // whole feed went. Ownership is back here, so this is the last chance to hand the
+    // decoder back rather than leak it.
     unawaited(controller.pause());
     unawaited(controller.dispose());
   }
