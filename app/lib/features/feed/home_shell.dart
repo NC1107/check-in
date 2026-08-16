@@ -378,6 +378,18 @@ class _NavItem extends StatelessWidget {
   }
 }
 
+/// A resolved place: the "City, Country" label a member sees, paired with the rounded
+/// coordinates behind it (2 decimal places, ~1.1km - see _roundCoord). The two are always
+/// resolved and cleared together, so a post can never carry coordinates without the label
+/// a member can see and remove.
+class _PlaceFix {
+  const _PlaceFix({required this.place, required this.lat, required this.lng});
+
+  final String place;
+  final double lat;
+  final double lng;
+}
+
 /// Inline compose bottom sheet matching the design. Shown as a modal from the feed's
 /// compose button; public so the sheet's own behavior can be exercised on its own.
 class ComposeSheet extends ConsumerStatefulWidget {
@@ -409,6 +421,10 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
   String? _locationSource; // path of the photo that supplied _location
   bool _locationCleared = false; // user removed the location manually; don't auto-refill
   bool _resolvingLocation = false;
+  // The coordinates behind _location, rounded to 2dp - see _roundCoord. Always cleared
+  // alongside _location, and only ever sent to a server that advertises recapCapable.
+  double? _lat;
+  double? _lng;
   bool _busy = false;
   String? _error;
 
@@ -636,41 +652,55 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
       ..showSnackBar(SnackBar(content: Text(msg), backgroundColor: _bgSurfaceHover));
   }
 
-  /// Read a place label from the first image that carries GPS, remembering which photo it
-  /// came from. Skips if we already have one or the user cleared it manually.
+  /// Read a place label (and its coordinates) from the first image that carries GPS,
+  /// remembering which photo it came from. Skips if we already have one or the user
+  /// cleared it manually.
   Future<void> _resolveLocation() async {
     if (_locationCleared || _location != null || _images.isEmpty) return;
     setState(() => _resolvingLocation = true);
-    String? place;
+    _PlaceFix? fix;
     String? source;
     for (final x in _images) {
-      place = await _photoPlace(x.path);
-      if (place != null) {
+      fix = await _photoPlace(x.path);
+      if (fix != null) {
         source = x.path;
         break;
       }
     }
     if (mounted) {
       setState(() {
-        _location = place;
+        _location = fix?.place;
+        _lat = fix?.lat;
+        _lng = fix?.lng;
         _locationSource = source;
         _resolvingLocation = false;
       });
     }
   }
 
-  /// Reads the photo's GPS on-device and reverse-geocodes it to a coarse "City, Country".
-  /// Returns null when there's no location data. Raw coordinates never leave the phone.
-  Future<String?> _photoPlace(String path) async {
+  /// Reads the photo's GPS on-device and reverse-geocodes it to a coarse "City, Country",
+  /// alongside the coordinates behind it (rounded to 2 decimal places for [_submit] to
+  /// send - see [_PlaceFix]). Returns null when there's no location data. Raw
+  /// full-precision coordinates never leave the phone.
+  Future<_PlaceFix?> _photoPlace(String path) async {
     try {
       final exif = await Exif.fromPath(path);
       final coords = await exif.getLatLong();
       await exif.close();
       if (coords == null) return null;
-      return await _placeFromCoords(coords.latitude, coords.longitude);
+      return await _placeFix(coords.latitude, coords.longitude);
     } catch (_) {
       return null; // no permission, no GPS, or geocoder unavailable → just skip it
     }
+  }
+
+  /// Reverse-geocodes a coordinate to a coarse "City, Country" and pairs it with the
+  /// rounded coordinates - null when the geocoder finds nothing, so a post never carries
+  /// coordinates without the place label a member can see and remove.
+  Future<_PlaceFix?> _placeFix(double lat, double lng) async {
+    final place = await _placeFromCoords(lat, lng);
+    if (place == null) return null;
+    return _PlaceFix(place: place, lat: _roundCoord(lat), lng: _roundCoord(lng));
   }
 
   /// Reverse-geocodes a coordinate to a coarse "City, Country". Shared by the photo EXIF
@@ -693,23 +723,31 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
     }
   }
 
+  /// Rounds a coordinate to 2 decimal places (~1.1km) before it ever reaches [_submit] -
+  /// strictly coarser than the "City, Country" string already sent, so it leaks nothing
+  /// new. Stored for the v1.5 map panel; only sent to a server that advertises the recap
+  /// capability (see [_submit]).
+  double _roundCoord(double v) => (v * 100).round() / 100;
+
   /// Reads a clip's recording location from its MP4 atom (native, since native_exif is
   /// photo-only) and reverse-geocodes it, offered as the post location exactly as a photo's
   /// is. Skips when the user has cleared the location manually.
   Future<void> _resolveClipLocation(String path) async {
     if (_locationCleared) return;
     setState(() => _resolvingLocation = true);
-    String? place;
+    _PlaceFix? fix;
     try {
       final coords = await ref.read(videoNativeProvider).location(path);
-      if (coords != null) place = await _placeFromCoords(coords.lat, coords.lng);
+      if (coords != null) fix = await _placeFix(coords.lat, coords.lng);
     } catch (_) {
       // No location atom, or geocoder unavailable: just post without a place.
     }
     if (mounted) {
       setState(() {
-        _location = place;
-        _locationSource = place != null ? path : null;
+        _location = fix?.place;
+        _lat = fix?.lat;
+        _lng = fix?.lng;
+        _locationSource = fix != null ? path : null;
         _resolvingLocation = false;
       });
     }
@@ -739,6 +777,8 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
                   setState(() {
                     _location = null;
                     _locationSource = null;
+                    _lat = null;
+                    _lng = null;
                   });
                   await _resolveLocation();
                 }
@@ -868,6 +908,8 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
       _clipDurationMs = 0;
       _location = null;
       _locationSource = null;
+      _lat = null;
+      _lng = null;
     });
   }
 
@@ -912,6 +954,11 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
           for (final t in _tagged)
             if (t.idIn(g.id) case final id?) id
         ];
+        // lat/lng only ever go to a server that has advertised the recap capability - this
+        // server rejects unknown JSON fields, so sending them to a server that predates the
+        // feature would fail the whole post, not just skip the coordinates.
+        final lat = g.recapCapable ? _lat : null;
+        final lng = g.recapCapable ? _lng : null;
         if (_clip != null) {
           final mediaId = await api.uploadImage(_clipEncodedPath ?? _clip!.path);
           final poster = _clipPoster;
@@ -928,7 +975,9 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
               mediaIds: [mediaId],
               location: _location,
               peopleIds: peopleIds,
-              crossPostId: crossPostId);
+              crossPostId: crossPostId,
+              lat: lat,
+              lng: lng);
         } else if (_images.isNotEmpty) {
           final ids = <int>[];
           for (final x in _images) {
@@ -940,7 +989,9 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
               mediaIds: ids,
               location: _location,
               peopleIds: peopleIds,
-              crossPostId: crossPostId);
+              crossPostId: crossPostId,
+              lat: lat,
+              lng: lng);
         } else {
           await api.createPost(
               kind: 'text',
@@ -1193,6 +1244,8 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
                           _location = null;
                           _locationSource = null;
                           _locationCleared = true;
+                          _lat = null;
+                          _lng = null;
                         }),
                         behavior: HitTestBehavior.opaque,
                         child: const Padding(
