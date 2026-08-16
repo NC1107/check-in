@@ -25,6 +25,9 @@ class ServerAccount {
     this.token,
     this.user,
     this.mediaTypes = const ['image'],
+    this.gifSearch = false,
+    this.commentMedia = false,
+    this.recapCapable = false,
   });
 
   /// Stable id derived from the server's host (one subdomain per group). Used to key
@@ -53,6 +56,22 @@ class ServerAccount {
   /// the default is images-only. Compose reads it to hide a clip option a group would reject.
   final List<String> mediaTypes;
 
+  /// Whether this group's server can search gifs (its Klipy key is configured), from its
+  /// server-info. Gates the gif icon in compose and comments.
+  final bool gifSearch;
+
+  /// Whether this group's server accepts a gif attachment on a comment, from its
+  /// server-info. An older server predates the field entirely (see [ServerInfo.commentMedia])
+  /// and defaults to false, so the client never sends it a `mediaId` it would 400 on.
+  final bool commentMedia;
+
+  /// Whether this group's server understands the recap feature (see
+  /// [ServerInfo.recapCapable]). Gates sending lat/lng on createPost, sending the recap
+  /// fields on PATCH /api/admin/server, and showing the recap settings UI at all - a server
+  /// predating the feature rejects unknown JSON fields, so guessing wrong would break
+  /// posting entirely rather than just hiding a screen.
+  final bool recapCapable;
+
   bool get isSignedIn => token != null;
 
   /// What the UI calls this group: the local nickname when set, else the server's name.
@@ -75,6 +94,9 @@ class ServerAccount {
     User? user,
     bool clearAuth = false,
     List<String>? mediaTypes,
+    bool? gifSearch,
+    bool? commentMedia,
+    bool? recapCapable,
   }) {
     return ServerAccount(
       id: id,
@@ -85,6 +107,9 @@ class ServerAccount {
       token: clearAuth ? null : (token ?? this.token),
       user: clearAuth ? null : (user ?? this.user),
       mediaTypes: mediaTypes ?? this.mediaTypes,
+      gifSearch: gifSearch ?? this.gifSearch,
+      commentMedia: commentMedia ?? this.commentMedia,
+      recapCapable: recapCapable ?? this.recapCapable,
     );
   }
 }
@@ -236,6 +261,9 @@ class MultiSessionController extends Notifier<MultiSession> {
             nickname: null,
             color: null,
             mediaTypes: const ['image'],
+            gifSearch: false,
+            commentMedia: false,
+            recapCapable: false,
           )
         ];
         await prefs.setString(_kGroups, _encodeGroups(entries));
@@ -254,6 +282,9 @@ class MultiSessionController extends Notifier<MultiSession> {
           nickname: e.nickname,
           color: e.color,
           mediaTypes: e.mediaTypes,
+          gifSearch: e.gifSearch,
+          commentMedia: e.commentMedia,
+          recapCapable: e.recapCapable,
           token: token));
     }
     final ids = {for (final g in accounts) g.id};
@@ -302,7 +333,9 @@ class MultiSessionController extends Notifier<MultiSession> {
       final nameChanged = info.name.isNotEmpty && info.name != g.serverName;
       final colorChanged = info.color != (g.color ?? '');
       final mediaChanged = !listEquals(info.mediaTypes, g.mediaTypes);
-      if (nameChanged || colorChanged || mediaChanged) {
+      final gifChanged = info.gifSearch != g.gifSearch || info.commentMedia != g.commentMedia;
+      final recapChanged = info.recapCapable != g.recapCapable;
+      if (nameChanged || colorChanged || mediaChanged || gifChanged || recapChanged) {
         _update(
             g.id,
             (a) => a.copyWith(
@@ -310,6 +343,9 @@ class MultiSessionController extends Notifier<MultiSession> {
                   color: info.color,
                   clearColor: info.color.isEmpty,
                   mediaTypes: info.mediaTypes,
+                  gifSearch: info.gifSearch,
+                  commentMedia: info.commentMedia,
+                  recapCapable: info.recapCapable,
                 ));
         await _persistGroups();
       }
@@ -342,6 +378,9 @@ class MultiSessionController extends Notifier<MultiSession> {
             nickname: g.nickname,
             color: g.color,
             mediaTypes: g.mediaTypes,
+            gifSearch: g.gifSearch,
+            commentMedia: g.commentMedia,
+            recapCapable: g.recapCapable,
           )
       ]),
     );
@@ -473,7 +512,10 @@ class MultiSessionController extends Notifier<MultiSession> {
         String name,
         String? nickname,
         String? color,
-        List<String> mediaTypes
+        List<String> mediaTypes,
+        bool gifSearch,
+        bool commentMedia,
+        bool recapCapable
       })> _decodeGroups(String? raw) {
     if (raw == null || raw.isEmpty) return const [];
     try {
@@ -490,6 +532,12 @@ class MultiSessionController extends Notifier<MultiSession> {
             // back to images-only; the next hydrate refreshes it from server-info.
             mediaTypes:
                 (e['mediaTypes'] as List?)?.map((t) => t as String).toList() ?? const ['image'],
+            // Same reasoning as mediaTypes: absent means "unknown, assume off" until the next
+            // hydrate refreshes it from server-info.
+            gifSearch: e['gifSearch'] as bool? ?? false,
+            commentMedia: e['commentMedia'] as bool? ?? false,
+            // Same story: absent means unknown, not capable - the next hydrate refreshes it.
+            recapCapable: e['recapCapable'] as bool? ?? false,
           )
       ];
     } catch (_) {
@@ -505,7 +553,10 @@ class MultiSessionController extends Notifier<MultiSession> {
                 String name,
                 String? nickname,
                 String? color,
-                List<String> mediaTypes
+                List<String> mediaTypes,
+                bool gifSearch,
+                bool commentMedia,
+                bool recapCapable
               })>
           entries) {
     return jsonEncode([
@@ -517,6 +568,9 @@ class MultiSessionController extends Notifier<MultiSession> {
           if (e.nickname != null) 'nickname': e.nickname,
           if (e.color != null && e.color!.isNotEmpty) 'color': e.color,
           'mediaTypes': e.mediaTypes,
+          'gifSearch': e.gifSearch,
+          'commentMedia': e.commentMedia,
+          'recapCapable': e.recapCapable,
         }
     ]);
   }

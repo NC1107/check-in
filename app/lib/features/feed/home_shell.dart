@@ -23,6 +23,7 @@ import '../../state/taggable_people.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/feed_autoplay.dart';
+import '../../widgets/gif_picker.dart';
 import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
 import '../profile/profile_screen.dart';
@@ -121,6 +122,20 @@ bool mediaTypesSupportsVideo(List<String> mediaTypes) => mediaTypes.contains('vi
 bool clipComposeAllowed(Iterable<ServerAccount> selectedTargets) {
   final list = selectedTargets.toList();
   return list.isNotEmpty && list.every((g) => mediaTypesSupportsVideo(g.mediaTypes));
+}
+
+/// Whether compose may offer the gif picker: [active] (the group whose proxy answers the
+/// search) has to be signed in and able to search gifs, and every cross-post target has to
+/// be able to actually store one. Search only ever goes through one group's server - Klipy's
+/// results don't depend on whose key asked - but the attachment is uploaded to every target,
+/// so mediaTypes support is checked against all of them, the same way clipComposeAllowed
+/// checks video support.
+bool gifComposeAllowed(ServerAccount? active, Iterable<ServerAccount> selectedTargets) {
+  final list = selectedTargets.toList();
+  return active != null &&
+      active.gifSearch &&
+      list.isNotEmpty &&
+      list.every((g) => g.mediaTypes.contains('gif'));
 }
 
 /// The native trim/location seam, overridable in tests with a fake so the clip flow can be
@@ -378,6 +393,29 @@ class _NavItem extends StatelessWidget {
   }
 }
 
+/// A resolved place: the "City, Country" label a member sees, paired with the rounded
+/// coordinates behind it (2 decimal places, ~1.1km - see _roundCoord). The two are always
+/// resolved and cleared together, so a post can never carry coordinates without the label
+/// a member can see and remove.
+class _PlaceFix {
+  const _PlaceFix({required this.place, required this.lat, required this.lng});
+
+  final String place;
+  final double lat;
+  final double lng;
+}
+
+/// The single gate on whether coordinates are sent to [target] with a check-in: only once
+/// its server has advertised the recap capability (see [ServerAccount.recapCapable]). This
+/// server rejects unknown JSON fields, so sending lat/lng to a server that predates the
+/// feature would fail the whole post, not just skip the coordinates - pulled out as its own
+/// top-level function (rather than inlined in [_ComposeSheetState._submit]) specifically so
+/// this guard is directly testable, see recap_coords_gating_test.dart.
+({double? lat, double? lng}) recapCoordsFor(ServerAccount target, double? lat, double? lng) {
+  if (!target.recapCapable) return (lat: null, lng: null);
+  return (lat: lat, lng: lng);
+}
+
 /// Inline compose bottom sheet matching the design. Shown as a modal from the feed's
 /// compose button; public so the sheet's own behavior can be exercised on its own.
 class ComposeSheet extends ConsumerStatefulWidget {
@@ -402,6 +440,8 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
   // than a bare play badge on a black box before it is posted.
   Uint8List? _clipPosterPreview;
   bool _processingClip = false;
+  // Downloading + staging a picked gif before it joins _images as an ordinary attachment.
+  bool _attachingGif = false;
   // The humans the author tags as appearing in the post. Each carries the member id it has
   // in every selected group, so a cross-post can tag the same person on every server.
   final List<TaggablePerson> _tagged = [];
@@ -409,6 +449,10 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
   String? _locationSource; // path of the photo that supplied _location
   bool _locationCleared = false; // user removed the location manually; don't auto-refill
   bool _resolvingLocation = false;
+  // The coordinates behind _location, rounded to 2dp - see _roundCoord. Always cleared
+  // alongside _location, and only ever sent to a server that advertises recapCapable.
+  double? _lat;
+  double? _lng;
   bool _busy = false;
   String? _error;
 
@@ -503,6 +547,41 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
       }
     });
     await _resolveLocation();
+  }
+
+  /// Opens the gif picker against [active]'s server and, on a pick, downloads the gif and
+  /// stages it as an ordinary compose attachment - so submit's existing per-group upload
+  /// loop (_uploadCompressed) re-hosts it exactly like a picked photo, no separate path.
+  ///
+  /// Staging means writing the downloaded bytes to a real temp file and holding it as an
+  /// XFile: uploadKindFor/needsReencodeBeforeUpload dispatch on the file's extension, and
+  /// _uploadCompressed reads the file from disk for the raw (non-reencoded) path a gif
+  /// takes - an in-memory-only XFile has no disk-backed path for that read to open.
+  Future<void> _attachGif(ServerAccount active) async {
+    final api = ref.read(apiForGroupProvider(active.id));
+    final picked =
+        await showGifPicker(context, search: (q, page) => api.gifSearch(query: q, page: page));
+    if (picked == null || !mounted) return;
+    setState(() => _attachingGif = true);
+    try {
+      final bytes = await ApiClient.downloadExternalGif(picked.gifUrl);
+      final dir = await Directory.systemTemp.createTemp('checkin_gif_');
+      final file = File('${dir.path}/${picked.id}.gif');
+      await file.writeAsBytes(bytes);
+      if (!mounted) return;
+      setState(() {
+        // A check-in is one clip or a set of photos, never both; a gif takes the photo slot.
+        _clip = null;
+        _clipEncodedPath = null;
+        _clipPoster = null;
+        _clipPosterPreview = null;
+        if (_images.length < _maxImages) _images.add(XFile(file.path));
+        _attachingGif = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _attachingGif = false);
+      _toast("Couldn't add that gif. Try again.");
+    }
   }
 
   /// The Camera button's two-way chooser: a photo or a clip, since image_picker has no single
@@ -636,41 +715,55 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
       ..showSnackBar(SnackBar(content: Text(msg), backgroundColor: _bgSurfaceHover));
   }
 
-  /// Read a place label from the first image that carries GPS, remembering which photo it
-  /// came from. Skips if we already have one or the user cleared it manually.
+  /// Read a place label (and its coordinates) from the first image that carries GPS,
+  /// remembering which photo it came from. Skips if we already have one or the user
+  /// cleared it manually.
   Future<void> _resolveLocation() async {
     if (_locationCleared || _location != null || _images.isEmpty) return;
     setState(() => _resolvingLocation = true);
-    String? place;
+    _PlaceFix? fix;
     String? source;
     for (final x in _images) {
-      place = await _photoPlace(x.path);
-      if (place != null) {
+      fix = await _photoPlace(x.path);
+      if (fix != null) {
         source = x.path;
         break;
       }
     }
     if (mounted) {
       setState(() {
-        _location = place;
+        _location = fix?.place;
+        _lat = fix?.lat;
+        _lng = fix?.lng;
         _locationSource = source;
         _resolvingLocation = false;
       });
     }
   }
 
-  /// Reads the photo's GPS on-device and reverse-geocodes it to a coarse "City, Country".
-  /// Returns null when there's no location data. Raw coordinates never leave the phone.
-  Future<String?> _photoPlace(String path) async {
+  /// Reads the photo's GPS on-device and reverse-geocodes it to a coarse "City, Country",
+  /// alongside the coordinates behind it (rounded to 2 decimal places for [_submit] to
+  /// send - see [_PlaceFix]). Returns null when there's no location data. Raw
+  /// full-precision coordinates never leave the phone.
+  Future<_PlaceFix?> _photoPlace(String path) async {
     try {
       final exif = await Exif.fromPath(path);
       final coords = await exif.getLatLong();
       await exif.close();
       if (coords == null) return null;
-      return await _placeFromCoords(coords.latitude, coords.longitude);
+      return await _placeFix(coords.latitude, coords.longitude);
     } catch (_) {
       return null; // no permission, no GPS, or geocoder unavailable → just skip it
     }
+  }
+
+  /// Reverse-geocodes a coordinate to a coarse "City, Country" and pairs it with the
+  /// rounded coordinates - null when the geocoder finds nothing, so a post never carries
+  /// coordinates without the place label a member can see and remove.
+  Future<_PlaceFix?> _placeFix(double lat, double lng) async {
+    final place = await _placeFromCoords(lat, lng);
+    if (place == null) return null;
+    return _PlaceFix(place: place, lat: _roundCoord(lat), lng: _roundCoord(lng));
   }
 
   /// Reverse-geocodes a coordinate to a coarse "City, Country". Shared by the photo EXIF
@@ -693,23 +786,31 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
     }
   }
 
+  /// Rounds a coordinate to 2 decimal places (~1.1km) before it ever reaches [_submit] -
+  /// strictly coarser than the "City, Country" string already sent, so it leaks nothing
+  /// new. Stored for the v1.5 map panel; only sent to a server that advertises the recap
+  /// capability (see [_submit]).
+  double _roundCoord(double v) => (v * 100).round() / 100;
+
   /// Reads a clip's recording location from its MP4 atom (native, since native_exif is
   /// photo-only) and reverse-geocodes it, offered as the post location exactly as a photo's
   /// is. Skips when the user has cleared the location manually.
   Future<void> _resolveClipLocation(String path) async {
     if (_locationCleared) return;
     setState(() => _resolvingLocation = true);
-    String? place;
+    _PlaceFix? fix;
     try {
       final coords = await ref.read(videoNativeProvider).location(path);
-      if (coords != null) place = await _placeFromCoords(coords.lat, coords.lng);
+      if (coords != null) fix = await _placeFix(coords.lat, coords.lng);
     } catch (_) {
       // No location atom, or geocoder unavailable: just post without a place.
     }
     if (mounted) {
       setState(() {
-        _location = place;
-        _locationSource = place != null ? path : null;
+        _location = fix?.place;
+        _lat = fix?.lat;
+        _lng = fix?.lng;
+        _locationSource = fix != null ? path : null;
         _resolvingLocation = false;
       });
     }
@@ -739,6 +840,8 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
                   setState(() {
                     _location = null;
                     _locationSource = null;
+                    _lat = null;
+                    _lng = null;
                   });
                   await _resolveLocation();
                 }
@@ -868,6 +971,8 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
       _clipDurationMs = 0;
       _location = null;
       _locationSource = null;
+      _lat = null;
+      _lng = null;
     });
   }
 
@@ -912,6 +1017,7 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
           for (final t in _tagged)
             if (t.idIn(g.id) case final id?) id
         ];
+        final coords = recapCoordsFor(g, _lat, _lng);
         if (_clip != null) {
           final mediaId = await api.uploadImage(_clipEncodedPath ?? _clip!.path);
           final poster = _clipPoster;
@@ -928,7 +1034,9 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
               mediaIds: [mediaId],
               location: _location,
               peopleIds: peopleIds,
-              crossPostId: crossPostId);
+              crossPostId: crossPostId,
+              lat: coords.lat,
+              lng: coords.lng);
         } else if (_images.isNotEmpty) {
           final ids = <int>[];
           for (final x in _images) {
@@ -940,7 +1048,9 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
               mediaIds: ids,
               location: _location,
               peopleIds: peopleIds,
-              crossPostId: crossPostId);
+              crossPostId: crossPostId,
+              lat: coords.lat,
+              lng: coords.lng);
         } else {
           await api.createPost(
               kind: 'text',
@@ -1042,6 +1152,11 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
     final me = ref.watch(currentAccountProvider)?.user;
     final hasContent = (_bodyCtrl.text.trim().isNotEmpty || _images.isNotEmpty || _clip != null) &&
         _targets.isNotEmpty;
+    final selectedTargets = [
+      for (final g in session.signedIn)
+        if (_targets.contains(g.id)) g
+    ];
+    final gifAllowed = gifComposeAllowed(session.current, selectedTargets);
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     final retrying = _posted.isNotEmpty;
     // Give the sheet a comfortable working height (roughly half the screen) in every state so
@@ -1193,6 +1308,8 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
                           _location = null;
                           _locationSource = null;
                           _locationCleared = true;
+                          _lat = null;
+                          _lng = null;
                         }),
                         behavior: HitTestBehavior.opaque,
                         child: const Padding(
@@ -1229,6 +1346,27 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
                       ),
                     ),
                   ),
+                  // Right-aligned inside the input area, matching the comment field's gif
+                  // icon. Hidden entirely rather than disabled: a group whose server can't
+                  // search or store a gif has no working action to grey out.
+                  if (gifAllowed)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 2, top: 2),
+                      child: IconButton(
+                        onPressed: _attachingGif ? null : () => _attachGif(session.current!),
+                        tooltip: 'Add a gif',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                        icon: _attachingGif
+                            ? SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: context.accent),
+                              )
+                            : Icon(Icons.gif_box_outlined, color: context.accent, size: 24),
+                      ),
+                    ),
                 ],
               ),
             ),

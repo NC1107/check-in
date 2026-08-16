@@ -9,6 +9,13 @@ class ServerInfo {
     this.color = '',
     this.publicUrl,
     this.mediaTypes = const ['image'],
+    this.gifSearch = false,
+    this.commentMedia = false,
+    this.recapCapable = false,
+    this.recapCadence = 'weekly',
+    this.recapWeekday = 1,
+    this.recapHour = 19,
+    this.recapOffset = 0,
   });
 
   final String name;
@@ -28,12 +35,105 @@ class ServerInfo {
   /// server would reject rather than letting the upload fail after the fact.
   final List<String> mediaTypes;
 
+  /// Whether this server's Klipy gif-search proxy is usable (a key is configured on it).
+  /// Gates the compose/comment gif picker entry points - false for a server with no key,
+  /// or one old enough to say nothing about it at all.
+  final bool gifSearch;
+
+  /// Whether this server accepts a `mediaId` on a comment. Intrinsic to the server version
+  /// (always true from the version that introduced it onward), so what a client actually
+  /// gates on is the *key being present at all* - an older server, which predates the field
+  /// and would 400 on an unknown `mediaId` (DisallowUnknownFields), says nothing here and
+  /// this defaults to false.
+  final bool commentMedia;
+
+  /// Whether this server understands the recap feature at all: lat/lng on createPost, and
+  /// the recapCadence/recapWeekday/recapHour/recapOffset fields (here and on
+  /// PATCH /api/admin/server). A server predating recap says nothing, and this server
+  /// rejects unknown JSON fields - so the app must only send any of the above once this is
+  /// true, or a new client would fail to post at all against an old server.
+  final bool recapCapable;
+  final String recapCadence; // off | weekly | monthly
+  final int recapWeekday; // ISO, 1=Mon..7=Sun
+  final int recapHour; // 0-23, group-local
+  final int recapOffset; // minutes east of UTC
+
   factory ServerInfo.fromJson(Map<String, dynamic> j) => ServerInfo(
         name: j['name'] as String? ?? 'Check-In',
         initialized: j['initialized'] as bool? ?? false,
         color: j['color'] as String? ?? '',
         publicUrl: j['publicUrl'] as String?,
         mediaTypes: (j['mediaTypes'] as List?)?.map((e) => e as String).toList() ?? const ['image'],
+        gifSearch: j['gifSearch'] as bool? ?? false,
+        commentMedia: j['commentMedia'] as bool? ?? false,
+        recapCapable: j['recap'] as bool? ?? false,
+        recapCadence: j['recapCadence'] as String? ?? 'weekly',
+        recapWeekday: (j['recapWeekday'] as num?)?.toInt() ?? 1,
+        recapHour: (j['recapHour'] as num?)?.toInt() ?? 19,
+        recapOffset: (j['recapOffset'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// One Klipy search/trending result, already projected down to what the picker and the
+/// re-host flow need. Never carries a Klipy key - the proxy strips it before this ever
+/// reaches the client.
+class GifResult {
+  const GifResult({
+    required this.id,
+    required this.title,
+    required this.previewUrl,
+    required this.previewWidth,
+    required this.previewHeight,
+    required this.gifUrl,
+    required this.width,
+    required this.height,
+  });
+
+  final String id;
+  final String title;
+
+  /// A small webp (or gif, when no webp rendition exists) the picker grid loads straight
+  /// from static.klipy.com - the one place this feature hotlinks Klipy's CDN, and only
+  /// because it's a user-initiated browse, never something the feed ends up serving.
+  final String previewUrl;
+  final int previewWidth;
+  final int previewHeight;
+
+  /// The full-resolution gif to download and re-upload once this result is picked. Never
+  /// fetched until the user actually selects it.
+  final String gifUrl;
+  final int width;
+  final int height;
+
+  /// The stored preview aspect ratio, or null when the server reported no usable dimensions
+  /// (falls back to a square tile in the grid).
+  double? get previewAspectRatio =>
+      previewWidth > 0 && previewHeight > 0 ? previewWidth / previewHeight : null;
+
+  factory GifResult.fromJson(Map<String, dynamic> j) => GifResult(
+        id: j['id'] as String? ?? '',
+        title: j['title'] as String? ?? '',
+        previewUrl: j['previewUrl'] as String? ?? '',
+        previewWidth: (j['previewWidth'] as num?)?.toInt() ?? 0,
+        previewHeight: (j['previewHeight'] as num?)?.toInt() ?? 0,
+        gifUrl: j['gifUrl'] as String? ?? '',
+        width: (j['width'] as num?)?.toInt() ?? 0,
+        height: (j['height'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// One page of gif results: the projected items plus whether another page exists.
+class GifSearchPage {
+  const GifSearchPage({required this.gifs, required this.hasNext});
+
+  final List<GifResult> gifs;
+  final bool hasNext;
+
+  factory GifSearchPage.fromJson(Map<String, dynamic> j) => GifSearchPage(
+        gifs: ((j['gifs'] as List?) ?? const [])
+            .map((e) => GifResult.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        hasNext: j['hasNext'] as bool? ?? false,
       );
 }
 
@@ -168,6 +268,7 @@ class Post {
     this.groupId,
     this.crossPostId,
     this.copies = const [],
+    this.recap,
   }) : _media = media;
 
   final int id;
@@ -211,6 +312,11 @@ class Post {
   /// True once this post stands in for the same post shared to more than one shown group.
   bool get isCrossPost => copies.length > 1;
 
+  /// The panel-deck payload for a kind == 'recap' post; null for every other post. Parsing
+  /// never throws (see [Post.fromJson]) - a malformed or future-shaped payload just leaves
+  /// this null and the post renders as a plain caption-only card.
+  final RecapPayload? recap;
+
   /// Comment engagement across all copies (falls back to this copy's own count when not
   /// collapsed). Unlike likes, comments never need a same-viewer correction: a comment on a
   /// cross-post is only ever posted to the one group the commenter picked (see
@@ -246,6 +352,7 @@ class Post {
         groupId: groupId ?? this.groupId,
         crossPostId: crossPostId,
         copies: copies ?? this.copies,
+        recap: recap,
       );
 
   /// The post's images in order. Prefers the multi-photo set, falling back to the legacy
@@ -310,6 +417,244 @@ class Post {
                 ))
             .toList(),
         crossPostId: j['crossPostId'] as String?,
+        recap: _tryParseRecap(j['recap']),
+      );
+
+  /// Parses a recap payload defensively: a malformed or future-shaped payload (a server
+  /// running a newer schema version) must never crash the feed - it just falls back to
+  /// null, and the post renders as a plain caption-only card.
+  static RecapPayload? _tryParseRecap(dynamic raw) {
+    if (raw is! Map<String, dynamic>) return null;
+    try {
+      return RecapPayload.fromJson(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+/// A recap post's panel-deck payload: a denormalised snapshot (names, avatars and counts
+/// frozen at generation time) rendered as a swipeable deck. [panels] holds only the panel
+/// types this client recognises - [RecapPanel.tryParse] silently drops anything else, which
+/// is what lets a v1.5+ server add new panel types without breaking this client.
+class RecapPayload {
+  RecapPayload({
+    required this.periodLabel,
+    required this.cadence,
+    required this.groupName,
+    required this.groupColor,
+    required this.stats,
+    required this.panels,
+  });
+
+  final String periodLabel; // "Aug 10-16"
+  final String cadence; // weekly | monthly | custom
+  final String groupName;
+  final String groupColor;
+  final RecapStats stats;
+  final List<RecapPanel> panels;
+
+  factory RecapPayload.fromJson(Map<String, dynamic> j) {
+    final period = (j['period'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final group = (j['group'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final panels = <RecapPanel>[];
+    for (final raw in (j['panels'] as List?) ?? const []) {
+      if (raw is! Map<String, dynamic>) continue;
+      final panel = RecapPanel.tryParse(raw);
+      if (panel != null) panels.add(panel);
+    }
+    return RecapPayload(
+      periodLabel: period['label'] as String? ?? '',
+      cadence: period['cadence'] as String? ?? '',
+      groupName: group['name'] as String? ?? '',
+      groupColor: group['color'] as String? ?? '',
+      stats: RecapStats.fromJson((j['stats'] as Map?)?.cast<String, dynamic>() ?? const {}),
+      panels: panels,
+    );
+  }
+}
+
+/// The at-a-glance numbers shown above the deck.
+class RecapStats {
+  RecapStats({
+    this.posts = 0,
+    this.photos = 0,
+    this.clips = 0,
+    this.likes = 0,
+    this.comments = 0,
+    this.places = 0,
+    this.members = 0,
+  });
+
+  final int posts;
+  final int photos;
+  final int clips;
+  final int likes;
+  final int comments;
+  final int places;
+  final int members;
+
+  factory RecapStats.fromJson(Map<String, dynamic> j) => RecapStats(
+        posts: (j['posts'] as num?)?.toInt() ?? 0,
+        photos: (j['photos'] as num?)?.toInt() ?? 0,
+        clips: (j['clips'] as num?)?.toInt() ?? 0,
+        likes: (j['likes'] as num?)?.toInt() ?? 0,
+        comments: (j['comments'] as num?)?.toInt() ?? 0,
+        places: (j['places'] as num?)?.toInt() ?? 0,
+        members: (j['members'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// One page of a recap's deck. Only "collage" and "awards" exist in v1 - [tryParse] returns
+/// null for anything else, so a panel type from a newer server is silently skipped rather
+/// than thrown on.
+sealed class RecapPanel {
+  const RecapPanel({required this.title});
+
+  final String title;
+
+  static RecapPanel? tryParse(Map<String, dynamic> j) {
+    final title = j['title'] as String? ?? '';
+    switch (j['type'] as String?) {
+      case 'collage':
+        final cards = <RecapCard>[
+          for (final e in (j['cards'] as List?) ?? const [])
+            if (e is Map<String, dynamic>) RecapCard.fromJson(e),
+        ];
+        return RecapCollagePanel(title: title, cards: cards);
+      case 'awards':
+        final awards = <RecapAward>[
+          for (final e in (j['awards'] as List?) ?? const [])
+            if (e is Map<String, dynamic>) RecapAward.fromJson(e),
+        ];
+        return RecapAwardsPanel(title: title, awards: awards);
+      default:
+        return null;
+    }
+  }
+}
+
+/// "The Wall": the ranked collage of the period's best-received check-ins, guaranteed to
+/// include every member who posted.
+class RecapCollagePanel extends RecapPanel {
+  const RecapCollagePanel({required super.title, required this.cards});
+
+  final List<RecapCard> cards;
+}
+
+/// "Awards Night": the period's superlatives.
+class RecapAwardsPanel extends RecapPanel {
+  const RecapAwardsPanel({required super.title, required this.awards});
+
+  final List<RecapAward> awards;
+}
+
+/// One card in the collage panel: a ranked photo or clip, or a quote card for a member
+/// whose guaranteed slot is text-only.
+class RecapCard {
+  RecapCard({
+    required this.kind,
+    required this.rank,
+    required this.guaranteed,
+    required this.postId,
+    required this.authorId,
+    required this.authorName,
+    this.authorPhotoId,
+    int? mediaId,
+    String mime = '',
+    int width = 0,
+    int height = 0,
+    int durationMs = 0,
+    bool hasPoster = false,
+    this.body = '',
+    this.likeCount = 0,
+    this.commentCount = 0,
+    this.location,
+  }) : media = mediaId == null
+            ? null
+            : PostMedia(
+                id: mediaId,
+                mime: mime,
+                width: width,
+                height: height,
+                durationMs: durationMs,
+                hasPoster: hasPoster,
+              );
+
+  /// "photo" | "clip" | "quote".
+  final String kind;
+  final int rank;
+
+  /// True when this card is the author's guaranteed slot (their single best post), rather
+  /// than a fill-pass pick.
+  final bool guaranteed;
+  final int postId;
+  final int authorId;
+  final String authorName;
+  final int? authorPhotoId;
+  final String body; // quote card text; empty for photo/clip
+  final int likeCount;
+  final int commentCount;
+  final String? location;
+
+  /// The card's attachment as a typed [PostMedia], ready for [MediaFrame] - null for a
+  /// quote card, which has none.
+  final PostMedia? media;
+
+  bool get isQuote => kind == 'quote';
+
+  factory RecapCard.fromJson(Map<String, dynamic> j) => RecapCard(
+        kind: j['kind'] as String? ?? 'quote',
+        rank: (j['rank'] as num?)?.toInt() ?? 0,
+        guaranteed: j['guaranteed'] as bool? ?? false,
+        postId: (j['postId'] as num?)?.toInt() ?? 0,
+        authorId: (j['authorId'] as num?)?.toInt() ?? 0,
+        authorName: j['authorName'] as String? ?? '',
+        authorPhotoId: (j['authorPhotoId'] as num?)?.toInt(),
+        mediaId: (j['mediaId'] as num?)?.toInt(),
+        mime: j['mime'] as String? ?? '',
+        width: (j['w'] as num?)?.toInt() ?? 0,
+        height: (j['h'] as num?)?.toInt() ?? 0,
+        durationMs: (j['durationMs'] as num?)?.toInt() ?? 0,
+        hasPoster: j['hasPoster'] as bool? ?? false,
+        body: j['body'] as String? ?? '',
+        likeCount: (j['likeCount'] as num?)?.toInt() ?? 0,
+        commentCount: (j['commentCount'] as num?)?.toInt() ?? 0,
+        location: j['location'] as String?,
+      );
+}
+
+/// One superlative in the Awards Night panel.
+class RecapAward {
+  RecapAward({
+    required this.id,
+    required this.label,
+    required this.userId,
+    required this.userName,
+    this.userPhotoId,
+    required this.value,
+    this.postId,
+    this.mediaId,
+  });
+
+  final String id; // most_liked | night_owl | ...
+  final String label;
+  final int userId;
+  final String userName;
+  final int? userPhotoId;
+  final String value; // "9 likes" - already formatted for display
+  final int? postId;
+  final int? mediaId;
+
+  factory RecapAward.fromJson(Map<String, dynamic> j) => RecapAward(
+        id: j['id'] as String? ?? '',
+        label: j['label'] as String? ?? '',
+        userId: (j['userId'] as num?)?.toInt() ?? 0,
+        userName: j['userName'] as String? ?? '',
+        userPhotoId: (j['userPhotoId'] as num?)?.toInt(),
+        value: j['value'] as String? ?? '',
+        postId: (j['postId'] as num?)?.toInt(),
+        mediaId: (j['mediaId'] as num?)?.toInt(),
       );
 }
 
@@ -325,16 +670,26 @@ typedef PostCopy = ({
 
 /// A lightweight comment (author + body) shown inline as a preview on feed cards.
 class CommentPreview {
-  CommentPreview({required this.authorId, required this.authorName, required this.body});
+  CommentPreview(
+      {required this.authorId, required this.authorName, required this.body, this.mediaId});
 
   final int authorId;
   final String authorName;
   final String body;
 
+  /// The comment's gif attachment, if any. See [previewText] for how an empty body with
+  /// media renders.
+  final int? mediaId;
+
+  /// What the preview line shows for this comment's content: the body, or "GIF" when the
+  /// body is empty and a gif is attached (a gif-only comment has nothing else to preview).
+  String get previewText => body.isEmpty && mediaId != null ? 'GIF' : body;
+
   factory CommentPreview.fromJson(Map<String, dynamic> j) => CommentPreview(
         authorId: (j['authorId'] as num?)?.toInt() ?? 0,
         authorName: j['authorName'] as String? ?? '',
         body: j['body'] as String? ?? '',
+        mediaId: (j['mediaId'] as num?)?.toInt(),
       );
 }
 
@@ -348,6 +703,7 @@ class Comment {
     this.authorPhotoId,
     this.groupId,
     this.parentCommentId,
+    this.mediaId,
   });
 
   final int id;
@@ -365,6 +721,10 @@ class Comment {
   /// show a "replying to X" line and to route a reply to the parent's group.
   final int? parentCommentId;
 
+  /// A gif attached to this comment (re-hosted on this group's own server), or null. A
+  /// comment may carry one with no body at all.
+  final int? mediaId;
+
   Comment withGroup(String? groupId) => Comment(
         id: id,
         authorId: authorId,
@@ -374,6 +734,7 @@ class Comment {
         authorPhotoId: authorPhotoId,
         groupId: groupId,
         parentCommentId: parentCommentId,
+        mediaId: mediaId,
       );
 
   factory Comment.fromJson(Map<String, dynamic> j) => Comment(
@@ -384,6 +745,7 @@ class Comment {
         createdAt: DateTime.parse(j['createdAt'] as String),
         authorPhotoId: j['authorPhotoId'] as int?,
         parentCommentId: (j['parentCommentId'] as num?)?.toInt(),
+        mediaId: (j['mediaId'] as num?)?.toInt(),
       );
 }
 

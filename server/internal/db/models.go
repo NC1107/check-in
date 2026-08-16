@@ -118,6 +118,14 @@ type Post struct {
 	Location  *string     `json:"location,omitempty"` // coarse "City, Country", optional
 	CreatedAt time.Time   `json:"createdAt"`
 
+	// Lat/Lng are the coordinates behind Location: clamped to their valid range and
+	// rounded to 2 decimal places (~1.1km) server-side regardless of what the client sent
+	// (see normalizeCoord), so they are never more precise than the "City, Country" string
+	// already carries. Stored for the v1.5 map panel; exposed now since a rounded
+	// coordinate is no more sensitive than the place name sitting right next to it.
+	Lat *float64 `json:"lat,omitempty"`
+	Lng *float64 `json:"lng,omitempty"`
+
 	// CrossPostID groups the copies of one post shared to several groups at once, so the
 	// multi-group client can collapse them into a single card. Null for a single-group post.
 	CrossPostID *string `json:"crossPostId,omitempty"`
@@ -130,6 +138,96 @@ type Post struct {
 	LikedByViewer   bool             `json:"likedByViewer"`
 	CommentsPreview []CommentPreview `json:"commentsPreview,omitempty"`
 	People          []TaggedPerson   `json:"people,omitempty"` // members tagged as appearing in the post
+
+	// Recap is the panel-deck payload for a kind = 'recap' post, joined in from the recaps
+	// table via recapExpr. Nil for every other post (the ~49 of 50 rows that aren't one).
+	Recap *RecapPayload `json:"recap,omitempty"`
+}
+
+// RecapPayload is the denormalised snapshot a recap post renders as a swipeable deck of
+// panels. It is a snapshot, not a list of ids to re-fetch: names, avatars and counts are
+// frozen at generation time, so a recap stays a permanent artifact and later likes don't
+// reshuffle last week's ranking.
+type RecapPayload struct {
+	V      int          `json:"v"`
+	Period RecapPeriod  `json:"period"`
+	Group  RecapGroup   `json:"group"`
+	Stats  RecapStats   `json:"stats"`
+	Panels []RecapPanel `json:"panels"`
+}
+
+// RecapPeriod describes the window a recap covers.
+type RecapPeriod struct {
+	Start   time.Time `json:"start"`
+	End     time.Time `json:"end"`
+	Label   string    `json:"label"`   // "Aug 10-16" (weekly) or "August 2026" (monthly)
+	Cadence string    `json:"cadence"` // weekly | monthly | custom
+}
+
+// RecapGroup is the group identity a recap post is attributed to, in place of a person
+// (see the serializer's authorName/authorPhotoId override for kind = 'recap' posts).
+type RecapGroup struct {
+	Name  string `json:"name"`
+	Color string `json:"color"`
+}
+
+// RecapStats is the at-a-glance summary shown before the deck and used in the recap's
+// fallback body text for a client too old to render panels.
+type RecapStats struct {
+	Posts    int `json:"posts"`
+	Photos   int `json:"photos"`
+	Clips    int `json:"clips"`
+	Likes    int `json:"likes"`
+	Comments int `json:"comments"`
+	Places   int `json:"places"`
+	Members  int `json:"members"`
+	// Posters is how many distinct members posted, versus Members (the group's size) -
+	// what the fallback body text's "all N of you" line is checking.
+	Posters int `json:"posters"`
+}
+
+// RecapPanel is one page of the deck. Type is "collage" or "awards" in v1; a client must
+// silently skip any type it doesn't recognise (forward-compat for v1.5's map and web
+// panels) and fall back to Stats + body if it recognises none.
+type RecapPanel struct {
+	Type   string       `json:"type"`
+	Title  string       `json:"title"`
+	Cards  []RecapCard  `json:"cards,omitempty"`
+	Awards []RecapAward `json:"awards,omitempty"`
+}
+
+// RecapCard is one entry in the collage ("The Wall") panel: a ranked photo/clip, or a
+// quote card for a member whose guaranteed slot is text-only.
+type RecapCard struct {
+	Kind          string `json:"kind"` // "photo" | "clip" | "quote"
+	Rank          int    `json:"rank"`
+	Guaranteed    bool   `json:"guaranteed"`
+	PostID        int64  `json:"postId"`
+	AuthorID      int64  `json:"authorId"`
+	AuthorName    string `json:"authorName"`
+	AuthorPhotoID *int64 `json:"authorPhotoId,omitempty"`
+	MediaID       *int64 `json:"mediaId,omitempty"`
+	Mime          string `json:"mime,omitempty"`
+	Width         int    `json:"w,omitempty"`
+	Height        int    `json:"h,omitempty"`
+	DurationMs    int    `json:"durationMs,omitempty"`
+	HasPoster     bool   `json:"hasPoster,omitempty"`
+	Body          string `json:"body,omitempty"` // quote card text; empty for photo/clip
+	LikeCount     int    `json:"likeCount"`
+	CommentCount  int    `json:"commentCount"`
+	Location      string `json:"location,omitempty"`
+}
+
+// RecapAward is one superlative in the "Awards Night" panel.
+type RecapAward struct {
+	ID          string `json:"id"` // most_liked | night_owl | early_bird | ...
+	Label       string `json:"label"`
+	UserID      int64  `json:"userId"`
+	UserName    string `json:"userName"`
+	UserPhotoID *int64 `json:"userPhotoId,omitempty"`
+	Value       string `json:"value"` // "9 likes" - already formatted for display
+	PostID      *int64 `json:"postId,omitempty"`
+	MediaID     *int64 `json:"mediaId,omitempty"`
 }
 
 // applyMedia decodes the attachment array a post query returns and derives the flat id
@@ -148,6 +246,19 @@ func (p *Post) applyMedia(raw []byte) {
 	for i, m := range p.Media {
 		p.MediaIDs[i] = m.ID
 	}
+}
+
+// applyRecap decodes a recap post's payload, when present. raw is NULL/empty for every
+// post that isn't kind = 'recap'.
+func (p *Post) applyRecap(raw []byte) {
+	if len(raw) == 0 {
+		return
+	}
+	var payload RecapPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return
+	}
+	p.Recap = &payload
 }
 
 // TaggedPerson is a member manually tagged as appearing in a post (id for filtering,
@@ -169,6 +280,9 @@ type CommentPreview struct {
 	AuthorID   int64  `json:"authorId"`
 	AuthorName string `json:"authorName"`
 	Body       string `json:"body"`
+	// MediaID is the comment's gif attachment, if any. A client shows "GIF" in place of an
+	// empty body when this is set - a gif-only comment has nothing else to preview.
+	MediaID *int64 `json:"mediaId,omitempty"`
 }
 
 // Comment is a reply on a post. ParentCommentID, when set, points at the comment this one
@@ -183,6 +297,19 @@ type Comment struct {
 	ParentCommentID *int64    `json:"parentCommentId,omitempty"`
 	AuthorName      string    `json:"authorName,omitempty"`
 	AuthorPhotoID   *int64    `json:"authorPhotoId,omitempty"`
+	// MediaID is a gif attached to the comment (re-hosted, never a hotlink). A comment may
+	// carry one and no body at all - see the empty-body allowance in handleAddComment.
+	MediaID *int64 `json:"mediaId,omitempty"`
+}
+
+// PreviewBody is what a plain-text summary of this comment should show: the body, or "GIF"
+// for a gif-only comment (empty body, media attached) - the same fallback the app's own
+// CommentPreview.previewText applies, used here by the debug dashboard's activity table.
+func (c Comment) PreviewBody() string {
+	if c.Body == "" && c.MediaID != nil {
+		return "GIF"
+	}
+	return c.Body
 }
 
 // Birthday is a lightweight projection used by the upcoming-birthdays endpoint that

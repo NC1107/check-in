@@ -63,6 +63,9 @@ func main() {
 	// Daily summaries for members who chose a digest over a ping per check-in. No-op when
 	// push isn't configured.
 	srv.StartDigestScheduler(ctx)
+	// Weekly/monthly recap posts. Unlike the digest scheduler this runs regardless of
+	// whether push is configured - a recap is a feed post, not a push-only feature.
+	srv.StartRecapScheduler(ctx)
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           srv.Router(),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"time"
 
@@ -14,8 +15,8 @@ import (
 // commentPreviewExpr is a SELECT-list fragment returning the 2 most recent comments on
 // post p as a JSON array (oldest-of-the-two first), for inline feed previews.
 const commentPreviewExpr = `, COALESCE((
-		SELECT json_agg(json_build_object('authorId', t.user_id, 'authorName', t.name, 'body', t.body) ORDER BY t.created_at)
-		FROM (SELECT c.user_id, u2.name, c.body, c.created_at FROM comments c JOIN users u2 ON u2.id = c.user_id
+		SELECT json_agg(json_build_object('authorId', t.user_id, 'authorName', t.name, 'body', t.body, 'mediaId', t.media_id) ORDER BY t.created_at)
+		FROM (SELECT c.user_id, u2.name, c.body, c.media_id, c.created_at FROM comments c JOIN users u2 ON u2.id = c.user_id
 		      WHERE c.post_id = p.id
 		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)
 		      ORDER BY c.created_at DESC LIMIT 2) t), '[]'::json)`
@@ -30,6 +31,11 @@ const postMediaExpr = `, COALESCE((
 			'durationMs', m.duration_ms, 'hasPoster', m.poster_path <> '') ORDER BY pm.position)
 		FROM post_media pm JOIN media m ON m.id = pm.media_id
 		WHERE pm.post_id = p.id), '[]'::json)`
+
+// recapExpr appends a recap post's panel-deck payload verbatim (it is already the shape
+// RecapPayload unmarshals into). NULL for the ~49 of 50 rows that aren't a recap, which is
+// why the payload lives in its own table rather than a column on the hot feed row.
+const recapExpr = `, (SELECT r.payload FROM recaps r WHERE r.post_id = p.id)`
 
 // postPeopleExpr appends the members tagged in post p as a JSON array of {id, name},
 // name-sorted. Empty array when no one is tagged.
@@ -740,7 +746,15 @@ func (d *DB) SetUserProfileMedia(ctx context.Context, userID, mediaID int64) err
 // CreatePost inserts a post. Its kind is derived from what is attached rather than taken
 // from the caller: the attachments are already being read here to check ownership, and a
 // post whose kind disagrees with its contents is a rendering bug on every client.
-func (d *DB) CreatePost(ctx context.Context, authorID int64, body string, mediaIDs []int64, location *string, peopleIDs []int64, crossPostID *string) (Post, error) {
+//
+// lat/lng are the coordinates the client claims to have read at capture time; nil for a
+// post with no GPS, and always nil for a text post (mirrors location). They are clamped
+// and rounded here - at the write boundary, not trusted from any caller - so a modified
+// client or a raw API call can never store more precision than the app itself ever sends.
+// Stored for the v1.5 map panel.
+func (d *DB) CreatePost(ctx context.Context, authorID int64, body string, mediaIDs []int64, location *string, peopleIDs []int64, crossPostID *string, lat, lng *float64) (Post, error) {
+	lat, lng = normalizeCoords(lat, lng)
+
 	var p Post
 	tx, err := d.Pool.Begin(ctx)
 	if err != nil {
@@ -759,11 +773,11 @@ func (d *DB) CreatePost(ctx context.Context, authorID int64, body string, mediaI
 
 	cover := coverFor(attached)
 	err = tx.QueryRow(ctx, `
-		INSERT INTO posts (author_id, kind, body, media_id, location, cross_post_id)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, author_id, kind, body, media_id, location, created_at, cross_post_id`,
-		authorID, kind, body, cover, location, crossPostID,
-	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID)
+		INSERT INTO posts (author_id, kind, body, media_id, location, cross_post_id, lat, lng)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id, author_id, kind, body, media_id, location, created_at, cross_post_id, lat, lng`,
+		authorID, kind, body, cover, location, crossPostID, lat, lng,
+	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng)
 	if err != nil {
 		return p, err
 	}
@@ -875,6 +889,31 @@ func kindFor(media []PostMedia) string {
 	return "image"
 }
 
+// normalizeCoords clamps lat/lng into their valid ranges and rounds each to 2 decimal
+// places (~1.1km), or returns (nil, nil) unless both are present - a lone coordinate is
+// meaningless. The client already rounds before sending (home_shell.dart's _roundCoord),
+// but that is advisory only; this is the actual guarantee, since the data accumulates
+// permanently once a post exists.
+func normalizeCoords(lat, lng *float64) (*float64, *float64) {
+	if lat == nil || lng == nil {
+		return nil, nil
+	}
+	nlat := normalizeCoord(*lat, -90, 90)
+	nlng := normalizeCoord(*lng, -180, 180)
+	return &nlat, &nlng
+}
+
+// normalizeCoord clamps v to [min, max] and rounds it to 2 decimal places.
+func normalizeCoord(v, min, max float64) float64 {
+	if v < min {
+		v = min
+	}
+	if v > max {
+		v = max
+	}
+	return math.Round(v*100) / 100
+}
+
 // dedupeExcluding returns the unique ids in order, dropping any equal to exclude.
 func dedupeExcluding(ids []int64, exclude int64) []int64 {
 	if len(ids) == 0 {
@@ -899,26 +938,34 @@ func dedupeExcluding(ids []int64, exclude int64) []int64 {
 // filtered to a single author, to one or more locations (a post matches if its location is
 // any of them; empty/nil means no location filter), and/or to posts created strictly before
 // a cursor time.
-func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, locations []string, before *time.Time, beforeID *int64, limit int) ([]Post, error) {
+//
+// excludeRecap drops kind = 'recap' posts entirely - used for a member's personal profile
+// timeline (handleUserPosts), where a recap is a group artifact attributed to the admin
+// rather than something they personally posted, and does not belong in their history. The
+// main feed passes false: recaps belong there like any other post.
+func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, locations []string, before *time.Time, beforeID *int64, limit int, excludeRecap bool) ([]Post, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id,
-		       u.name, u.profile_media_id,
+		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id, p.lat, p.lng,
+		       CASE WHEN p.kind = 'recap' THEN sc.name ELSE u.name END,
+		       CASE WHEN p.kind = 'recap' THEN NULL ELSE u.profile_media_id END,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
 		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
-		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+`
+		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+recapExpr+`
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
+		JOIN server_config sc ON sc.id = 1
 		WHERE ($2::bigint IS NULL OR p.author_id = $2)
 		  AND ($3::text[] IS NULL OR p.location = ANY($3::text[]))
 		  AND ($4::timestamptz IS NULL
 		       OR ($6::bigint IS NULL AND p.created_at < $4)
 		       OR ($6::bigint IS NOT NULL AND (p.created_at, p.id) < ($4, $6)))
 		  AND u.status = 'active'
-		  AND p.author_id NOT IN (
-		      SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)
+		  AND (p.kind = 'recap' OR p.author_id NOT IN (
+		      SELECT blocked_id FROM user_blocks WHERE blocker_id = $1))
+		  AND ($7::bool = FALSE OR p.kind <> 'recap')
 		ORDER BY p.created_at DESC, p.id DESC
-		LIMIT $5`, viewerID, authorID, locations, before, limit, beforeID)
+		LIMIT $5`, viewerID, authorID, locations, before, limit, beforeID, excludeRecap)
 	if err != nil {
 		return nil, err
 	}
@@ -926,9 +973,9 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 	var posts []Post
 	for rows.Next() {
 		var p Post
-		var preview, media, people []byte
-		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people); err != nil {
+		var preview, media, people, recap []byte
+		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
+			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people, &recap); err != nil {
 			return nil, err
 		}
 		if len(preview) > 0 {
@@ -938,6 +985,7 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 			_ = json.Unmarshal(people, &p.People)
 		}
 		p.applyMedia(media)
+		p.applyRecap(recap)
 		posts = append(posts, p)
 	}
 	return posts, rows.Err()
@@ -978,16 +1026,18 @@ func (d *DB) Locations(ctx context.Context) ([]LocationCount, error) {
 // (case-insensitive substring), newest first — powering full-content feed search.
 func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limit int) ([]Post, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id,
-		       u.name, u.profile_media_id,
+		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id, p.lat, p.lng,
+		       CASE WHEN p.kind = 'recap' THEN sc.name ELSE u.name END,
+		       CASE WHEN p.kind = 'recap' THEN NULL ELSE u.profile_media_id END,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
 		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
-		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+`
+		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+recapExpr+`
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
+		JOIN server_config sc ON sc.id = 1
 		WHERE u.status = 'active'
-		  AND p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)
+		  AND (p.kind = 'recap' OR p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1))
 		  AND (
 		      p.body ILIKE '%' || $2 || '%'
 		   OR EXISTS (SELECT 1 FROM comments c WHERE c.post_id = p.id AND c.body ILIKE '%' || $2 || '%'
@@ -1002,9 +1052,9 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 	var posts []Post
 	for rows.Next() {
 		var p Post
-		var preview, media, people []byte
-		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people); err != nil {
+		var preview, media, people, recap []byte
+		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
+			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people, &recap); err != nil {
 			return nil, err
 		}
 		if len(preview) > 0 {
@@ -1014,6 +1064,7 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 			_ = json.Unmarshal(people, &p.People)
 		}
 		p.applyMedia(media)
+		p.applyRecap(recap)
 		posts = append(posts, p)
 	}
 	return posts, rows.Err()
@@ -1022,19 +1073,23 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 // GetPost returns a single post with engagement counts from the viewer's perspective.
 func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) {
 	var p Post
-	var preview, media, people []byte
+	var preview, media, people, recap []byte
 	err := d.Pool.QueryRow(ctx, `
-		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id,
-		       u.name, u.profile_media_id,
+		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id, p.lat, p.lng,
+		       CASE WHEN p.kind = 'recap' THEN sc.name ELSE u.name END,
+		       CASE WHEN p.kind = 'recap' THEN NULL ELSE u.profile_media_id END,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
 		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
-		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+`
-		FROM posts p JOIN users u ON u.id = p.author_id
+		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+recapExpr+`
+		FROM posts p
+		JOIN users u ON u.id = p.author_id
+		JOIN server_config sc ON sc.id = 1
 		WHERE p.id = $2 AND u.status = 'active'
-		  AND p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)`, viewerID, postID,
-	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID,
-		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people)
+		  AND (p.kind = 'recap' OR p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1))`,
+		viewerID, postID,
+	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
+		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people, &recap)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, ErrNotFound
 	}
@@ -1046,6 +1101,7 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 	}
 	if err == nil {
 		p.applyMedia(media)
+		p.applyRecap(recap)
 	}
 	return p, err
 }
@@ -1123,8 +1179,8 @@ func collectPostMedia(ctx context.Context, tx pgx.Tx, postID int64) ([]int64, er
 }
 
 // deleteOrphanMedia removes any candidate media rows no longer referenced by a post cover,
-// post_media, or a profile photo, returning their stored file paths. Run after the post is
-// deleted so its own references are already gone.
+// post_media, a comment, or a profile photo, returning their stored file paths. Run after
+// the referencing row is deleted so its own reference is already gone.
 //
 // A video row owns two files, so the poster comes back alongside the clip. Returning only
 // the clip would leave a file on disk that nothing references and nothing will ever look
@@ -1137,6 +1193,7 @@ func deleteOrphanMedia(ctx context.Context, tx pgx.Tx, candidates []int64) ([]st
 			DELETE FROM media m WHERE m.id = $1
 			  AND NOT EXISTS (SELECT 1 FROM posts p WHERE p.media_id = m.id)
 			  AND NOT EXISTS (SELECT 1 FROM post_media pm WHERE pm.media_id = m.id)
+			  AND NOT EXISTS (SELECT 1 FROM comments c WHERE c.media_id = m.id)
 			  AND NOT EXISTS (SELECT 1 FROM users u WHERE u.profile_media_id = m.id)
 			RETURNING m.path, m.poster_path`, mid).Scan(&path, &poster)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1153,23 +1210,53 @@ func deleteOrphanMedia(ctx context.Context, tx pgx.Tx, candidates []int64) ([]st
 	return paths, nil
 }
 
-// AdminDeleteComment removes any comment by id (operator dashboard moderation).
-func (d *DB) AdminDeleteComment(ctx context.Context, commentID int64) error {
-	ct, err := d.Pool.Exec(ctx, `DELETE FROM comments WHERE id = $1`, commentID)
+// AdminDeleteComment removes any comment by id (operator dashboard moderation), plus its
+// media if that leaves it orphaned, returning the stored file path to remove (empty when
+// the comment carried no attachment or its media is still used elsewhere - by another
+// comment, a post, or a profile photo).
+func (d *DB) AdminDeleteComment(ctx context.Context, commentID int64) ([]string, error) {
+	tx, err := d.Pool.Begin(ctx)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var mediaID *int64
+	err = tx.QueryRow(ctx, `SELECT media_id FROM comments WHERE id = $1`, commentID).Scan(&mediaID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	ct, err := tx.Exec(ctx, `DELETE FROM comments WHERE id = $1`, commentID)
+	if err != nil {
+		return nil, err
 	}
 	if ct.RowsAffected() == 0 {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
-	return nil
+
+	var candidates []int64
+	if mediaID != nil {
+		candidates = []int64{*mediaID}
+	}
+	paths, err := deleteOrphanMedia(ctx, tx, candidates)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return paths, nil
 }
 
 // RecentComments returns the latest comments across all posts with their author name,
 // for the operator dashboard's activity view.
 func (d *DB) RecentComments(ctx context.Context, limit int) ([]Comment, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT c.id, c.post_id, c.user_id, c.body, c.created_at, u.name
+		SELECT c.id, c.post_id, c.user_id, c.body, c.created_at, c.media_id, u.name
 		FROM comments c JOIN users u ON u.id = c.user_id
 		ORDER BY c.created_at DESC
 		LIMIT $1`, limit)
@@ -1180,7 +1267,7 @@ func (d *DB) RecentComments(ctx context.Context, limit int) ([]Comment, error) {
 	var out []Comment
 	for rows.Next() {
 		var c Comment
-		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.AuthorName); err != nil {
+		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.MediaID, &c.AuthorName); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -1254,28 +1341,64 @@ func (d *DB) UnlikePost(ctx context.Context, postID, userID int64) error {
 // ---- comments ----
 
 // AddComment inserts a comment and returns it. parentID, when non-nil, links it to the
-// comment it replies to (validated by the caller to belong to the same post).
-func (d *DB) AddComment(ctx context.Context, postID, userID int64, body string, parentID *int64) (Comment, error) {
+// comment it replies to (validated by the caller to belong to the same post). mediaID, when
+// non-nil, attaches a gif the caller must own - the same IDOR protection CreatePost applies
+// to its attachments, since without it a member could point a comment at someone else's
+// not-yet-posted upload and have it exposed to the whole group.
+func (d *DB) AddComment(ctx context.Context, postID, userID int64, body string, parentID, mediaID *int64) (Comment, error) {
 	var c Comment
+	tx, err := d.Pool.Begin(ctx)
+	if err != nil {
+		return c, err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := commentMediaOwned(ctx, tx, mediaID, userID); err != nil {
+		return c, err
+	}
+
 	// Return the author's name + photo alongside the new row (via CTE) so the response
 	// matches ListComments — otherwise the client renders the just-posted comment with an
 	// empty name and a placeholder avatar.
-	err := d.Pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		WITH ins AS (
-			INSERT INTO comments (post_id, user_id, body, parent_comment_id) VALUES ($1, $2, $3, $4)
-			RETURNING id, post_id, user_id, body, created_at, parent_comment_id
+			INSERT INTO comments (post_id, user_id, body, parent_comment_id, media_id) VALUES ($1, $2, $3, $4, $5)
+			RETURNING id, post_id, user_id, body, created_at, parent_comment_id, media_id
 		)
-		SELECT ins.id, ins.post_id, ins.user_id, ins.body, ins.created_at, ins.parent_comment_id, u.name, u.profile_media_id
+		SELECT ins.id, ins.post_id, ins.user_id, ins.body, ins.created_at, ins.parent_comment_id, ins.media_id, u.name, u.profile_media_id
 		FROM ins JOIN users u ON u.id = ins.user_id`,
-		postID, userID, body, parentID,
-	).Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.ParentCommentID, &c.AuthorName, &c.AuthorPhotoID)
-	return c, err
+		postID, userID, body, parentID, mediaID,
+	).Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.ParentCommentID, &c.MediaID, &c.AuthorName, &c.AuthorPhotoID)
+	if err != nil {
+		return c, err
+	}
+	return c, tx.Commit(ctx)
+}
+
+// commentMediaOwned reports ErrNotOwned unless mediaID belongs to userID; a nil mediaID
+// (no attachment) always passes. Mirrors ownedMedia's ownership check for post attachments.
+func commentMediaOwned(ctx context.Context, tx pgx.Tx, mediaID *int64, userID int64) error {
+	if mediaID == nil {
+		return nil
+	}
+	var owner *int64
+	err := tx.QueryRow(ctx, `SELECT owner_id FROM media WHERE id = $1`, *mediaID).Scan(&owner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotOwned
+	}
+	if err != nil {
+		return err
+	}
+	if owner == nil || *owner != userID {
+		return ErrNotOwned
+	}
+	return nil
 }
 
 // ListComments returns comments on a post in chronological order with author info.
 func (d *DB) ListComments(ctx context.Context, postID, viewerID int64) ([]Comment, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT c.id, c.post_id, c.user_id, c.body, c.created_at, c.parent_comment_id, u.name, u.profile_media_id
+		SELECT c.id, c.post_id, c.user_id, c.body, c.created_at, c.parent_comment_id, c.media_id, u.name, u.profile_media_id
 		FROM comments c JOIN users u ON u.id = c.user_id
 		WHERE c.post_id = $1
 		  AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $2)
@@ -1287,7 +1410,7 @@ func (d *DB) ListComments(ctx context.Context, postID, viewerID int64) ([]Commen
 	var comments []Comment
 	for rows.Next() {
 		var c Comment
-		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.ParentCommentID, &c.AuthorName, &c.AuthorPhotoID); err != nil {
+		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.ParentCommentID, &c.MediaID, &c.AuthorName, &c.AuthorPhotoID); err != nil {
 			return nil, err
 		}
 		comments = append(comments, c)

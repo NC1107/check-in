@@ -31,6 +31,21 @@ String fileExtension(String path) {
   return dot < 0 ? '' : path.substring(dot + 1).toLowerCase();
 }
 
+/// Thrown by [ApiClient.generateRecap] when a manual recap already exists for the exact
+/// same period and panel set, so the caller can offer to replace it instead of retrying
+/// blind.
+class RecapAlreadyExists implements Exception {
+  const RecapAlreadyExists(this.existingPostId);
+
+  final int existingPostId;
+}
+
+/// Thrown by [ApiClient.generateRecap] when the period doesn't clear the server's quality
+/// bar (too little activity to build a meaningful deck).
+class RecapEmptyPeriod implements Exception {
+  const RecapEmptyPeriod();
+}
+
 /// ApiClient wraps all HTTP calls to a Check-In server. The base URL (server address)
 /// and bearer token are injected after the user connects and logs in.
 class ApiClient {
@@ -269,13 +284,19 @@ class ApiClient {
     return Post.fromJson(r.data as Map<String, dynamic>);
   }
 
+  /// lat/lng are only ever sent by the caller when the target server's server-info
+  /// advertised the "recap" capability (see [ServerInfo.recapCapable]) - this server
+  /// rejects unknown JSON fields, so an unguarded send would 400 every post against a
+  /// server that predates the feature.
   Future<Post> createPost(
       {required String kind,
       required String body,
       List<int>? mediaIds,
       String? location,
       List<int>? peopleIds,
-      String? crossPostId}) async {
+      String? crossPostId,
+      double? lat,
+      double? lng}) async {
     final r = await _dio.post('/api/posts', data: {
       'kind': kind,
       'body': body,
@@ -283,6 +304,8 @@ class ApiClient {
       if (location != null && location.isNotEmpty) 'location': location,
       if (peopleIds != null && peopleIds.isNotEmpty) 'peopleIds': peopleIds,
       if (crossPostId != null) 'crossPostId': crossPostId,
+      if (lat != null) 'lat': lat,
+      if (lng != null) 'lng': lng,
     });
     return Post.fromJson(r.data as Map<String, dynamic>);
   }
@@ -308,12 +331,36 @@ class ApiClient {
         .toList();
   }
 
-  Future<Comment> addComment(int postId, String body, {int? parentCommentId}) async {
+  /// addComment posts a comment. [mediaId] must only be sent to a server whose server-info
+  /// advertises `commentMedia` - an older server 400s on the unknown field
+  /// (DisallowUnknownFields); callers gate on that before ever passing one.
+  Future<Comment> addComment(int postId, String body, {int? parentCommentId, int? mediaId}) async {
     final r = await _dio.post('/api/posts/$postId/comments', data: {
       'body': body,
       if (parentCommentId != null) 'parentCommentId': parentCommentId,
+      if (mediaId != null) 'mediaId': mediaId,
     });
     return Comment.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  /// gifSearch proxies a Klipy gif search (or, for an empty [query], trending) through this
+  /// group's server, which holds the Klipy key so the client never sees it. Only meaningful
+  /// against a server whose server-info advertises `gifSearch`.
+  Future<GifSearchPage> gifSearch({String query = '', int page = 1}) async {
+    final r = await _dio.get('/api/gifs/search', queryParameters: {
+      if (query.isNotEmpty) 'q': query,
+      'page': page,
+    });
+    return GifSearchPage.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  /// downloadExternalGif fetches a chosen gif's bytes straight from Klipy's CDN (the
+  /// [GifResult.gifUrl], never proxied - it carries no key) so the caller can re-upload them
+  /// to this group's own server. A bare Dio, not this client's authenticated one: Klipy's
+  /// CDN needs no bearer token and must never be sent this account's.
+  static Future<List<int>> downloadExternalGif(String url) async {
+    final r = await Dio().get<List<int>>(url, options: Options(responseType: ResponseType.bytes));
+    return r.data ?? const [];
   }
 
   Future<List<Birthday>> upcomingBirthdays() async {
@@ -342,9 +389,10 @@ class ApiClient {
     return (r.data as Map<String, dynamic>)['id'] as int;
   }
 
-  /// uploadImageBytes sends already-encoded JPEG bytes (from a client-side downscale /
-  /// transcode) and returns the new media id. Used so the server never has to decode a
-  /// full-resolution photo or an iPhone HEIC it can't read.
+  /// uploadImageBytes sends already-encoded bytes and returns the new media id. [filename]'s
+  /// extension picks the upload's content type (see uploadContentType), so this carries
+  /// either a downscaled/transcoded JPEG (so the server never has to decode a full-resolution
+  /// photo or an iPhone HEIC it can't read) or a gif re-hosted byte-for-byte from Klipy.
   Future<int> uploadImageBytes(List<int> bytes, {String filename = 'upload.jpg'}) async {
     final form = FormData.fromMap({
       'file': MultipartFile.fromBytes(bytes,
@@ -403,6 +451,59 @@ class ApiClient {
   /// id clears it back to the automatic color.
   Future<void> setGroupColor(String colorId) =>
       _dio.patch('/api/admin/server', data: {'color': colorId});
+
+  /// setRecapSettings updates the group's standing recap cadence (admin only). Callers must
+  /// only reach this once the group's server has advertised [ServerInfo.recapCapable].
+  ///
+  /// Returns nothing rather than a [ServerInfo]: the PATCH response only carries
+  /// name/color/recap settings, not the "recap" capability flag itself, so parsing it as a
+  /// full ServerInfo would read recapCapable back as false - a trap for a future caller who
+  /// reasonably expects the return value of a ServerInfo-shaped call to be trustworthy.
+  /// Refresh the account's real capability from [serverInfo] if it's ever needed here.
+  Future<void> setRecapSettings({
+    required String cadence,
+    required int weekday,
+    required int hour,
+    required int offset,
+  }) async {
+    await _dio.patch('/api/admin/server', data: {
+      'recapCadence': cadence,
+      'recapWeekday': weekday,
+      'recapHour': hour,
+      'recapOffset': offset,
+    });
+  }
+
+  /// generateRecap asks the server to build an on-demand recap for [periodStart,
+  /// periodEnd) covering [panels] (admin only). A duplicate request for the same period and
+  /// panel set is refused with a [RecapAlreadyExists] exception unless [replace] is true, in
+  /// which case the prior one is deleted and replaced in a single transaction.
+  Future<Post> generateRecap({
+    required DateTime periodStart,
+    required DateTime periodEnd,
+    required List<String> panels,
+    bool replace = false,
+  }) async {
+    try {
+      final r = await _dio.post('/api/admin/recaps', data: {
+        'periodStart': periodStart.toUtc().toIso8601String(),
+        'periodEnd': periodEnd.toUtc().toIso8601String(),
+        'panels': panels,
+        'replace': replace,
+      });
+      return Post.fromJson(r.data as Map<String, dynamic>);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 409) {
+        final data = e.response?.data;
+        final existingId = data is Map ? (data['postId'] as num?)?.toInt() : null;
+        throw RecapAlreadyExists(existingId ?? 0);
+      }
+      if (e.response?.statusCode == 422) {
+        throw const RecapEmptyPeriod();
+      }
+      rethrow;
+    }
+  }
 
   // ---- reports ----
 

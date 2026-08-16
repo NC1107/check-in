@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"image/gif"
 	"image/png"
 	"io"
 	"mime/multipart"
@@ -135,12 +136,24 @@ type harness struct {
 	store    *storage.Store
 	mediaDir string
 	http     *httptest.Server
+	// srv is the same *Server instance the httptest server routes to, exposed so
+	// package-internal tests can call unexported methods directly (e.g. the recap
+	// scheduler's tick) rather than waiting on a real ticker.
+	srv *Server
 
 	// phoneSeq hands out distinct phone numbers so tests never collide on the unique index.
 	phoneSeq int
 }
 
 func newHarness(t *testing.T) *harness {
+	t.Helper()
+	return newHarnessWithConfig(t, nil)
+}
+
+// newHarnessWithConfig is newHarness with a chance to tweak the config before the server is
+// built - for the handful of tests that need something newHarness's fixed cfg doesn't set
+// (e.g. a Klipy key), without disturbing every other test's baseline config.
+func newHarnessWithConfig(t *testing.T, mutate func(*config.Config)) *harness {
 	t.Helper()
 	database := openTestDB(t)
 	resetDB(t, database)
@@ -157,12 +170,16 @@ func newHarness(t *testing.T) *harness {
 		MaxVideoBytes:      testMaxVideoBytes,
 		DefaultCountryCode: "1",
 	}
+	if mutate != nil {
+		mutate(&cfg)
+	}
 	// A genuinely nil Notifier, so every notify* helper returns before touching the database.
 	// Push has its own tests; here it would only add goroutines racing the test's end.
-	ts := httptest.NewServer(New(cfg, database, store, nil).Router())
+	srv := New(cfg, database, store, nil)
+	ts := httptest.NewServer(srv.Router())
 	t.Cleanup(ts.Close)
 
-	return &harness{t: t, db: database, store: store, mediaDir: dir, http: ts}
+	return &harness{t: t, db: database, store: store, mediaDir: dir, http: ts, srv: srv}
 }
 
 // itoa renders an id for a URL path.
@@ -379,6 +396,29 @@ func (h *harness) uploadImage(token string) db.Media {
 	return media
 }
 
+// gifBytes encodes a tiny single-frame animated GIF, small and simple enough to sit well
+// under the harness's upload limit while still round-tripping through the server's gif
+// pipeline (which stores animations as-is rather than re-encoding them).
+func gifBytes(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewPaletted(image.Rect(0, 0, 4, 4), color.Palette{color.Black, color.White})
+	var buf bytes.Buffer
+	if err := gif.EncodeAll(&buf, &gif.GIF{Image: []*image.Paletted{img}, Delay: []int{0}}); err != nil {
+		t.Fatalf("encode gif: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// uploadGif stores a small animated gif and returns the media the server recorded for it -
+// what a re-hosted Klipy pick looks like once the client has downloaded and uploaded it.
+func (h *harness) uploadGif(token string) db.Media {
+	h.t.Helper()
+	var media db.Media
+	h.uploadFile("/api/media", token, "pick.gif", gifBytes(h.t)).
+		expect(http.StatusCreated).decode(&media)
+	return media
+}
+
 // uploadClip stores a video of the given length and returns the media the server recorded.
 func (h *harness) uploadClip(token string, durationMs int) db.Media {
 	h.t.Helper()
@@ -404,6 +444,12 @@ func (h *harness) feed(a actor) []db.Post {
 	}
 	h.get("/api/feed", a.Token).expect(http.StatusOK).decode(&page)
 	return page.Posts
+}
+
+// like has [actor] like a post, failing the test unless the server accepts it.
+func (h *harness) like(a actor, postID int64) {
+	h.t.Helper()
+	h.post("/api/posts/"+itoa(postID)+"/like", a.Token, nil).expect(http.StatusNoContent)
 }
 
 // mediaPaths reads the stored file paths of a media row straight from the database, so a
