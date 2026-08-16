@@ -1,10 +1,11 @@
 package db
 
-// TestMigration0021DefaultsAndBackfillsMonthlyCadence exercises 0021_recap_monthly_default.sql
-// end to end, against a real Postgres. Unlike the internal/api harness's shared TESTDB_URL
-// database, this runs inside its own throwaway schema (CREATE SCHEMA / DROP SCHEMA CASCADE)
-// so it can apply migrations one at a time without racing every other package's tests that
-// also migrate and truncate the same physical database.
+// TestMigration0021ChangesDefaultOnlyLeavesExistingRowsAlone exercises
+// 0021_recap_monthly_default.sql end to end, against a real Postgres. Unlike the
+// internal/api harness's shared TESTDB_URL database, this runs inside its own throwaway
+// schema (CREATE SCHEMA / DROP SCHEMA CASCADE) so it can apply migrations one at a time
+// without racing every other package's tests that also migrate and truncate the same
+// physical database.
 
 import (
 	"context"
@@ -21,7 +22,7 @@ import (
 	"github.com/nc1107/check-in/server/migrations"
 )
 
-func TestMigration0021DefaultsAndBackfillsMonthlyCadence(t *testing.T) {
+func TestMigration0021ChangesDefaultOnlyLeavesExistingRowsAlone(t *testing.T) {
 	url := os.Getenv("TESTDB_URL")
 	if url == "" {
 		t.Skip("TESTDB_URL is not set - skipping the DB-backed migration test")
@@ -63,45 +64,66 @@ func TestMigration0021DefaultsAndBackfillsMonthlyCadence(t *testing.T) {
 	}
 
 	// Baseline: before 0021 runs, the singleton row still carries 0018's untouched schema
-	// default - the exact starting state 0021's in-place UPDATE is meant to move off of.
-	var cadence string
-	if err := conn.QueryRow(ctx, "SELECT recap_cadence FROM server_config WHERE id = 1").
-		Scan(&cadence); err != nil {
-		t.Fatalf("read pre-0021 recap_cadence: %v", err)
+	// default. This is deliberately indistinguishable, from the schema alone, from a host
+	// who explicitly chose weekly - which is exactly why 0021 must never rewrite it.
+	cadence := func() string {
+		t.Helper()
+		var c string
+		if err := conn.QueryRow(ctx, "SELECT recap_cadence FROM server_config WHERE id = 1").
+			Scan(&c); err != nil {
+			t.Fatalf("read recap_cadence: %v", err)
+		}
+		return c
 	}
-	if cadence != "weekly" {
-		t.Fatalf("recap_cadence before 0021 = %q, want the untouched 0018 default %q", cadence, "weekly")
+	columnDefault := func() string {
+		t.Helper()
+		var d string
+		if err := conn.QueryRow(ctx, `
+			SELECT column_default FROM information_schema.columns
+			WHERE table_schema = $1 AND table_name = 'server_config' AND column_name = 'recap_cadence'`,
+			schema).Scan(&d); err != nil {
+			t.Fatalf("read column default: %v", err)
+		}
+		return d
+	}
+
+	if got := cadence(); got != "weekly" {
+		t.Fatalf("recap_cadence before 0021 = %q, want the untouched 0018 default %q", got, "weekly")
+	}
+	if got := columnDefault(); !strings.Contains(got, "weekly") {
+		t.Fatalf("column default before 0021 = %q, want it to still contain %q", got, "weekly")
 	}
 
 	applyMigrationFile(t, ctx, conn, migration0021)
 
-	// The load-bearing assertion: an existing row that had never been touched off the
-	// untouched 'weekly' default must be moved to 'monthly' in place, by 0021 itself - not
-	// merely apply to rows created after it. Dropping 0021's UPDATE (keeping only the
-	// ALTER COLUMN ... SET DEFAULT) would leave this on 'weekly' forever, since nothing else
-	// ever revisits an existing row - this is exactly what this assertion catches.
-	if err := conn.QueryRow(ctx, "SELECT recap_cadence FROM server_config WHERE id = 1").
-		Scan(&cadence); err != nil {
-		t.Fatalf("read post-0021 recap_cadence: %v", err)
-	}
-	if cadence != "monthly" {
-		t.Errorf("recap_cadence after 0021 = %q, want the backfilled %q", cadence, "monthly")
+	// The column default is what changes: a brand new server_config row (a fresh install)
+	// now lands on 'monthly'.
+	if got := columnDefault(); !strings.Contains(got, "monthly") {
+		t.Errorf("column default after 0021 = %q, want it to contain %q", got, "monthly")
 	}
 
-	// The other half of 0021: new rows (a server that has never had a server_config row at
-	// all - not this app's real shape, since 0001_init.sql seeds the singleton, but the
-	// column's own DEFAULT clause is what a bare INSERT (id) would fall through to) must
-	// also land on 'monthly', not just this backfilled row.
-	var columnDefault string
-	if err := conn.QueryRow(ctx, `
-		SELECT column_default FROM information_schema.columns
-		WHERE table_schema = $1 AND table_name = 'server_config' AND column_name = 'recap_cadence'`,
-		schema).Scan(&columnDefault); err != nil {
-		t.Fatalf("read column default: %v", err)
+	// The load-bearing safety property: an existing row must be left exactly as it was.
+	// There is no way to tell a host who deliberately chose weekly from one who simply never
+	// visited recap settings - recap_since is stamped once and never rewritten on a settings
+	// change, and a genuinely-weekly group that keeps missing the quality bar can go months
+	// without ever writing a recaps row - so 0021 must never touch an existing row's value.
+	// Reintroducing an UPDATE (even a guarded one) would flip this row to 'monthly' and fail
+	// this assertion.
+	if got := cadence(); got != "weekly" {
+		t.Errorf("recap_cadence after 0021 = %q, want it left untouched at %q", got, "weekly")
 	}
-	if !strings.Contains(columnDefault, "monthly") {
-		t.Errorf("server_config.recap_cadence column default = %q, want it to contain %q",
-			columnDefault, "monthly")
+
+	// Idempotency: a migration runner may apply 0021 more than once (a restart mid-run, a
+	// re-run against a schema that already recorded it in some other bookkeeping scheme).
+	// Running it again must be a no-op, not a second attempt to rewrite the row.
+	applyMigrationFile(t, ctx, conn, migration0021)
+	if got := cadence(); got != "weekly" {
+		t.Errorf("recap_cadence after applying 0021 twice = %q, want it still untouched at %q",
+			got, "weekly")
+	}
+	if got := columnDefault(); !strings.Contains(got, "monthly") {
+		t.Errorf("column default after applying 0021 twice = %q, want it to still contain %q",
+			got, "monthly")
 	}
 }
 

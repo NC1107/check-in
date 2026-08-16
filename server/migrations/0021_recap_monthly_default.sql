@@ -4,19 +4,14 @@
 -- what happened, so the ranked collage reads as a genuine recap instead of a rerun. The
 -- monthly collage cap (20 vs weekly's 12, see selectCollageCards' collageCardCap) already
 -- assumed this cadence would be the norm; this migration is what makes it the default.
+--
+-- This only changes what a brand new server_config row gets - it deliberately does NOT
+-- touch any existing row. There is no way to tell, from the schema alone, a host who
+-- deliberately chose weekly from one who simply never visited recap settings: recap_since is
+-- stamped once, at column-add time, and never rewritten on a settings change, and a
+-- genuinely-weekly small group that keeps missing the quality bar (recapMinPosts/
+-- recapMinPosters) can go months without ever writing a row to recaps - so "no scheduled
+-- recap yet" is not evidence of "untouched". A host's chosen cadence is theirs; the default
+-- only governs what a new install starts on. (The handful of servers this project itself
+-- operates are moved to monthly by hand, outside this migration, on purpose.)
 ALTER TABLE server_config ALTER COLUMN recap_cadence SET DEFAULT 'monthly';
-
--- Every server still sitting on the untouched schema default is moved onto the new one too,
--- not just new installs going forward - but only when it is actually safe to: a server that
--- has never fired a scheduled recap yet has no history to disturb, so flipping its standing
--- cadence changes what happens next, not what a member has already seen. The NOT EXISTS
--- guard makes that safety condition an enforced invariant of the migration itself, rather
--- than just an assumption about which servers happen to be running this migration soon
--- after 0018-0020 - a host who has genuinely been receiving weekly recaps keeps receiving
--- them, unchanged.
-UPDATE server_config
-SET recap_cadence = 'monthly'
-WHERE recap_cadence = 'weekly'
-  AND NOT EXISTS (
-    SELECT 1 FROM recaps WHERE origin = 'scheduled' AND cadence = 'weekly'
-  );
