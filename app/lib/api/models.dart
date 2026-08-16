@@ -9,6 +9,8 @@ class ServerInfo {
     this.color = '',
     this.publicUrl,
     this.mediaTypes = const ['image'],
+    this.gifSearch = false,
+    this.commentMedia = false,
   });
 
   final String name;
@@ -28,12 +30,89 @@ class ServerInfo {
   /// server would reject rather than letting the upload fail after the fact.
   final List<String> mediaTypes;
 
+  /// Whether this server's Klipy gif-search proxy is usable (a key is configured on it).
+  /// Gates the compose/comment gif picker entry points - false for a server with no key,
+  /// or one old enough to say nothing about it at all.
+  final bool gifSearch;
+
+  /// Whether this server accepts a `mediaId` on a comment. Intrinsic to the server version
+  /// (always true from the version that introduced it onward), so what a client actually
+  /// gates on is the *key being present at all* - an older server, which predates the field
+  /// and would 400 on an unknown `mediaId` (DisallowUnknownFields), says nothing here and
+  /// this defaults to false.
+  final bool commentMedia;
+
   factory ServerInfo.fromJson(Map<String, dynamic> j) => ServerInfo(
         name: j['name'] as String? ?? 'Check-In',
         initialized: j['initialized'] as bool? ?? false,
         color: j['color'] as String? ?? '',
         publicUrl: j['publicUrl'] as String?,
         mediaTypes: (j['mediaTypes'] as List?)?.map((e) => e as String).toList() ?? const ['image'],
+        gifSearch: j['gifSearch'] as bool? ?? false,
+        commentMedia: j['commentMedia'] as bool? ?? false,
+      );
+}
+
+/// One Klipy search/trending result, already projected down to what the picker and the
+/// re-host flow need. Never carries a Klipy key - the proxy strips it before this ever
+/// reaches the client.
+class GifResult {
+  const GifResult({
+    required this.id,
+    required this.title,
+    required this.previewUrl,
+    required this.previewWidth,
+    required this.previewHeight,
+    required this.gifUrl,
+    required this.width,
+    required this.height,
+  });
+
+  final String id;
+  final String title;
+
+  /// A small webp (or gif, when no webp rendition exists) the picker grid loads straight
+  /// from static.klipy.com - the one place this feature hotlinks Klipy's CDN, and only
+  /// because it's a user-initiated browse, never something the feed ends up serving.
+  final String previewUrl;
+  final int previewWidth;
+  final int previewHeight;
+
+  /// The full-resolution gif to download and re-upload once this result is picked. Never
+  /// fetched until the user actually selects it.
+  final String gifUrl;
+  final int width;
+  final int height;
+
+  /// The stored preview aspect ratio, or null when the server reported no usable dimensions
+  /// (falls back to a square tile in the grid).
+  double? get previewAspectRatio =>
+      previewWidth > 0 && previewHeight > 0 ? previewWidth / previewHeight : null;
+
+  factory GifResult.fromJson(Map<String, dynamic> j) => GifResult(
+        id: j['id'] as String? ?? '',
+        title: j['title'] as String? ?? '',
+        previewUrl: j['previewUrl'] as String? ?? '',
+        previewWidth: (j['previewWidth'] as num?)?.toInt() ?? 0,
+        previewHeight: (j['previewHeight'] as num?)?.toInt() ?? 0,
+        gifUrl: j['gifUrl'] as String? ?? '',
+        width: (j['width'] as num?)?.toInt() ?? 0,
+        height: (j['height'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// One page of gif results: the projected items plus whether another page exists.
+class GifSearchPage {
+  const GifSearchPage({required this.gifs, required this.hasNext});
+
+  final List<GifResult> gifs;
+  final bool hasNext;
+
+  factory GifSearchPage.fromJson(Map<String, dynamic> j) => GifSearchPage(
+        gifs: ((j['gifs'] as List?) ?? const [])
+            .map((e) => GifResult.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        hasNext: j['hasNext'] as bool? ?? false,
       );
 }
 
@@ -325,16 +404,26 @@ typedef PostCopy = ({
 
 /// A lightweight comment (author + body) shown inline as a preview on feed cards.
 class CommentPreview {
-  CommentPreview({required this.authorId, required this.authorName, required this.body});
+  CommentPreview(
+      {required this.authorId, required this.authorName, required this.body, this.mediaId});
 
   final int authorId;
   final String authorName;
   final String body;
 
+  /// The comment's gif attachment, if any. See [previewText] for how an empty body with
+  /// media renders.
+  final int? mediaId;
+
+  /// What the preview line shows for this comment's content: the body, or "GIF" when the
+  /// body is empty and a gif is attached (a gif-only comment has nothing else to preview).
+  String get previewText => body.isEmpty && mediaId != null ? 'GIF' : body;
+
   factory CommentPreview.fromJson(Map<String, dynamic> j) => CommentPreview(
         authorId: (j['authorId'] as num?)?.toInt() ?? 0,
         authorName: j['authorName'] as String? ?? '',
         body: j['body'] as String? ?? '',
+        mediaId: (j['mediaId'] as num?)?.toInt(),
       );
 }
 
@@ -348,6 +437,7 @@ class Comment {
     this.authorPhotoId,
     this.groupId,
     this.parentCommentId,
+    this.mediaId,
   });
 
   final int id;
@@ -365,6 +455,10 @@ class Comment {
   /// show a "replying to X" line and to route a reply to the parent's group.
   final int? parentCommentId;
 
+  /// A gif attached to this comment (re-hosted on this group's own server), or null. A
+  /// comment may carry one with no body at all.
+  final int? mediaId;
+
   Comment withGroup(String? groupId) => Comment(
         id: id,
         authorId: authorId,
@@ -374,6 +468,7 @@ class Comment {
         authorPhotoId: authorPhotoId,
         groupId: groupId,
         parentCommentId: parentCommentId,
+        mediaId: mediaId,
       );
 
   factory Comment.fromJson(Map<String, dynamic> j) => Comment(
@@ -384,6 +479,7 @@ class Comment {
         createdAt: DateTime.parse(j['createdAt'] as String),
         authorPhotoId: j['authorPhotoId'] as int?,
         parentCommentId: (j['parentCommentId'] as num?)?.toInt(),
+        mediaId: (j['mediaId'] as num?)?.toInt(),
       );
 }
 

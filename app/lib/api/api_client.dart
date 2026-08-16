@@ -308,12 +308,36 @@ class ApiClient {
         .toList();
   }
 
-  Future<Comment> addComment(int postId, String body, {int? parentCommentId}) async {
+  /// addComment posts a comment. [mediaId] must only be sent to a server whose server-info
+  /// advertises `commentMedia` - an older server 400s on the unknown field
+  /// (DisallowUnknownFields); callers gate on that before ever passing one.
+  Future<Comment> addComment(int postId, String body, {int? parentCommentId, int? mediaId}) async {
     final r = await _dio.post('/api/posts/$postId/comments', data: {
       'body': body,
       if (parentCommentId != null) 'parentCommentId': parentCommentId,
+      if (mediaId != null) 'mediaId': mediaId,
     });
     return Comment.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  /// gifSearch proxies a Klipy gif search (or, for an empty [query], trending) through this
+  /// group's server, which holds the Klipy key so the client never sees it. Only meaningful
+  /// against a server whose server-info advertises `gifSearch`.
+  Future<GifSearchPage> gifSearch({String query = '', int page = 1}) async {
+    final r = await _dio.get('/api/gifs/search', queryParameters: {
+      if (query.isNotEmpty) 'q': query,
+      'page': page,
+    });
+    return GifSearchPage.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  /// downloadExternalGif fetches a chosen gif's bytes straight from Klipy's CDN (the
+  /// [GifResult.gifUrl], never proxied - it carries no key) so the caller can re-upload them
+  /// to this group's own server. A bare Dio, not this client's authenticated one: Klipy's
+  /// CDN needs no bearer token and must never be sent this account's.
+  static Future<List<int>> downloadExternalGif(String url) async {
+    final r = await Dio().get<List<int>>(url, options: Options(responseType: ResponseType.bytes));
+    return r.data ?? const [];
   }
 
   Future<List<Birthday>> upcomingBirthdays() async {
