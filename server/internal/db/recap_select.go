@@ -171,8 +171,8 @@ func candidateToCard(c recapCandidate, rank int, guaranteed bool) RecapCard {
 // ---- Awards Night ----
 
 // awardEntry is one member's qualifying showing for one superlative, or the zero value
-// when they don't qualify at all (Qualifies false) - selectAwards never invents a winner
-// for an award nobody earned. Value ranks candidates within an award (higher wins);
+// when they don't qualify at all (Qualifies false) - bestAwardPerMember never invents a
+// winner for an award nobody earned. Value ranks candidates within an award (higher wins);
 // DisplayValue is the already-formatted label ("9 likes") BuildRecap computed for it.
 type awardEntry struct {
 	Qualifies    bool
@@ -182,8 +182,9 @@ type awardEntry struct {
 	MediaID      *int64
 }
 
-// awardCandidate is one active member's showing across every superlative Awards Night can
-// hand out, gathered by BuildRecap and judged by selectAwards.
+// awardCandidate is one active member's showing across every superlative the title-bestowal
+// pass can judge, gathered by BuildRecap's recapAwardCandidates and ranked by
+// bestAwardPerMember.
 type awardCandidate struct {
 	UserID      int64
 	UserName    string
@@ -206,9 +207,9 @@ type awardType struct {
 	entry     func(awardCandidate) awardEntry
 }
 
-// awardOrder is the fixed judging order Awards Night hands out superlatives in. It drives
-// both the guarantee pass (a member's award is whichever type they're rank 1 in that comes
-// first here) and the panel's display order, so results are fully deterministic.
+// awardOrder is the fixed judging order the title-bestowal pass considers superlatives in:
+// ties in a member's own ranking (see bestAwardPerMember) break toward whichever comes
+// first here, so results are fully deterministic.
 var awardOrder = []awardType{
 	{"most_liked", "Most Loved", func(c awardCandidate) awardEntry { return c.MostLiked }},
 	{"night_owl", "Night Owl", func(c awardCandidate) awardEntry { return c.NightOwl }},
@@ -221,26 +222,11 @@ var awardOrder = []awardType{
 	{"longest_thread", "Longest Thread", func(c awardCandidate) awardEntry { return c.LongestThread }},
 }
 
-// selectAwards judges every superlative and returns the ones with a qualifying winner, in
-// awardOrder. Only emits an award that has at least one qualifying candidate - it never
-// posts a "winner" nobody actually earned.
-//
-// With few members and nine awards, one person can easily lead every category they
-// qualify for. selectAwards prefers spreading them out, using the same two-pass shape as
-// the collage: pass 1 lets each member (in a deterministic order) claim the single
-// category they rank best in, as long as nobody has claimed it already; pass 2 emits
-// every category that has a qualifying winner, resolving it to whichever qualifier
-// claimed it in pass 1, or its outright top candidate when nobody did. An award is never
-// withheld - a category with only one qualifier always goes to them, sweep or not.
-func selectAwards(candidates []awardCandidate) []RecapAward {
-	if len(candidates) == 0 {
-		return nil
-	}
-	// Rank each award type's qualifying candidates once, best first (value desc, then
-	// user id asc for a deterministic tiebreak), and index each qualifier's rank within
-	// it (0 = best) so pass 1 can find a member's single best category.
-	ranked := make(map[string][]awardCandidate, len(awardOrder))
-	rankOf := make(map[string]map[int64]int, len(awardOrder)) // award id -> user id -> rank
+// awardRankings ranks every award type's qualifying candidates once, best first (value
+// desc, then user id asc for a deterministic tiebreak), and indexes each qualifier's rank
+// within it (0 = best) so a member's single best category can be found by minimum rank.
+func awardRankings(candidates []awardCandidate) (rankOf map[string]map[int64]int) {
+	rankOf = make(map[string]map[int64]int, len(awardOrder))
 	for _, at := range awardOrder {
 		var qualifying []awardCandidate
 		for _, c := range candidates {
@@ -255,22 +241,30 @@ func selectAwards(candidates []awardCandidate) []RecapAward {
 			}
 			return qualifying[i].UserID < qualifying[j].UserID
 		})
-		ranked[at.id] = qualifying
 		byUser := make(map[int64]int, len(qualifying))
 		for i, c := range qualifying {
 			byUser[c.UserID] = i
 		}
 		rankOf[at.id] = byUser
 	}
+	return rankOf
+}
 
-	// Pass 1: each member, in user-id order, claims the category they rank best in
-	// (ties broken by awardOrder position), if it's still unclaimed.
-	byMember := make([]awardCandidate, len(candidates))
-	copy(byMember, candidates)
-	sort.Slice(byMember, func(i, j int) bool { return byMember[i].UserID < byMember[j].UserID })
-
-	claimedBy := make(map[string]int64, len(awardOrder)) // award id -> the user who claimed it
-	for _, c := range byMember {
+// bestAwardPerMember is pass 1 (and only pass 1) of the old Awards Night spread algorithm,
+// kept standalone for title bestowal: for every candidate who qualifies for at least one
+// award, it picks the single category they personally rank best in (ties broken by
+// awardOrder position). Unlike the retired panel-building pass, this never resolves
+// contention between members and never falls back to a category's outright top candidate
+// when nobody's own best pick lands there - a title is only ever a member's own best
+// showing, not a consolation assignment to fill out a leftover category. A candidate who
+// qualifies for nothing has no entry in the result.
+func bestAwardPerMember(candidates []awardCandidate) map[int64]string {
+	if len(candidates) == 0 {
+		return nil
+	}
+	rankOf := awardRankings(candidates)
+	out := make(map[int64]string, len(candidates))
+	for _, c := range candidates {
 		bestType, bestRank := "", -1
 		for _, at := range awardOrder {
 			r, ok := rankOf[at.id][c.UserID]
@@ -281,44 +275,9 @@ func selectAwards(candidates []awardCandidate) []RecapAward {
 				bestType, bestRank = at.id, r
 			}
 		}
-		if bestType == "" {
-			continue // qualifies for nothing
+		if bestType != "" {
+			out[c.UserID] = bestType
 		}
-		if _, taken := claimedBy[bestType]; !taken {
-			claimedBy[bestType] = c.UserID
-		}
-	}
-
-	// Pass 2: emit every category with a qualifying winner.
-	var out []RecapAward
-	for _, at := range awardOrder {
-		top := ranked[at.id]
-		if len(top) == 0 {
-			continue
-		}
-		winner := top[0]
-		if claimant, ok := claimedBy[at.id]; ok {
-			for _, c := range top {
-				if c.UserID == claimant {
-					winner = c
-					break
-				}
-			}
-		}
-		entry := at.entry(winner)
-		award := RecapAward{
-			ID:          at.id,
-			Label:       at.label,
-			UserID:      winner.UserID,
-			UserName:    winner.UserName,
-			UserPhotoID: winner.UserPhotoID,
-			Value:       entry.DisplayValue,
-		}
-		if entry.PostID != 0 {
-			award.PostID = &entry.PostID
-			award.MediaID = entry.MediaID
-		}
-		out = append(out, award)
 	}
 	return out
 }

@@ -19,23 +19,32 @@ type User struct {
 	IsAdmin        bool      `json:"isAdmin"`
 	Status         string    `json:"status"`
 	CreatedAt      time.Time `json:"createdAt"`
+
+	// Title is the member's bestowed profile title (an award id from recap_select.go's
+	// awardOrder, e.g. "quiet_achiever"), or nil when none has ever been bestowed. Set by
+	// BestowTitles; persists across bestowals until replaced, never cleared by a period the
+	// member didn't qualify in - see 0020_titles.sql.
+	Title      *string    `json:"-"`
+	TitleSetAt *time.Time `json:"-"`
 }
 
 // MarshalJSON emits only the month and day of the birthday, never the year, so a member's
 // age is never exposed over the API (the app only ever shows month + day).
 func (u User) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		ID             int64     `json:"id"`
-		Phone          string    `json:"phone"`
-		Name           string    `json:"name"`
-		FirstName      string    `json:"firstName"`
-		LastName       string    `json:"lastName"`
-		BirthdayMonth  int       `json:"birthdayMonth"`
-		BirthdayDay    int       `json:"birthdayDay"`
-		ProfileMediaID *int64    `json:"profileMediaId,omitempty"`
-		IsAdmin        bool      `json:"isAdmin"`
-		Status         string    `json:"status"`
-		CreatedAt      time.Time `json:"createdAt"`
+		ID             int64      `json:"id"`
+		Phone          string     `json:"phone"`
+		Name           string     `json:"name"`
+		FirstName      string     `json:"firstName"`
+		LastName       string     `json:"lastName"`
+		BirthdayMonth  int        `json:"birthdayMonth"`
+		BirthdayDay    int        `json:"birthdayDay"`
+		ProfileMediaID *int64     `json:"profileMediaId,omitempty"`
+		IsAdmin        bool       `json:"isAdmin"`
+		Status         string     `json:"status"`
+		CreatedAt      time.Time  `json:"createdAt"`
+		Title          *string    `json:"title,omitempty"`
+		TitleSetAt     *time.Time `json:"titleSetAt,omitempty"`
 	}{
 		ID:             u.ID,
 		Phone:          u.Phone,
@@ -48,6 +57,8 @@ func (u User) MarshalJSON() ([]byte, error) {
 		IsAdmin:        u.IsAdmin,
 		Status:         u.Status,
 		CreatedAt:      u.CreatedAt,
+		Title:          u.Title,
+		TitleSetAt:     u.TitleSetAt,
 	})
 }
 
