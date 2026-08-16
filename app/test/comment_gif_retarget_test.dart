@@ -6,6 +6,7 @@ import 'package:checkin/api/api_client.dart';
 import 'package:checkin/api/models.dart';
 import 'package:checkin/features/post/post_detail_screen.dart';
 import 'package:checkin/state/app_state.dart';
+import 'package:checkin/theme/tokens.dart';
 import 'package:checkin/widgets/auth_image.dart';
 
 /// A group-scoped ApiClient stub: getPost/comments answer this group's own thread, gifSearch
@@ -142,6 +143,29 @@ void main() {
     await tester.tap(find.byType(Image).first);
     await settle(tester);
   }
+
+  testWidgets('a pending gif floats free of the composer bar', (tester) async {
+    final alphaApi =
+        _FakeApi(groupId: 'alpha.invalid', post: post('alpha.invalid', 1), uploadedMediaId: 100);
+    final betaApi =
+        _FakeApi(groupId: 'beta.invalid', post: post('beta.invalid', 2), uploadedMediaId: 200);
+    await pumpCrossPost(tester, alphaApi: alphaApi, betaApi: betaApi);
+    await attachAGif(tester);
+
+    expect(find.byType(AuthImage), findsOneWidget);
+    expect(
+      find.ancestor(
+        of: find.byType(AuthImage),
+        matching: find.byWidgetPredicate((w) =>
+            w is Container &&
+            w.decoration is BoxDecoration &&
+            (w.decoration as BoxDecoration).color == kBgMain),
+      ),
+      findsNothing,
+      reason:
+          'the thumbnail sits outside the bar surface, so no full-width panel appears behind it',
+    );
+  });
 
   testWidgets('switching the target group via the chip clears a pending gif', (tester) async {
     final alphaApi =

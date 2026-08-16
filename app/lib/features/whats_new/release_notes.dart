@@ -19,9 +19,16 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.13',
+    highlights: [
+      'Recaps open on the people who checked in that period - a cluster of your faces, sized by who posted most.',
+      'Attaching a GIF to a comment no longer stacks a big empty panel above the keyboard.',
+    ],
+  ),
+  ReleaseNote(
     version: '1.12',
     highlights: [
-      "Recaps have a new look - they open on a cover made from the week's top photo and stand out from regular check-ins in your feed.",
+      'Recaps have a new look, and stand out from regular check-ins in your feed.',
       "Titles: earn a badge on your profile from each week's recap, like Night Owl or Quiet Achiever. It stays until you earn a new one.",
     ],
   ),

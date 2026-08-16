@@ -134,6 +134,11 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
   late final AnimationController _burst =
       AnimationController(vsync: this, duration: const Duration(milliseconds: 520));
 
+  // Lets the overflow menu's "Save this panel" item reach into the deck to rasterize
+  // whichever page is currently showing - the deck no longer has its own save button (see
+  // RecapDeckState.saveCurrentPage).
+  final _recapDeckKey = GlobalKey<RecapDeckState>();
+
   // If this State gets re-bound to a different post (e.g. the list shifts when a new
   // post is prepended), resync the comment state so counts don't bleed between posts. A
   // ValueKey on each card normally prevents this; this is a safety net. (Like state is not
@@ -428,23 +433,18 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 14),
+      // A recap card is the same footprint as any other post - same margins, same corner
+      // radius, same border width - distinguished only by its outline wearing the recap's
+      // own group accent instead of the ordinary border color. No extra glow or padding.
       decoration: BoxDecoration(
         color: recapAccent == null
             ? _bgSurface
             : Color.alphaBlend(recapAccent.base.withValues(alpha: 0.05), _bgSurface),
         border: Border.all(
           color: recapAccent == null ? _border : recapAccent.base.withValues(alpha: 0.55),
-          width: recapAccent == null ? 1 : 1.4,
+          width: 1,
         ),
         borderRadius: BorderRadius.circular(14),
-        boxShadow: recapAccent == null
-            ? null
-            : [
-                BoxShadow(
-                    color: recapAccent.base.withValues(alpha: 0.16),
-                    blurRadius: 18,
-                    spreadRadius: -6)
-              ],
       ),
       clipBehavior: Clip.hardEdge,
       child: Column(
@@ -493,7 +493,32 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                 ],
                 Expanded(
                   child: recapAccent != null
-                      ? _RecapBadge(accent: recapAccent)
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _RecapBadge(accent: recapAccent),
+                            // The group name, once the cover's own headline - now shown
+                            // only here, reusing the same icon+muted-text idiom as a
+                            // cross-post's "Shared to X" label (see _sharedToLabel below)
+                            // rather than duplicating it on both.
+                            Padding(
+                              padding: const EdgeInsets.only(top: 4),
+                              child: Row(
+                                children: [
+                                  const Icon(Icons.group_outlined, size: 13, color: _fgMuted),
+                                  const SizedBox(width: 5),
+                                  Flexible(
+                                    child: Text(
+                                      recap!.groupName,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(color: _fgMuted, fontSize: 12),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        )
                       : Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -550,6 +575,7 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                       if (v == 'delete') _confirmDelete();
                       if (v == 'save') _savePhoto(p.imageMedia.first.id);
                       if (v == 'saveVideo') _saveVideo(p.videoMedia.first.id);
+                      if (v == 'saveRecapPanel') _recapDeckKey.currentState?.saveCurrentPage();
                       if (v == 'report') _reportPost();
                     },
                     itemBuilder: (_) => [
@@ -574,6 +600,23 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                               Icon(Icons.download_outlined, size: 19, color: _fgPrimary),
                               SizedBox(width: 10),
                               Text('Save video', style: TextStyle(color: _fgPrimary)),
+                            ],
+                          ),
+                        ),
+                      // A recap post carries no ordinary attachments (imageMedia/videoMedia
+                      // are both empty for it - see Post.recap's doc comment), so its own
+                      // save action lives here instead: rasterize whichever deck page is
+                      // currently showing. Gated on there being an actual deck to rasterize -
+                      // a payload with zero recognised panels renders the stats-only
+                      // fallback instead (see RecapDeck.build), which has no page to save.
+                      if (recap != null && recap.panels.isNotEmpty)
+                        const PopupMenuItem(
+                          value: 'saveRecapPanel',
+                          child: Row(
+                            children: [
+                              Icon(Icons.download_outlined, size: 19, color: _fgPrimary),
+                              SizedBox(width: 10),
+                              Text('Save this panel', style: TextStyle(color: _fgPrimary)),
                             ],
                           ),
                         ),
@@ -640,7 +683,7 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
           // falls through to the "no media" caption-only layout on a client new enough to
           // render it.
           if (recap != null)
-            RecapDeck(recap: recap, groupId: p.groupId)
+            RecapDeck(key: _recapDeckKey, recap: recap, groupId: p.groupId, postId: p.id)
           // Attachments - the carousel sizes itself (a single one keeps its own clamped
           // aspect ratio); the heart burst overlays it.
           // Gated on the attachments themselves, not on kind: a post with a clip on it is

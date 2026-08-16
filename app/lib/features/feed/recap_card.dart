@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -29,16 +30,23 @@ const _fgMuted = kFgMuted;
 /// panels, the deck falls back to a plain stats summary (no cover either) rather than
 /// rendering nothing.
 class RecapDeck extends StatefulWidget {
-  const RecapDeck({super.key, required this.recap, required this.groupId});
+  const RecapDeck({super.key, required this.recap, required this.groupId, required this.postId});
 
   final RecapPayload recap;
   final String? groupId;
 
+  /// The recap post's own id - carried through to the cover for its avatar-bubble cluster,
+  /// which seeds its jittered layout from it (see _BubbleCluster's doc comment).
+  final int postId;
+
   @override
-  State<RecapDeck> createState() => _RecapDeckState();
+  State<RecapDeck> createState() => RecapDeckState();
 }
 
-class _RecapDeckState extends State<RecapDeck> {
+/// Public so [PostCard] can reach [saveCurrentPage] through a [GlobalKey] - the overflow
+/// menu's "Save this panel" item lives on the post card, not the deck, matching where every
+/// other post's save action lives (see post_card.dart's PopupMenuButton).
+class RecapDeckState extends State<RecapDeck> {
   final _controller = PageController();
   final Map<int, GlobalKey> _boundaryKeys = {};
   int _page = 0;
@@ -50,6 +58,10 @@ class _RecapDeckState extends State<RecapDeck> {
   }
 
   GlobalKey _keyFor(int index) => _boundaryKeys.putIfAbsent(index, () => GlobalKey());
+
+  /// Rasterizes whichever page the deck is currently showing and saves it - what the post
+  /// card's overflow-menu "Save this panel" item calls.
+  Future<void> saveCurrentPage() => _savePanel(_page);
 
   /// Rasterizes the current panel's [RepaintBoundary] and saves it to the device gallery -
   /// the v1 "generated image" flow. Zero new dependencies: both halves already exist
@@ -89,7 +101,10 @@ class _RecapDeckState extends State<RecapDeck> {
       mainAxisSize: MainAxisSize.min,
       children: [
         AspectRatio(
-          aspectRatio: 4 / 5,
+          // A normal media-frame aspect (matching post_image_carousel's own default), not
+          // the tall hero the cover used to render at - the deck reads as a normal post's
+          // footprint now, distinguished by its accent outline, not its size.
+          aspectRatio: 4 / 3,
           child: PageView.builder(
             controller: _controller,
             itemCount: pageCount,
@@ -97,11 +112,15 @@ class _RecapDeckState extends State<RecapDeck> {
             itemBuilder: (context, index) => RepaintBoundary(
               key: _keyFor(index),
               child: index == 0
-                  ? _RecapCoverPage(recap: widget.recap, groupId: widget.groupId)
+                  ? _RecapCoverPage(
+                      recap: widget.recap, groupId: widget.groupId, postId: widget.postId)
                   : _RecapPanelView(panel: panels[index - 1], groupId: widget.groupId),
             ),
           ),
         ),
+        // Page dots only - saving now lives in the post card's overflow menu, alongside
+        // every other post's save action (see PostCard's PopupMenuButton and
+        // RecapDeckState.saveCurrentPage).
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 10),
           child: Row(
@@ -117,22 +136,6 @@ class _RecapDeckState extends State<RecapDeck> {
                     borderRadius: BorderRadius.circular(3),
                   ),
                 ),
-              const SizedBox(width: 12),
-              Semantics(
-                button: true,
-                label: 'Save this panel to your photos',
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkResponse(
-                    onTap: () => _savePanel(_page),
-                    radius: 20,
-                    child: const Padding(
-                      padding: EdgeInsets.all(6),
-                      child: Icon(Icons.download_outlined, size: 18, color: _fgMuted),
-                    ),
-                  ),
-                ),
-              ),
             ],
           ),
         ),
@@ -157,15 +160,21 @@ class _RecapPanelView extends StatelessWidget {
       };
 }
 
-/// The deck's first page: a system moment, not a normal post header. A dimmed, blurred
-/// hero backdrop (the Wall's #1 photo, when there is one) sits behind the group's own
-/// accent, name, period and at-a-glance stats - what makes a recap post read as a group
-/// artifact at a glance rather than one more check-in in the feed.
+/// The deck's first page: a system moment, not a normal post header. A dimmed, blurred hero
+/// backdrop (the Wall's #1 photo, when there is one) sits behind a pile of the period's
+/// posters' avatars and the at-a-glance stats - what makes a recap post read as a group
+/// artifact at a glance rather than one more check-in in the feed. The group's own name is
+/// deliberately not repeated here - the post card's header already carries it (see
+/// post_card.dart's group-name label next to the RECAP badge).
 class _RecapCoverPage extends StatelessWidget {
-  const _RecapCoverPage({required this.recap, required this.groupId});
+  const _RecapCoverPage({required this.recap, required this.groupId, required this.postId});
 
   final RecapPayload recap;
   final String? groupId;
+
+  /// The recap post's own id, threaded down for the bubble cluster's deterministic seed -
+  /// see _BubbleCluster's doc comment.
+  final int postId;
 
   /// The Wall panel's rank-1 card, when it carries a photo or clip - the "top photo" the
   /// backdrop is built from. Null for an awards-only historical deck, a text-only #1 pick,
@@ -213,7 +222,10 @@ class _RecapCoverPage extends StatelessWidget {
           if (hero != null)
             ImageFiltered(
               imageFilter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-              child: Opacity(opacity: 0.5, child: MediaFrame(media: hero.media!, groupId: groupId)),
+              // Quieter than before (was 0.5): the backdrop is a supporting texture now,
+              // not the cover's focal point - the avatar cluster below is.
+              child:
+                  Opacity(opacity: 0.32, child: MediaFrame(media: hero.media!, groupId: groupId)),
             ),
           DecoratedBox(
             decoration: BoxDecoration(
@@ -227,6 +239,15 @@ class _RecapCoverPage extends StatelessWidget {
                 ],
               ),
             ),
+          ),
+          // The people who posted this period, piled as a cluster of avatar bubbles sized by
+          // contribution - the cover's "who's in this" moment. _BubbleCluster itself renders
+          // nothing (see its empty-list guard) on a payload recorded before
+          // RecapPayload.people existed, which just leaves the plain backdrop above as the
+          // cover's whole focal point, same as it always has.
+          Align(
+            alignment: const Alignment(0, -0.1),
+            child: _BubbleCluster(people: recap.people, seed: postId, groupId: groupId),
           ),
           Padding(
             padding: const EdgeInsets.all(20),
@@ -245,22 +266,16 @@ class _RecapCoverPage extends StatelessWidget {
                           fontSize: 11,
                           letterSpacing: 1.1)),
                 ),
-                const SizedBox(height: 12),
-                Text(recap.groupName,
+                const SizedBox(height: 10),
+                // The period label carries the cover's headline weight now that the group
+                // name (already in the post card's header) isn't repeated here.
+                Text(recap.periodLabel,
                     style: const TextStyle(
                         color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                        fontSize: 25,
-                        height: 1.15,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 16,
                         shadows: textShadows)),
-                const SizedBox(height: 4),
-                Text(recap.periodLabel,
-                    style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.85),
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
-                        shadows: textShadows)),
-                const SizedBox(height: 14),
+                const SizedBox(height: 6),
                 Text(_statsLine,
                     style: TextStyle(
                         color: Colors.white.withValues(alpha: 0.95),
@@ -272,6 +287,195 @@ class _RecapCoverPage extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// A pile of avatar bubbles for the people who posted this period, sized by contribution
+/// (the biggest poster gets the biggest bubble) and packed into a jittered but deterministic
+/// cluster - never a rigid grid, but the same recap always packs identically (see
+/// [_packCircles]'s doc comment for why).
+class _BubbleCluster extends StatelessWidget {
+  const _BubbleCluster({required this.people, required this.seed, required this.groupId});
+
+  final List<RecapPerson> people;
+
+  /// Seeds the layout's jitter - the recap post's own id (see _RecapCoverPage.postId), so
+  /// the same recap always packs identically across rebuilds and app launches, while a
+  /// different recap (a different id) packs differently. Deliberately never an unseeded
+  /// `math.Random()`: that would reshuffle the pile on every single rebuild instead of only
+  /// when the recap itself changes.
+  final int seed;
+  final String? groupId;
+
+  /// At most this many bubbles render as avatars; anyone past it is folded into a single
+  /// "+N" bubble. [people] is already ordered by contribution desc (server-side), so the
+  /// cap always drops the least active posters, not an arbitrary subset.
+  static const _cap = 7;
+  static const _minSize = 30.0;
+  static const _maxSize = 62.0;
+
+  @override
+  Widget build(BuildContext context) {
+    if (people.isEmpty) return const SizedBox.shrink();
+    final shown = people.take(_cap).toList();
+    final overflow = people.length - shown.length;
+    final maxPosts = shown.first.posts <= 0 ? 1 : shown.first.posts;
+
+    final radii = <double>[
+      for (final p in shown) _sizeFor(p.posts, maxPosts) / 2,
+      if (overflow > 0) _minSize / 2,
+    ];
+    final centers = _packCircles(radii, math.Random(seed));
+
+    var minX = double.infinity, minY = double.infinity;
+    var maxX = -double.infinity, maxY = -double.infinity;
+    for (var i = 0; i < centers.length; i++) {
+      minX = math.min(minX, centers[i].dx - radii[i]);
+      maxX = math.max(maxX, centers[i].dx + radii[i]);
+      minY = math.min(minY, centers[i].dy - radii[i]);
+      maxY = math.max(maxY, centers[i].dy + radii[i]);
+    }
+
+    return SizedBox(
+      width: maxX - minX,
+      height: maxY - minY,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          for (var i = 0; i < shown.length; i++)
+            Positioned(
+              left: centers[i].dx - radii[i] - minX,
+              top: centers[i].dy - radii[i] - minY,
+              child: _Bubble(person: shown[i], size: radii[i] * 2, groupId: groupId),
+            ),
+          if (overflow > 0)
+            Positioned(
+              left: centers.last.dx - radii.last - minX,
+              top: centers.last.dy - radii.last - minY,
+              child: _OverflowBubble(count: overflow, size: radii.last * 2),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Linear interpolation from the smallest to the largest bubble size, by this member's
+  /// post count as a share of the top contributor's - the biggest poster gets the biggest
+  /// bubble, everyone else scales down from there.
+  static double _sizeFor(int posts, int maxPosts) {
+    final t = (posts / maxPosts).clamp(0.0, 1.0);
+    return _minSize + (_maxSize - _minSize) * t;
+  }
+}
+
+const _packAngles = 16;
+const _packGap = 3.0;
+
+/// Greedily packs circles of the given radii into a cluster, largest-first: the first
+/// circle sits at the origin, and each subsequent one is placed tangent to whichever
+/// already-placed circle - tried at [_packAngles] angles around it, jittered by [rng] so the
+/// result reads as a scattered pile rather than a ring - lands it closest to the center
+/// without overlapping anything already placed.
+///
+/// Deterministic for a given (radii, rng) pair: the same radii list packed with a
+/// `math.Random` seeded the same way always produces the same centers, which is the whole
+/// point of seeding it from the recap's own id rather than leaving it unseeded (see
+/// [_BubbleCluster.seed]).
+List<Offset> _packCircles(List<double> radii, math.Random rng) {
+  if (radii.isEmpty) return const [];
+  final centers = <Offset>[Offset.zero];
+  for (var i = 1; i < radii.length; i++) {
+    final r = radii[i];
+    Offset? best;
+    var bestDist = double.infinity;
+    for (var j = 0; j < centers.length; j++) {
+      final dist = radii[j] + r + _packGap;
+      final jitter = rng.nextDouble() * (2 * math.pi / _packAngles);
+      for (var a = 0; a < _packAngles; a++) {
+        final angle = (2 * math.pi * a / _packAngles) + jitter;
+        final candidate = centers[j] + Offset(math.cos(angle), math.sin(angle)) * dist;
+        if (_overlapsAny(candidate, r, centers, radii)) continue;
+        final d = candidate.distance;
+        if (d < bestDist) {
+          bestDist = d;
+          best = candidate;
+        }
+      }
+    }
+    // Only reachable with a pathologically large bubble count relative to _packAngles - a
+    // deterministic fallback keeps the layout total (and still seeded) rather than throwing.
+    if (best == null) {
+      final angle = rng.nextDouble() * 2 * math.pi;
+      best = Offset(math.cos(angle), math.sin(angle)) * (r + 300);
+    }
+    centers.add(best);
+  }
+  return centers;
+}
+
+bool _overlapsAny(Offset candidate, double r, List<Offset> centers, List<double> radii) {
+  for (var k = 0; k < centers.length; k++) {
+    if ((candidate - centers[k]).distance < radii[k] + r - 0.01) return true;
+  }
+  return false;
+}
+
+/// One member's bubble: their avatar (photo or initial - [UserAvatar] already handles the
+/// fallback) ringed in a thin white border so it reads as a bubble against the blurred
+/// backdrop, even where it overlaps a neighbour.
+class _Bubble extends StatelessWidget {
+  const _Bubble({required this.person, required this.size, required this.groupId});
+
+  final RecapPerson person;
+  final double size;
+  final String? groupId;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white.withValues(alpha: 0.85), width: 2),
+        boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 6)],
+      ),
+      child: ClipOval(
+        child: UserAvatar(
+          name: person.name,
+          size: size - 4,
+          mediaId: person.photoId,
+          colorSeed: person.userId,
+          groupId: groupId,
+        ),
+      ),
+    );
+  }
+}
+
+/// The cluster's overflow bubble: "+N" for the posters past [_BubbleCluster._cap], styled to
+/// match the avatar bubbles around it.
+class _OverflowBubble extends StatelessWidget {
+  const _OverflowBubble({required this.count, required this.size});
+
+  final int count;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.black.withValues(alpha: 0.55),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.85), width: 2),
+      ),
+      child: Text('+$count',
+          style:
+              TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: size * 0.32)),
     );
   }
 }

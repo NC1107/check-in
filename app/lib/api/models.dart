@@ -460,6 +460,7 @@ class RecapPayload {
     required this.groupColor,
     required this.stats,
     required this.panels,
+    this.people = const [],
   });
 
   final String periodLabel; // "Aug 10-16"
@@ -468,6 +469,13 @@ class RecapPayload {
   final String groupColor;
   final RecapStats stats;
   final List<RecapPanel> panels;
+
+  /// The roster of everyone who posted this period, ordered by contribution desc - the
+  /// cover's avatar-bubble cluster (see recap_card.dart's _BubbleCluster). Empty on a
+  /// payload recorded before this field existed (the server's `people` key is absent
+  /// entirely, not an empty array): the cover then falls back to its plain photo-only
+  /// treatment rather than rendering an empty cluster.
+  final List<RecapPerson> people;
 
   factory RecapPayload.fromJson(Map<String, dynamic> j) {
     final period = (j['period'] as Map?)?.cast<String, dynamic>() ?? const {};
@@ -478,6 +486,10 @@ class RecapPayload {
       final panel = RecapPanel.tryParse(raw);
       if (panel != null) panels.add(panel);
     }
+    final people = <RecapPerson>[
+      for (final raw in (j['people'] as List?) ?? const [])
+        if (raw is Map<String, dynamic>) RecapPerson.fromJson(raw),
+    ];
     return RecapPayload(
       periodLabel: period['label'] as String? ?? '',
       cadence: period['cadence'] as String? ?? '',
@@ -485,8 +497,30 @@ class RecapPayload {
       groupColor: group['color'] as String? ?? '',
       stats: RecapStats.fromJson((j['stats'] as Map?)?.cast<String, dynamic>() ?? const {}),
       panels: panels,
+      people: people,
     );
   }
+}
+
+/// One member's contribution to a recap period: one bubble in the cover's avatar cluster.
+class RecapPerson {
+  RecapPerson({required this.userId, required this.name, this.photoId, this.posts = 0});
+
+  final int userId;
+  final String name;
+  final int? photoId;
+
+  /// This member's post count in the period - the metric the cover's bubble cluster scales
+  /// bubble size by. See the server's recapPeople doc comment for why post count rather
+  /// than a best-post like count.
+  final int posts;
+
+  factory RecapPerson.fromJson(Map<String, dynamic> j) => RecapPerson(
+        userId: (j['userId'] as num?)?.toInt() ?? 0,
+        name: j['name'] as String? ?? '',
+        photoId: (j['photoId'] as num?)?.toInt(),
+        posts: (j['posts'] as num?)?.toInt() ?? 0,
+      );
 }
 
 /// The at-a-glance numbers shown above the deck.

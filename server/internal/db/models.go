@@ -165,6 +165,13 @@ type RecapPayload struct {
 	Group  RecapGroup   `json:"group"`
 	Stats  RecapStats   `json:"stats"`
 	Panels []RecapPanel `json:"panels"`
+
+	// People is the roster of everyone who posted this period, ordered by contribution
+	// desc - what the client's cover renders as its avatar-bubble cluster (see
+	// recapPeople's doc comment for the metric and ordering). Additive: omitted entirely
+	// (nil) on a payload stored before this field existed, which a new client must render
+	// exactly as it always has - see RecapPayload.fromJson's doc comment app-side.
+	People []RecapPerson `json:"people,omitempty"`
 }
 
 // RecapPeriod describes the window a recap covers.
@@ -228,6 +235,17 @@ type RecapCard struct {
 	LikeCount     int    `json:"likeCount"`
 	CommentCount  int    `json:"commentCount"`
 	Location      string `json:"location,omitempty"`
+}
+
+// RecapPerson is one member's contribution to a recap period - one entry in the cover's
+// avatar-bubble cluster roster (see RecapPayload.People and recapPeople).
+type RecapPerson struct {
+	UserID  int64  `json:"userId"`
+	Name    string `json:"name"`
+	PhotoID *int64 `json:"photoId,omitempty"`
+	// Posts is this member's post count in the period - the metric the cover's bubble
+	// cluster scales bubble size by. See recapPeople's doc comment for why.
+	Posts int `json:"posts"`
 }
 
 // RecapAward is one superlative in the "Awards Night" panel.

@@ -305,3 +305,58 @@ func TestBestAwardPerMemberTiebreaksByAwardOrder(t *testing.T) {
 		t.Errorf("best[1] = %q, want most_liked (earlier in awardOrder than longest_thread)", best[1])
 	}
 }
+
+// TestRecapPeopleOrdersByPostCountDesc pins the cover roster's ranking: each distinct
+// author's post count, highest first - the metric the client scales its avatar bubbles by
+// (see recapPeople's doc comment for why post count rather than best-post likes).
+func TestRecapPeopleOrdersByPostCountDesc(t *testing.T) {
+	candidates := []recapCandidate{
+		{PostID: 1, AuthorID: 1, AuthorName: "Ada", CreatedAt: t0(1)},
+		{PostID: 2, AuthorID: 2, AuthorName: "Ben", CreatedAt: t0(2)},
+		{PostID: 3, AuthorID: 2, AuthorName: "Ben", CreatedAt: t0(3)},
+		{PostID: 4, AuthorID: 2, AuthorName: "Ben", CreatedAt: t0(4)},
+		{PostID: 5, AuthorID: 3, AuthorName: "Cy", CreatedAt: t0(5)},
+		{PostID: 6, AuthorID: 3, AuthorName: "Cy", CreatedAt: t0(6)},
+	}
+	people := recapPeople(candidates)
+	wantOrder := []int64{2, 3, 1} // Ben (3 posts), Cy (2 posts), Ada (1 post)
+	if len(people) != len(wantOrder) {
+		t.Fatalf("got %d people, want %d", len(people), len(wantOrder))
+	}
+	for i, p := range people {
+		if p.UserID != wantOrder[i] {
+			t.Errorf("people[%d].UserID = %d, want %d", i, p.UserID, wantOrder[i])
+		}
+	}
+	if people[0].Posts != 3 {
+		t.Errorf("people[0].Posts = %d, want 3", people[0].Posts)
+	}
+	if people[0].Name != "Ben" {
+		t.Errorf("people[0].Name = %q, want %q", people[0].Name, "Ben")
+	}
+}
+
+// TestRecapPeopleTiebreaksByUserIDAsc pins the deterministic tiebreak for equal post
+// counts: lower user id first, matching every other recap ranking's tiebreak convention.
+func TestRecapPeopleTiebreaksByUserIDAsc(t *testing.T) {
+	candidates := []recapCandidate{
+		{PostID: 1, AuthorID: 9, AuthorName: "Zed", CreatedAt: t0(1)},
+		{PostID: 2, AuthorID: 2, AuthorName: "Ada", CreatedAt: t0(2)},
+	}
+	people := recapPeople(candidates)
+	if people[0].UserID != 2 {
+		t.Errorf("people[0].UserID = %d, want 2 (lower id wins an equal-post-count tie)", people[0].UserID)
+	}
+}
+
+// TestRecapPeopleCarriesPhotoID pins that a member's profile photo id survives into the
+// roster - it is what the cover's avatar bubbles render as an image instead of an initial.
+func TestRecapPeopleCarriesPhotoID(t *testing.T) {
+	candidates := []recapCandidate{
+		{PostID: 1, AuthorID: 1, AuthorName: "Ada", AuthorPhotoID: mid(77), CreatedAt: t0(1)},
+	}
+	people := recapPeople(candidates)
+	if people[0].PhotoID == nil || *people[0].PhotoID != 77 {
+		t.Errorf("people[0].PhotoID = %v, want 77", people[0].PhotoID)
+	}
+}
