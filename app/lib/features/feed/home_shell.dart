@@ -21,10 +21,12 @@ import '../../notifications/push_messaging.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/feed_autoplay.dart';
 import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
 import '../profile/profile_screen.dart';
 import '../whats_new/release_notes.dart';
+import 'compose_media_buttons.dart';
 import 'feed_screen.dart';
 
 /// Whether a picked file has to be re-encoded before upload. Photos do: it transcodes the
@@ -93,6 +95,18 @@ bool clipNeedsTrim(int durationMs) => durationMs > kMaxClipMs;
   final start = startMs.clamp(0, duration - minMs);
   final end = endMs.clamp(start + minMs, (start + maxMs).clamp(0, duration));
   return (startMs: start, endMs: end);
+}
+
+/// Slides a chosen trim window along the clip by [deltaMs], the way dragging the region
+/// between the two handles does: start and end move together and the span between them is
+/// preserved exactly. The window is stopped at the ends of the clip rather than squeezed, so
+/// a drag that runs off either edge keeps the length the user picked. A shift that changed
+/// the span would silently re-trim a window that was already settled.
+({int startMs, int endMs}) shiftTrimWindow(int startMs, int endMs, int deltaMs, int durationMs) {
+  final duration = durationMs < 0 ? 0 : durationMs;
+  final span = (endMs - startMs).clamp(0, duration);
+  final start = (startMs + deltaMs).clamp(0, duration - span);
+  return (startMs: start, endMs: start + span);
 }
 
 /// Whether a group's server accepts video, so compose can offer a clip only where it would
@@ -253,7 +267,11 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     // Admin/member management is reached from the profile (host badge + Members button),
     // so it isn't a bottom-nav destination.
     final pages = <Widget>[
-      const FeedScreen(),
+      // Clips in the feed autoplay, and this scope is what holds the whole feed to a single
+      // player. It also has to be told when the feed is not the visible tab: an IndexedStack
+      // keeps the other page alive but stops painting it, so nothing inside the page would
+      // ever learn it went off screen.
+      FeedAutoplayScope(enabled: _index == 0, child: const FeedScreen()),
       // One profile for the one human: merged across every signed-in group.
       if (me != null) const MyProfileScreen(),
     ];
@@ -812,18 +830,20 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     );
   }
 
-  Widget _mediaButton(IconData icon, String label, VoidCallback onTap) {
-    return OutlinedButton.icon(
-      onPressed: onTap,
-      icon: Icon(icon, color: context.accent, size: 19),
-      label: Text(label,
-          style: const TextStyle(color: _fgSecondary, fontWeight: FontWeight.w600, fontSize: 13)),
-      style: OutlinedButton.styleFrom(
-        side: const BorderSide(color: _border),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        padding: const EdgeInsets.symmetric(vertical: 11),
-      ),
-    );
+  /// Drops the attached clip and everything derived from it: the encode and poster computed
+  /// for upload, the tile's preview frame, and the place read off the clip. Shared by the
+  /// tile's remove control and by a confirmed replace, so neither can leave a stale poster
+  /// or location behind on the next post.
+  void _clearClip() {
+    setState(() {
+      _clip = null;
+      _clipEncodedPath = null;
+      _clipPoster = null;
+      _clipPosterPreview = null;
+      _clipDurationMs = 0;
+      _location = null;
+      _locationSource = null;
+    });
   }
 
   /// Publishes the check-in to every selected group, one server at a time. Media is
@@ -1232,6 +1252,8 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
             // clip via a chooser). The pick entry points handle the one-clip-or-photos rule and
             // the video-capable-group gating.
             const Divider(color: _border, height: 24),
+            // The row is only ever replaced by the preparing-clip progress, never by an
+            // attached clip: swapping a clip is a pick away (see [ComposeMediaButtons]).
             if (_processingClip)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
@@ -1248,21 +1270,15 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                   ],
                 ),
               )
-            // A clip is the whole post; remove it (via its tile) to switch back to photos.
-            else if (_clip == null)
+            else
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _mediaButton(Icons.photo_library_outlined,
-                          _images.isEmpty ? 'Gallery' : 'Add more', _pickFromGallery),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _mediaButton(Icons.photo_camera_outlined, 'Camera', _pickFromCamera),
-                    ),
-                  ],
+                child: ComposeMediaButtons(
+                  hasClip: _clip != null,
+                  hasPhotos: _images.isNotEmpty,
+                  onGallery: _pickFromGallery,
+                  onCamera: _pickFromCamera,
+                  onReplaceClip: _clearClip,
                 ),
               ),
           ],
@@ -1319,15 +1335,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
             button: true,
             label: 'Remove clip',
             child: GestureDetector(
-              onTap: () => setState(() {
-                _clip = null;
-                _clipEncodedPath = null;
-                _clipPoster = null;
-                _clipPosterPreview = null;
-                _clipDurationMs = 0;
-                _location = null;
-                _locationSource = null;
-              }),
+              onTap: _clearClip,
               behavior: HitTestBehavior.opaque,
               child: SizedBox(
                 width: 44,
@@ -1510,10 +1518,12 @@ class _TagPeopleSheetState extends State<_TagPeopleSheet> {
 /// Trims a clip down to a <=10s window before it is posted. A filmstrip of frames spans the
 /// whole clip; two independent handles pick the window - the left sets the start, the right
 /// sets the end, each freely draggable - so any span from 1s up to the 10s cap can be chosen.
-/// The preview plays the selected [start, end] range so the pick can be reviewed before Trim.
-/// Every drag is clamped through [clampTrimWindow], which moves only the dragged edge and can
-/// never let the window exceed the cap or run off the clip. Returns (startMs, endMs) on Trim,
-/// or null on cancel.
+/// Dragging between the handles slides that window along the clip at a fixed length. The
+/// preview plays the selected [start, end] range so the pick can be reviewed before Trim.
+/// An edge drag is clamped through [clampTrimWindow], which moves only the dragged edge and
+/// can never let the window exceed the cap or run off the clip; a middle drag goes through
+/// [shiftTrimWindow], which keeps the span. Returns (startMs, endMs) on Trim, or null on
+/// cancel.
 class _TrimSheet extends StatefulWidget {
   const _TrimSheet({required this.path, required this.durationMs});
 
@@ -1631,6 +1641,18 @@ class _TrimSheetState extends State<_TrimSheet> {
     _seekPreview(_startMs);
   }
 
+  // Dragging between the handles slides the window as a whole (see [shiftTrimWindow]): both
+  // edges move, the span is untouched, and the ends of the clip stop it.
+  void _shiftWindow(int deltaMs) {
+    final window = shiftTrimWindow(_startMs, _endMs, deltaMs, widget.durationMs);
+    if (window.startMs == _startMs) return;
+    setState(() {
+      _startMs = window.startMs;
+      _endMs = window.endMs;
+    });
+    _seekPreview(_startMs);
+  }
+
   // The right handle moves only the end; the start stays put.
   void _setEnd(int ms) {
     final window = clampTrimWindow(_startMs, ms, widget.durationMs, moved: TrimEdge.end);
@@ -1695,7 +1717,9 @@ class _TrimSheetState extends State<_TrimSheet> {
               SizedBox(height: 56, child: _filmstrip()),
               const SizedBox(height: 8),
               const Text(
-                'Drag either end to pick 1 to 10 seconds. Tap play to preview.',
+                'Drag the ends to pick 1 to 10 seconds, or the middle to slide the window. '
+                'Tap play to preview.',
+                textAlign: TextAlign.center,
                 style: TextStyle(color: _fgMuted, fontSize: 12),
               ),
             ],
@@ -1707,46 +1731,55 @@ class _TrimSheetState extends State<_TrimSheet> {
 
   /// The preview video with a centered play/pause control and a mute toggle, so the chosen
   /// window can be watched (and heard) before committing to it.
+  ///
+  /// Height-capped at a bit over half the screen. Left to its own aspect ratio a portrait
+  /// clip claims nearly the whole sheet and pushes the filmstrip - the part being edited -
+  /// to the bottom edge; inside the cap it letterboxes instead, and the header, strip and
+  /// hint all sit comfortably, which is the proportion Instagram's trimmer keeps.
   Widget _previewPane(BuildContext context) {
     final ready = _previewReady && _preview != null;
-    return AspectRatio(
-      aspectRatio: ready ? _preview!.value.aspectRatio : 16 / 9,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          if (ready) VideoPlayer(_preview!) else const ColoredBox(color: Color(0xFF14161A)),
-          if (ready)
-            GestureDetector(
-              onTap: _togglePlay,
-              behavior: HitTestBehavior.opaque,
-              child: Container(
-                width: 52,
-                height: 52,
-                decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
-                child: Icon(_playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                    color: Colors.white, size: 32),
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.58),
+      child: AspectRatio(
+        aspectRatio: ready ? _preview!.value.aspectRatio : 16 / 9,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            if (ready) VideoPlayer(_preview!) else const ColoredBox(color: Color(0xFF14161A)),
+            if (ready)
+              GestureDetector(
+                onTap: _togglePlay,
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  width: 52,
+                  height: 52,
+                  decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                  child: Icon(_playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                      color: Colors.white, size: 32),
+                ),
               ),
-            ),
-          if (ready)
-            Positioned(
-              right: 6,
-              bottom: 6,
-              child: Semantics(
-                button: true,
-                label: _muted ? 'Unmute preview' : 'Mute preview',
-                child: GestureDetector(
-                  onTap: _toggleMute,
-                  behavior: HitTestBehavior.opaque,
-                  child: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
-                    child: Icon(_muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-                        color: Colors.white, size: 18),
+            if (ready)
+              Positioned(
+                right: 6,
+                bottom: 6,
+                child: Semantics(
+                  button: true,
+                  label: _muted ? 'Unmute preview' : 'Mute preview',
+                  child: GestureDetector(
+                    onTap: _toggleMute,
+                    behavior: HitTestBehavior.opaque,
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration:
+                          const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                      child: Icon(_muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                          color: Colors.white, size: 18),
+                    ),
                   ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -1784,6 +1817,27 @@ class _TrimSheetState extends State<_TrimSheet> {
                     child: const ColoredBox(color: Colors.black54),
                   ),
                 ],
+              ),
+            ),
+            // The selected region itself: dragging it moves the whole window, so a window
+            // that is already the right length can be slid to a different moment without
+            // rebuilding it edge by edge. Framed top and bottom so it reads as one draggable
+            // block. Below the handles in the stack, so an edge drag stays an edge drag.
+            Positioned(
+              left: (startFrac * width).clamp(0.0, width),
+              width: ((endFrac - startFrac) * width).clamp(0.0, width),
+              top: 0,
+              bottom: 0,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onHorizontalDragUpdate: (d) => _shiftWindow(_dxToMs(d.delta.dx, width)),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border.symmetric(
+                      horizontal: BorderSide(color: context.accent, width: 2),
+                    ),
+                  ),
+                ),
               ),
             ),
             // Left handle: slides the whole window's start.

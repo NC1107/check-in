@@ -31,11 +31,15 @@ dependencies:
   intl: ^0.20.3
   firebase_core: ^4.11.0      # initialise Firebase from the native google-services config
   firebase_messaging: ^16.4.1 # FCM push: delivers to Android directly and iOS via APNs
+  visibility_detector: ^0.4.0+2  # how much of a feed clip is on screen, for autoplay
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  # Lets a test stand in for the platform video player, so feed autoplay can be asserted
+  # on a host that has no player at all.
+  video_player_platform_interface: ^6.9.0
 
 flutter:
   uses-material-design: true
