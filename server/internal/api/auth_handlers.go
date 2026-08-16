@@ -37,7 +37,7 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"name":        s.serverName(r.Context()),
 		"color":       s.serverColor(r.Context()),
 		"initialized": initialized,
@@ -46,7 +46,20 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		// option against a self-hosted server that has not been updated yet; older clients
 		// ignore the key.
 		"mediaTypes": []string{"image", "gif", "video"},
-	})
+		// recap is this server's capability signal for the whole recap feature: lat/lng in
+		// createPost, and the recapCadence/recapWeekday/recapHour/recapOffset fields below
+		// and on PATCH /api/admin/server. This server rejects unknown JSON fields
+		// (DisallowUnknownFields), so a client must only send any of them once it has seen
+		// this flag - otherwise a new client would 400 every post against an old server.
+		"recap": true,
+	}
+	if settings, err := s.db.GetRecapSettings(r.Context()); err == nil {
+		resp["recapCadence"] = settings.Cadence
+		resp["recapWeekday"] = settings.Weekday
+		resp["recapHour"] = settings.Hour
+		resp["recapOffset"] = settings.Offset
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // serverName is the group's current display name: the admin-set value in the database,
@@ -100,19 +113,37 @@ func validGroupColor(raw string) (string, bool) {
 	return "", false
 }
 
-// handleUpdateServer lets an admin change the group's name and/or color for everyone
-// (stored server-side). Both fields are optional; whichever is present is validated and
-// applied. Responds with the current name and color.
+// validRecapCadence accepts the three standing-cadence values the scheduler understands.
+func validRecapCadence(raw string) bool {
+	switch raw {
+	case "off", "weekly", "monthly":
+		return true
+	default:
+		return false
+	}
+}
+
+// handleUpdateServer lets an admin change the group's shared settings - name, color, and
+// the standing recap cadence - for everyone at once. Every field is optional; whichever is
+// present is validated and applied. Responds with the current values of all of them.
 func (s *Server) handleUpdateServer(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name  *string `json:"name"`
 		Color *string `json:"color"`
+		// Recap settings mirror the digest hour/offset shape (0013): a cadence, a
+		// group-local hour (and, for weekly, an ISO weekday), and the UTC offset the app
+		// refreshes on launch so a DST shift self-corrects.
+		RecapCadence *string `json:"recapCadence"`
+		RecapWeekday *int    `json:"recapWeekday"`
+		RecapHour    *int    `json:"recapHour"`
+		RecapOffset  *int    `json:"recapOffset"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	if req.Name == nil && req.Color == nil {
+	if req.Name == nil && req.Color == nil && req.RecapCadence == nil &&
+		req.RecapWeekday == nil && req.RecapHour == nil && req.RecapOffset == nil {
 		writeErr(w, http.StatusBadRequest, "nothing to update")
 		return
 	}
@@ -138,10 +169,58 @@ func (s *Server) handleUpdateServer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	if req.RecapCadence != nil || req.RecapWeekday != nil || req.RecapHour != nil || req.RecapOffset != nil {
+		settings, err := s.db.GetRecapSettings(r.Context())
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "server error")
+			return
+		}
+		if req.RecapCadence != nil {
+			if !validRecapCadence(*req.RecapCadence) {
+				writeErr(w, http.StatusBadRequest, "recapCadence must be 'off', 'weekly' or 'monthly'")
+				return
+			}
+			settings.Cadence = *req.RecapCadence
+		}
+		if req.RecapWeekday != nil {
+			if *req.RecapWeekday < 1 || *req.RecapWeekday > 7 {
+				writeErr(w, http.StatusBadRequest, "recapWeekday must be 1-7 (ISO, 1=Monday)")
+				return
+			}
+			settings.Weekday = *req.RecapWeekday
+		}
+		if req.RecapHour != nil {
+			if *req.RecapHour < 0 || *req.RecapHour > 23 {
+				writeErr(w, http.StatusBadRequest, "recapHour must be 0-23")
+				return
+			}
+			settings.Hour = *req.RecapHour
+		}
+		if req.RecapOffset != nil {
+			// Real UTC offsets span -12:00 to +14:00, same bound as NotifyPrefs.Normalize.
+			if *req.RecapOffset < -12*60 || *req.RecapOffset > 14*60 {
+				writeErr(w, http.StatusBadRequest, "recapOffset must be a plausible UTC offset in minutes")
+				return
+			}
+			settings.Offset = *req.RecapOffset
+		}
+		if err := s.db.SetRecapSettings(r.Context(), settings.Cadence, settings.Weekday, settings.Hour, settings.Offset); err != nil {
+			writeErr(w, http.StatusInternalServerError, "server error")
+			return
+		}
+	}
+
+	resp := map[string]any{
 		"name":  s.serverName(r.Context()),
 		"color": s.serverColor(r.Context()),
-	})
+	}
+	if settings, err := s.db.GetRecapSettings(r.Context()); err == nil {
+		resp["recapCadence"] = settings.Cadence
+		resp["recapWeekday"] = settings.Weekday
+		resp["recapHour"] = settings.Hour
+		resp["recapOffset"] = settings.Offset
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 type checkPhoneReq struct {

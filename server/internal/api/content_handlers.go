@@ -132,10 +132,12 @@ func (s *Server) handleUserPosts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"posts": posts})
 }
 
-// createPostReq deliberately gains no fields as media types are added. Servers reject
-// unknown fields, so anything new here would make a new client unable to post to a server
-// that has not been updated yet - and nothing new is needed: what the attachments are is
-// already knowable from the attachments themselves.
+// createPostReq mostly gains no fields as media types are added: this server rejects
+// unknown fields (decodeJSON's DisallowUnknownFields), so anything new here would make a
+// new client unable to post to a server that has not been updated yet. Lat/Lng are the one
+// exception, and the client is required to gate them the same way: it only sends them to a
+// server whose /api/server-info advertises the "recap" capability, so an old server never
+// sees a field it doesn't understand.
 type createPostReq struct {
 	Kind      string  `json:"kind"`      // client's claim about the post; validated, not stored
 	Body      string  `json:"body"`      // text body or image caption
@@ -146,6 +148,11 @@ type createPostReq struct {
 	// CrossPostID ties this copy to the same post shared to other groups. Client-generated
 	// and opaque; the server only stores it so the multi-group client can collapse copies.
 	CrossPostID *string `json:"crossPostId"`
+	// Lat/Lng are the coordinates behind Location, rounded client-side to 2 decimal places
+	// (~1.1km) - strictly coarser than the place string itself. Stored for the v1.5 map
+	// panel; nothing reads them back yet.
+	Lat *float64 `json:"lat"`
+	Lng *float64 `json:"lng"`
 }
 
 func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
@@ -214,8 +221,15 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Coordinates ride along with location and are dropped the same way when there's no
+	// attachment to have carried GPS in the first place.
+	var lat, lng *float64
+	if len(mediaIDs) > 0 {
+		lat, lng = req.Lat, req.Lng
+	}
+
 	me := userFrom(r)
-	post, err := s.db.CreatePost(r.Context(), me.ID, req.Body, mediaIDs, location, req.PeopleIDs, crossPostID)
+	post, err := s.db.CreatePost(r.Context(), me.ID, req.Body, mediaIDs, location, req.PeopleIDs, crossPostID, lat, lng)
 	if errors.Is(err, db.ErrNotOwned) {
 		writeErr(w, http.StatusBadRequest, "one or more attachments are not yours")
 		return
