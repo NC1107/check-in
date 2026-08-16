@@ -197,7 +197,8 @@ type RecapStats struct {
 	Posters int `json:"posters"`
 }
 
-// RecapPanel is one page of the deck. Type is "collage" or "awards" in v1; a client must
+// RecapPanel is one page of the deck. Only "collage" is generated today; "awards" is kept
+// decodable for recaps published before titles replaced the panel. A client must
 // silently skip any type it doesn't recognise (forward-compat for v1.5's map and web
 // panels) and fall back to Stats + body if it recognises none.
 type RecapPanel struct {
