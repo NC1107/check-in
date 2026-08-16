@@ -155,5 +155,13 @@ void main() {
     // wired to the deck's current page via RecapDeckState.saveCurrentPage.
     expect(find.text('Save this panel'), findsOneWidget);
     expect(find.byIcon(Icons.download_outlined), findsOneWidget);
+
+    // Tap it too. The save can't be observed here - the rasterize never completes in a
+    // test's fake-async zone, and Gal has no channel - but tapping still catches a deck key
+    // pointed at the wrong widget, which throws on the way in. A silent no-op from a
+    // mismatched onSelected value would slip through; that needs a device.
+    await tester.tap(find.text('Save this panel'));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
   });
 }
