@@ -1200,7 +1200,7 @@ func (d *DB) AdminDeleteComment(ctx context.Context, commentID int64) ([]string,
 // for the operator dashboard's activity view.
 func (d *DB) RecentComments(ctx context.Context, limit int) ([]Comment, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT c.id, c.post_id, c.user_id, c.body, c.created_at, u.name
+		SELECT c.id, c.post_id, c.user_id, c.body, c.created_at, c.media_id, u.name
 		FROM comments c JOIN users u ON u.id = c.user_id
 		ORDER BY c.created_at DESC
 		LIMIT $1`, limit)
@@ -1211,7 +1211,7 @@ func (d *DB) RecentComments(ctx context.Context, limit int) ([]Comment, error) {
 	var out []Comment
 	for rows.Next() {
 		var c Comment
-		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.AuthorName); err != nil {
+		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.MediaID, &c.AuthorName); err != nil {
 			return nil, err
 		}
 		out = append(out, c)

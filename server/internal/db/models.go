@@ -191,6 +191,16 @@ type Comment struct {
 	MediaID *int64 `json:"mediaId,omitempty"`
 }
 
+// PreviewBody is what a plain-text summary of this comment should show: the body, or "GIF"
+// for a gif-only comment (empty body, media attached) - the same fallback the app's own
+// CommentPreview.previewText applies, used here by the debug dashboard's activity table.
+func (c Comment) PreviewBody() string {
+	if c.Body == "" && c.MediaID != nil {
+		return "GIF"
+	}
+	return c.Body
+}
+
 // Birthday is a lightweight projection used by the upcoming-birthdays endpoint that
 // powers on-device local notifications.
 type Birthday struct {
