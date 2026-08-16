@@ -1726,46 +1726,55 @@ class _TrimSheetState extends State<_TrimSheet> {
 
   /// The preview video with a centered play/pause control and a mute toggle, so the chosen
   /// window can be watched (and heard) before committing to it.
+  ///
+  /// Height-capped at a bit over half the screen. Left to its own aspect ratio a portrait
+  /// clip claims nearly the whole sheet and pushes the filmstrip - the part being edited -
+  /// to the bottom edge; inside the cap it letterboxes instead, and the header, strip and
+  /// hint all sit comfortably, which is the proportion Instagram's trimmer keeps.
   Widget _previewPane(BuildContext context) {
     final ready = _previewReady && _preview != null;
-    return AspectRatio(
-      aspectRatio: ready ? _preview!.value.aspectRatio : 16 / 9,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          if (ready) VideoPlayer(_preview!) else const ColoredBox(color: Color(0xFF14161A)),
-          if (ready)
-            GestureDetector(
-              onTap: _togglePlay,
-              behavior: HitTestBehavior.opaque,
-              child: Container(
-                width: 52,
-                height: 52,
-                decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
-                child: Icon(_playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                    color: Colors.white, size: 32),
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.58),
+      child: AspectRatio(
+        aspectRatio: ready ? _preview!.value.aspectRatio : 16 / 9,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            if (ready) VideoPlayer(_preview!) else const ColoredBox(color: Color(0xFF14161A)),
+            if (ready)
+              GestureDetector(
+                onTap: _togglePlay,
+                behavior: HitTestBehavior.opaque,
+                child: Container(
+                  width: 52,
+                  height: 52,
+                  decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                  child: Icon(_playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                      color: Colors.white, size: 32),
+                ),
               ),
-            ),
-          if (ready)
-            Positioned(
-              right: 6,
-              bottom: 6,
-              child: Semantics(
-                button: true,
-                label: _muted ? 'Unmute preview' : 'Mute preview',
-                child: GestureDetector(
-                  onTap: _toggleMute,
-                  behavior: HitTestBehavior.opaque,
-                  child: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
-                    child: Icon(_muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-                        color: Colors.white, size: 18),
+            if (ready)
+              Positioned(
+                right: 6,
+                bottom: 6,
+                child: Semantics(
+                  button: true,
+                  label: _muted ? 'Unmute preview' : 'Mute preview',
+                  child: GestureDetector(
+                    onTap: _toggleMute,
+                    behavior: HitTestBehavior.opaque,
+                    child: Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration:
+                          const BoxDecoration(color: Colors.black54, shape: BoxShape.circle),
+                      child: Icon(_muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                          color: Colors.white, size: 18),
+                    ),
                   ),
                 ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
