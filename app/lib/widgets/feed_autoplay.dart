@@ -10,19 +10,16 @@ import 'package:visibility_detector/visibility_detector.dart';
 typedef FeedVideoFactory = VideoPlayerController Function(Uri url, Map<String, String> headers);
 
 final feedVideoFactoryProvider = Provider<FeedVideoFactory>(
-  (ref) => (url, headers) => VideoPlayerController.networkUrl(
-        url,
-        httpHeaders: headers,
-        // Muted autoplay must not interrupt whatever the phone is already playing. Without
-        // this, scrolling the feed stops the user's music.
-        videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
-      ),
+  // No mixWithOthers: an audible clip should take the audio focus the way Reels does, so it
+  // pauses the user's music instead of talking over the top of it. Playing muted alongside
+  // the music was the old behaviour and is now the user's choice, not the app's.
+  (ref) => (url, headers) => VideoPlayerController.networkUrl(url, httpHeaders: headers),
 );
 
 /// Decides which feed clip - at most one, ever - may hold a video player.
 ///
-/// Feed clips autoplay the way Reels and the Instagram feed do: the clip you are looking at
-/// plays muted and loops, every other clip stays a poster. That has to be one controller for
+/// Feed clips autoplay the way Reels does: the clip you are looking at plays and loops,
+/// every other clip stays a poster. That has to be one controller for
 /// the whole feed, not one per card: Android hands out a small pool of hardware video
 /// decoders, and this codebase already has a scar from a feed list that built more per-item
 /// state than it could carry. So the invariant lives here, in one object every tile has to

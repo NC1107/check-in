@@ -289,7 +289,9 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> {
 
 /// One clip inside the viewer's [PageView]: plays the stored MP4 (the main file, not the
 /// poster variant) over its own poster, which stays visible until the first frame decodes so
-/// there is no black flash. Tap toggles play/pause; a corner button mutes.
+/// there is no black flash. Tap toggles play/pause; the corner button carries the same
+/// sticky mute the feed tiles use ([clipsMutedProvider]), so sound is one choice across the
+/// app rather than one per player.
 ///
 /// The lifecycle is the whole point. There is exactly one controller and only while this is
 /// the active page: it is created when the page becomes active and torn down the moment it
@@ -310,7 +312,6 @@ class _VideoPage extends ConsumerStatefulWidget {
 class _VideoPageState extends ConsumerState<_VideoPage> with WidgetsBindingObserver {
   VideoPlayerController? _controller;
   bool _initialized = false;
-  bool _muted = false;
 
   @override
   void initState() {
@@ -357,7 +358,7 @@ class _VideoPageState extends ConsumerState<_VideoPage> with WidgetsBindingObser
     controller.initialize().then((_) {
       if (!mounted || _controller != controller) return;
       controller.setLooping(true);
-      controller.setVolume(_muted ? 0 : 1);
+      controller.setVolume(ref.read(clipsMutedProvider) ? 0 : 1);
       // Make the clip's audio follow the Ring/Silent switch (ambient category) rather than
       // playing through silent mode, which is video_player's forced default. Re-asserted here
       // because that default is set on the plugin's first init and never downgrades.
@@ -385,19 +386,12 @@ class _VideoPageState extends ConsumerState<_VideoPage> with WidgetsBindingObser
     });
   }
 
-  void _toggleMute() {
-    final controller = _controller;
-    if (controller == null) return;
-    setState(() {
-      _muted = !_muted;
-      controller.setVolume(_muted ? 0 : 1);
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
     final playing = _initialized && controller != null && controller.value.isPlaying;
+    final muted = ref.watch(clipsMutedProvider);
+    ref.listen(clipsMutedProvider, (_, next) => _controller?.setVolume(next ? 0 : 1));
     return GestureDetector(
       onTap: _togglePlay,
       child: Stack(
@@ -425,10 +419,10 @@ class _VideoPageState extends ConsumerState<_VideoPage> with WidgetsBindingObser
                 child: Padding(
                   padding: const EdgeInsets.all(16),
                   child: IconButton(
-                    icon: Icon(_muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                    icon: Icon(muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
                         color: Colors.white, size: 26),
-                    tooltip: _muted ? 'Unmute' : 'Mute',
-                    onPressed: _toggleMute,
+                    tooltip: muted ? 'Unmute' : 'Mute',
+                    onPressed: () => ref.read(clipsMutedProvider.notifier).toggle(),
                   ),
                 ),
               ),
