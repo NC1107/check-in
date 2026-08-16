@@ -32,12 +32,16 @@ const kMemoriesOpenThreshold = 0.35;
 /// closes) the surface from a short drag, the way a drawer or bottom sheet settles.
 const kMemoriesFlickVelocity = 500.0;
 
-/// The handle's tappable/draggable slot width - at least Apple's 44pt touch-target
-/// guidance, well past the 4px-wide visible pill it centers (see [MemoriesHandle]). Fixed
-/// and unconditional (not shrunk to 0 when incapable - the capability check instead decides
-/// what renders *inside* this slot) so the bottom bar's layout, notably the FAB notch's
-/// horizontal centering, never shifts depending on whether any shown group advertises the
-/// capability - see home_shell.dart's matching trailing spacer.
+/// The handle's tappable/draggable strip width - at least Apple's 44pt touch-target
+/// guidance, well past the 4px-wide visible pill it centers (see [MemoriesHandle]).
+///
+/// The handle is laid out as an overlay, not a Row child (see home_shell.dart): it is
+/// positioned on top of the bottom bar's leading edge and takes no layout space of its own,
+/// so this width only ever sizes its own hit-testable strip and never affects where the
+/// Feed/You tabs or the FAB notch sit. An earlier version made the handle a real Row
+/// participant sized to this constant (plus a mirrored spacer to keep the FAB notch
+/// centered) - that kept the notch centered but still measurably shifted the Feed and You
+/// icons inward, which is exactly the kind of shift this "invisible" feature must not cause.
 const kMemoriesHandleWidth = 44.0;
 
 /// Decides whether an in-progress interactive drag of the Memories surface should settle
@@ -68,7 +72,18 @@ class MemoriesDragDriver {
   final AnimationController controller;
   double _dragAccum = 0;
 
+  // Whether a drag is actually in progress - i.e. [start] has fired and neither [end] nor
+  // [cancel] has settled it since. This is what [cancel] uses to tell a genuinely
+  // interrupted drag apart from an ordinary tap: Flutter's DragGestureRecognizer invokes
+  // onCancel any time a pointer that could have started a drag goes away WITHOUT one ever
+  // starting - which includes every plain tap that a competing tap recognizer wins instead
+  // (see DragGestureRecognizer.didStopTrackingLastPointer). Without this guard, tapping
+  // anything wrapped by the same GestureDetector - "Give me a memory", "Another", the close
+  // button - would fire a spurious cancel and yank the surface back toward closed.
+  bool _dragging = false;
+
   void start() {
+    _dragging = true;
     _dragAccum = controller.value;
   }
 
@@ -79,8 +94,28 @@ class MemoriesDragDriver {
   }
 
   void end(DragEndDetails details, bool reduceMotion) {
+    _dragging = false;
     final velocity = details.primaryVelocity ?? 0;
     final target = settleMemoriesTarget(_dragAccum, velocity);
+    controller.animateTo(target,
+        duration: reduceMotion ? Duration.zero : const Duration(milliseconds: 220),
+        curve: Curves.easeOut);
+  }
+
+  /// Settles the drag exactly like [end] with zero velocity, for a drag the platform
+  /// cancelled outright mid-gesture (the app backgrounded, another recognizer stole the
+  /// arena after already losing to this one) rather than one that reached a normal
+  /// pointer-up. Without this the controller would simply be left wherever the drag had
+  /// got to - no [end] ever fires for a cancelled gesture - and the surface could sit
+  /// part-open indefinitely with nothing to nudge it shut or open.
+  ///
+  /// A no-op when no drag was actually in progress (see [_dragging]'s doc comment) - the far
+  /// more common reason this fires is an ordinary tap that a sibling tap recognizer won
+  /// instead, which must not move the surface at all.
+  void cancel(bool reduceMotion) {
+    if (!_dragging) return;
+    _dragging = false;
+    final target = settleMemoriesTarget(_dragAccum, 0);
     controller.animateTo(target,
         duration: reduceMotion ? Duration.zero : const Duration(milliseconds: 220),
         curve: Curves.easeOut);
@@ -108,10 +143,12 @@ String memoryAgeLabel(DateTime createdAt, {DateTime? now}) {
   return years == 1 ? '1 year ago' : '$years years ago';
 }
 
-/// The small, unlabeled grab handle at the far bottom-left of the bottom bar, left of the
-/// Feed tab. Deliberately not a [_NavItem] lookalike (see home_shell.dart) - it must not
-/// read as a third destination. Absent entirely when no shown group advertises the Memories
-/// capability, per [MultiSession.memoriesCapableShownGroups].
+/// The small, unlabeled grab handle overlaid on the bottom bar's leading edge, on top of
+/// (not beside) the Feed tab - see home_shell.dart, which stacks this over the bar rather
+/// than laying it out as a Row child, precisely so it never shifts the Feed/You icons or the
+/// FAB notch. Deliberately not a [_NavItem] lookalike - it must not read as a third
+/// destination. Absent entirely when no shown group advertises the Memories capability, per
+/// [MultiSession.memoriesCapableShownGroups].
 ///
 /// Opens on a plain tap (the accessibility path - VoiceOver/Switch Control and anyone who
 /// never discovers the drag both go through this) and on an interactive rightward drag past
@@ -128,6 +165,11 @@ class MemoriesHandle extends ConsumerStatefulWidget {
 class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
   late final _drag = MemoriesDragDriver(widget.controller);
 
+  // Cached from the last build, so dispose() (which cannot safely call MediaQuery.of -
+  // the context is on its way out) still knows whether to animate or snap when it settles
+  // a stranded drag. See dispose()'s own comment.
+  bool _reduceMotion = false;
+
   void _open(bool reduceMotion) {
     HapticFeedback.selectionClick();
     widget.controller.animateTo(1,
@@ -136,17 +178,39 @@ class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
   }
 
   @override
+  void dispose() {
+    // Belt and braces alongside _HomeShellState's own capability-drop guard (the
+    // authoritative fix - see its doc comment): if this whole widget is ever removed from
+    // the tree while a drag was in progress, rather than merely rebuilt to
+    // SizedBox.shrink() (see build()'s own settle for that far more common case),
+    // DragGestureRecognizer.dispose() does not fire onCancel, so nothing else would ever
+    // settle the controller. A no-op when no drag was in progress - see
+    // MemoriesDragDriver.cancel.
+    _drag.cancel(_reduceMotion);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final capable =
         ref.watch(multiSessionProvider.select((s) => s.memoriesCapableShownGroups.isNotEmpty));
-    // The slot itself is always kMemoriesHandleWidth - only what renders inside it depends
-    // on capability - so toggling capability (a group's server updating, or switching which
-    // groups are shown) never shifts the Feed tab or the FAB notch. See
-    // kMemoriesHandleWidth's doc comment.
-    if (!capable) return const SizedBox(width: kMemoriesHandleWidth, height: 64);
+    final reduceMotion = MediaQuery.of(context).disableAnimations;
+    _reduceMotion = reduceMotion;
+    // An overlay, not a Row child (see the class doc comment) - shrinking to nothing here
+    // costs no layout, only removes the gesture surface and lets taps fall through to
+    // whatever the handle was sitting on top of.
+    if (!capable) {
+      // Capability can drop mid-drag - a shown-group change, or a capability update
+      // landing while a finger is down - and the GestureDetector subtree below is about to
+      // be torn out from under that drag without ever getting an onCancel (see dispose()'s
+      // comment: the same gap, just reached by a rebuild here rather than the whole widget
+      // going away). Settle it first, so the controller never gets stranded between 0 and
+      // 1 with nothing left mounted to finish the gesture.
+      _drag.cancel(reduceMotion);
+      return const SizedBox.shrink();
+    }
 
     final width = MediaQuery.sizeOf(context).width;
-    final reduceMotion = MediaQuery.of(context).disableAnimations;
     return Semantics(
       button: true,
       label: 'Memories',
@@ -156,6 +220,7 @@ class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
         onHorizontalDragStart: (_) => _drag.start(),
         onHorizontalDragUpdate: (d) => _drag.update(d, width, reduceMotion),
         onHorizontalDragEnd: (d) => _drag.end(d, reduceMotion),
+        onHorizontalDragCancel: () => _drag.cancel(reduceMotion),
         child: SizedBox(
           width: kMemoriesHandleWidth,
           height: 64,
@@ -267,6 +332,7 @@ class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
       onHorizontalDragStart: (_) => _drag.start(),
       onHorizontalDragUpdate: (d) => _drag.update(d, width, reduceMotion),
       onHorizontalDragEnd: (d) => _drag.end(d, reduceMotion),
+      onHorizontalDragCancel: () => _drag.cancel(reduceMotion),
       child: DecoratedBox(
         decoration: const BoxDecoration(
           color: _bgMain,
@@ -388,11 +454,11 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
             const SizedBox(height: 16),
             const Text('Look back at something from your group\'s history.',
                 textAlign: TextAlign.center, style: TextStyle(color: _fgSecondary, fontSize: 14)),
-            const SizedBox(height: 22),
+            const SizedBox(height: 20),
             PrimaryButton(
                 label: 'Give me a memory', enabled: !_loading, busy: _loading, onTap: _fetch),
             const SizedBox(height: 14),
-            const Text('More ways to look back — coming soon.',
+            const Text('More ways to look back - coming soon.',
                 style: TextStyle(color: _fgMuted, fontSize: 12)),
           ],
         ),
@@ -417,7 +483,7 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
               textAlign: TextAlign.center,
               style: TextStyle(color: _fgMuted, fontSize: 13),
             ),
-            const SizedBox(height: 22),
+            const SizedBox(height: 20),
             PrimaryButton(label: 'Check again', enabled: !_loading, busy: _loading, onTap: _fetch),
           ],
         ),
@@ -436,7 +502,7 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
             const SizedBox(height: 16),
             const Text("Couldn't load a memory.",
                 style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 22),
+            const SizedBox(height: 20),
             PrimaryButton(label: 'Try again', enabled: !_loading, busy: _loading, onTap: _fetch),
           ],
         ),
@@ -487,12 +553,12 @@ class _MemoryCard extends StatelessWidget {
         // the only thing this node needs to say.
         child: ExcludeSemantics(
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(14),
             child: DecoratedBox(
               decoration: BoxDecoration(
                 color: _bgSurface,
                 border: Border.all(color: _border),
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(14),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,

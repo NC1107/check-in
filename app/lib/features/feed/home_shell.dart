@@ -186,6 +186,18 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
   late final _memoriesController =
       AnimationController(vsync: this, duration: const Duration(milliseconds: 260), value: 0);
 
+  // Mirrors "the surface is anywhere above fully closed" as plain state, so it can gate
+  // FeedAutoplayScope.enabled below. The surface is a Stack sibling of the feed, not a
+  // pushed route - FeedAutoplayScope's own isCurrent check never fires for it - so without
+  // this a feed clip keeps playing, audibly, behind the opaque panel the instant the drag (or
+  // the open animation) starts moving off 0, not just once it settles fully open.
+  bool _memoriesOpen = false;
+
+  void _onMemoriesValueChanged() {
+    final open = _memoriesController.value > 0;
+    if (open != _memoriesOpen) setState(() => _memoriesOpen = open);
+  }
+
   /// Settles the surface shut - the header's close button and Android back (both routed
   /// through MemoriesSurface's onClose) share this rather than duplicating the
   /// reduced-motion duration choice.
@@ -199,6 +211,7 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
   @override
   void initState() {
     super.initState();
+    _memoriesController.addListener(_onMemoriesValueChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _registerServices();
       // Route notification taps: switch to the push's origin group and open the post.
@@ -210,6 +223,7 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
 
   @override
   void dispose() {
+    _memoriesController.removeListener(_onMemoriesValueChanged);
     _memoriesController.dispose();
     super.dispose();
   }
@@ -300,6 +314,20 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
         if (prev != next) _registerServices();
       },
     );
+    // The authoritative fix for a capability drop mid-drag (a shown-group change, or a
+    // capability update landing while a finger is down on the handle): force the surface
+    // shut whenever nothing capable is shown anymore and it isn't already closed, no matter
+    // which widget's build/dispose runs when. This owns the controller, so it holds
+    // regardless - MemoriesHandle also settles a drag of its own as a second line of
+    // defense (see its dispose() and build()'s incapable branch), but this is what must
+    // never miss: an open (or mid-transition) surface for a capability that just
+    // disappeared has nothing left to show and no reachable close button on some layouts.
+    ref.listen<bool>(
+      multiSessionProvider.select((s) => s.memoriesCapableShownGroups.isNotEmpty),
+      (prev, next) {
+        if (!next && _memoriesController.value != 0) _closeMemories();
+      },
+    );
     final account = ref.watch(currentAccountProvider);
     final me = account?.user;
 
@@ -309,8 +337,11 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
       // Clips in the feed autoplay, and this scope is what holds the whole feed to a single
       // player. It also has to be told when the feed is not the visible tab: an IndexedStack
       // keeps the other page alive but stops painting it, so nothing inside the page would
-      // ever learn it went off screen.
-      FeedAutoplayScope(enabled: _index == 0, child: const FeedScreen()),
+      // ever learn it went off screen. The Memories surface is the same story: it is a Stack
+      // sibling drawn over the feed, not a pushed route, so FeedAutoplayScope's own
+      // ModalRoute.isCurrent check never notices it - _memoriesOpen is what does, the instant
+      // the surface starts opening rather than only once it has fully covered the feed.
+      FeedAutoplayScope(enabled: _index == 0 && !_memoriesOpen, child: const FeedScreen()),
       // One profile for the one human: merged across every signed-in group.
       if (me != null) const MyProfileScreen(),
     ];
@@ -339,46 +370,57 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
         ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
-      bottomNavigationBar: BottomAppBar(
-        color: _bgMain,
-        elevation: 0,
-        height: 64,
-        padding: EdgeInsets.zero,
-        shape: const CircularNotchedRectangle(),
-        notchMargin: 9,
-        child: DecoratedBox(
-          decoration: const BoxDecoration(border: Border(top: BorderSide(color: _border))),
-          child: Row(
-            children: [
-              // The hidden Memories entry point: a small grab handle, not a fourth
-              // destination - see MemoriesHandle's doc comment.
-              MemoriesHandle(controller: _memoriesController),
-              _NavItem(
-                icon: Icons.home_outlined,
-                activeIcon: Icons.home_rounded,
-                label: 'Feed',
-                selected: _index == 0,
-                // Re-tapping Feed while already on it scrolls the feed back to the top.
-                onTap: () => _index == 0
-                    ? ref.read(feedScrollToTopProvider.notifier).bump()
-                    : setState(() => _index = 0),
+      // A Stack, not just the BottomAppBar: the handle is overlaid on top of the bar's
+      // leading edge rather than laid out as one of its Row children. Making it a Row child
+      // (even a fixed-width one, mirrored by a matching spacer on the other end to keep the
+      // FAB notch centered) still measurably shifted the Feed/You icons inward by half the
+      // handle's width - the notch stayed centered, but the tabs visibly moved, which is a
+      // regression from a feature that is supposed to be invisible. An overlay takes no
+      // layout space at all, so the Row below is exactly what it was before this feature.
+      bottomNavigationBar: Stack(
+        alignment: Alignment.centerLeft,
+        children: [
+          BottomAppBar(
+            color: _bgMain,
+            elevation: 0,
+            height: 64,
+            padding: EdgeInsets.zero,
+            shape: const CircularNotchedRectangle(),
+            notchMargin: 9,
+            child: DecoratedBox(
+              decoration: const BoxDecoration(border: Border(top: BorderSide(color: _border))),
+              child: Row(
+                children: [
+                  _NavItem(
+                    icon: Icons.home_outlined,
+                    activeIcon: Icons.home_rounded,
+                    label: 'Feed',
+                    selected: _index == 0,
+                    // Re-tapping Feed while already on it scrolls the feed back to the top.
+                    onTap: () => _index == 0
+                        ? ref.read(feedScrollToTopProvider.notifier).bump()
+                        : setState(() => _index = 0),
+                  ),
+                  const SizedBox(width: 64), // FAB notch
+                  _NavItem(
+                    icon: Icons.person_outline,
+                    activeIcon: Icons.person_rounded,
+                    label: 'You',
+                    selected: _index == 1,
+                    onTap: me != null ? () => setState(() => _index = 1) : null,
+                  ),
+                ],
               ),
-              const SizedBox(width: 64), // FAB notch
-              _NavItem(
-                icon: Icons.person_outline,
-                activeIcon: Icons.person_rounded,
-                label: 'You',
-                selected: _index == 1,
-                onTap: me != null ? () => setState(() => _index = 1) : null,
-              ),
-              // Mirrors the handle's fixed-width slot on the other end, so its extra width
-              // on the left is balanced rather than pushing the FAB notch (which centers on
-              // the Row's own midpoint, not the screen's) off true center. Both are fixed
-              // constants - no capability check needed here to stay in sync.
-              const SizedBox(width: kMemoriesHandleWidth),
-            ],
+            ),
           ),
-        ),
+          // The hidden Memories entry point: a small grab handle overlaid on the bar, not a
+          // fourth Row destination - see MemoriesHandle's doc comment.
+          SizedBox(
+            width: kMemoriesHandleWidth,
+            height: 64,
+            child: MemoriesHandle(controller: _memoriesController),
+          ),
+        ],
       ),
     );
   }
