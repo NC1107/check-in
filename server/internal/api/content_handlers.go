@@ -378,6 +378,10 @@ type addCommentReq struct {
 	// ParentCommentID, when set, makes this a reply to that comment (which must be on the
 	// same post). It notifies the parent's author on top of the post's author.
 	ParentCommentID *int64 `json:"parentCommentId"`
+	// MediaID attaches a gif the caller uploaded to this comment. A gif-only comment (no
+	// body at all) is allowed - see the empty-body check below - so a member can reply with
+	// just a reaction gif the way the app's own compose treats a photo-only check-in.
+	MediaID *int64 `json:"mediaId"`
 }
 
 func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
@@ -392,7 +396,11 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Body = strings.TrimSpace(req.Body)
-	if req.Body == "" || len(req.Body) > 2000 {
+	if req.Body == "" && req.MediaID == nil {
+		writeErr(w, http.StatusBadRequest, "comment must have a body or a gif")
+		return
+	}
+	if len(req.Body) > 2000 {
 		writeErr(w, http.StatusBadRequest, "comment must be 1-2000 characters")
 		return
 	}
@@ -416,7 +424,11 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	me := userFrom(r)
-	comment, err := s.db.AddComment(r.Context(), id, me.ID, req.Body, req.ParentCommentID)
+	comment, err := s.db.AddComment(r.Context(), id, me.ID, req.Body, req.ParentCommentID, req.MediaID)
+	if errors.Is(err, db.ErrNotOwned) {
+		writeErr(w, http.StatusBadRequest, "that attachment is not yours")
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not add comment")
 		return

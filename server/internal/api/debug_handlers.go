@@ -168,9 +168,13 @@ func (s *Server) handleDebugCommentDelete(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	if err := s.db.AdminDeleteComment(r.Context(), id); err != nil {
+	orphans, err := s.db.AdminDeleteComment(r.Context(), id)
+	if err != nil {
 		s.renderDebug(w, r, "Could not delete that comment.")
 		return
+	}
+	for _, p := range orphans {
+		_ = s.store.Delete(p)
 	}
 	s.renderDebug(w, r, "Comment deleted.")
 }
@@ -325,7 +329,7 @@ var debugTmpl = template.Must(template.New("debug").Funcs(template.FuncMap{
   <h2>Recent comments</h2>
   {{if .RecentComments}}<table><tr><th>ID</th><th>Author</th><th>When</th><th>On post</th><th>Comment</th><th></th></tr>
   {{range .RecentComments}}<tr><td>{{.ID}}</td><td>{{.AuthorName}}</td><td>{{fmtTime .CreatedAt}}</td><td>#{{.PostID}}</td>
-    <td>{{trunc .Body 70}}</td>
+    <td>{{trunc .PreviewBody 70}}</td>
     <td class="actions"><form class="inline" method="post" action="/debug/comment/delete?token={{$.Token}}" onsubmit="return confirm('Delete this comment?')"><input type="hidden" name="token" value="{{$.Token}}"><input type="hidden" name="id" value="{{.ID}}"><button class="btn btn-danger btn-sm">Delete</button></form></td></tr>{{end}}</table>
   {{else}}<div class="empty">No comments yet.</div>{{end}}
 

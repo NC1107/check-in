@@ -158,6 +158,54 @@ void main() {
     });
   });
 
+  group('gif compose gating', () {
+    ServerAccount group(String id,
+            {bool gifSearch = true, List<String> mediaTypes = const ['image', 'gif']}) =>
+        ServerAccount(
+          id: id,
+          baseUrl: 'https://$id',
+          serverName: id,
+          token: 't',
+          mediaTypes: mediaTypes,
+          gifSearch: gifSearch,
+        );
+
+    test('no active group: nothing to search against', () {
+      final a = group('a.invalid');
+      expect(gifComposeAllowed(null, [a]), isFalse);
+    });
+
+    test('no target selected: nothing to post a gif to', () {
+      final active = group('a.invalid');
+      expect(gifComposeAllowed(active, const []), isFalse);
+    });
+
+    test('the active group must itself support gif search', () {
+      final noSearch = group('a.invalid', gifSearch: false);
+      final target = group('b.invalid');
+      expect(gifComposeAllowed(noSearch, [target]), isFalse);
+    });
+
+    test('every cross-post target must accept a gif attachment', () {
+      final active = group('a.invalid');
+      final gifCapable = group('b.invalid', mediaTypes: const ['image', 'gif']);
+      final imageOnly = group('c.invalid', mediaTypes: const ['image']);
+      expect(gifComposeAllowed(active, [gifCapable]), isTrue);
+      // One target that can't store a gif takes the option away for the whole selection -
+      // same reasoning as clipComposeAllowed for a clip.
+      expect(gifComposeAllowed(active, [gifCapable, imageOnly]), isFalse);
+      expect(gifComposeAllowed(active, [imageOnly]), isFalse);
+    });
+
+    test('an active group that can search still allows it even if not itself a target', () {
+      // Search always goes through the active group's proxy - Klipy's results don't depend
+      // on whose key asked - so the active group need not be among the cross-post targets.
+      final active = group('a.invalid');
+      final target = group('b.invalid');
+      expect(gifComposeAllowed(active, [target]), isTrue);
+    });
+  });
+
   group('poster best-effort', () {
     test('a failing poster upload never fails the post', () async {
       // The poster is only the pre-play still; the feed renders a posterless clip fine, so a

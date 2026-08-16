@@ -48,12 +48,22 @@ type Config struct {
 	// turn push off (short of bringing your own Firebase). Ignored when FCMCredentialsFile
 	// is set, since that means the server can reach FCM directly.
 	RelayURL string
+	// KlipyKey is the API key for the Klipy GIF-search proxy (GET /api/gifs/search). Empty
+	// disables gif search entirely: the proxy answers a clean error and /api/server-info
+	// leaves gifSearch out of what it tells the app this server can do.
+	KlipyKey string
+	// KlipyBaseURL is the upstream Klipy API's base URL. Overridable so tests can point the
+	// proxy at an httptest fake instead of the real service.
+	KlipyBaseURL string
 }
 
 // DefaultRelayURL is the maintainer-run relay the published apps' Firebase project is
 // wired to. Baked in as the default so push works out of the box for self-hosters; a host
 // opts out by setting CHECKIN_RELAY_URL empty.
 const DefaultRelayURL = "https://checkin-relay.npc-server.top"
+
+// DefaultKlipyBaseURL is Klipy's real API host, used unless a test overrides it.
+const DefaultKlipyBaseURL = "https://api.klipy.com"
 
 // Load reads configuration from the environment, applying sensible defaults so the
 // server runs out of the box for local development.
@@ -71,6 +81,8 @@ func Load() (Config, error) {
 		DefaultCountryCode: getenv("CHECKIN_DEFAULT_COUNTRY_CODE", "1"),
 		FCMCredentialsFile: getenv("CHECKIN_FCM_CREDENTIALS_FILE", ""),
 		RelayURL:           relayURLFromEnv(),
+		KlipyKey:           getenv("CHECKIN_KLIPY_KEY", ""),
+		KlipyBaseURL:       getenv("CHECKIN_KLIPY_BASE_URL", DefaultKlipyBaseURL),
 	}
 	if cfg.DatabaseURL == "" {
 		return cfg, fmt.Errorf("CHECKIN_DATABASE_URL is required")

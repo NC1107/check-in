@@ -26,6 +26,80 @@ void main() {
     final info = ServerInfo.fromJson({});
     expect(info.name, 'Check-In');
     expect(info.initialized, isFalse);
+    // An older server predates both keys entirely - absence must read as "no", not crash
+    // and not default to "yes" (which would send a comment mediaId a 400-DisallowUnknownFields
+    // server would reject).
+    expect(info.gifSearch, isFalse);
+    expect(info.commentMedia, isFalse);
+  });
+
+  test('ServerInfo reads gifSearch and commentMedia when present', () {
+    final info = ServerInfo.fromJson({'gifSearch': true, 'commentMedia': true});
+    expect(info.gifSearch, isTrue);
+    expect(info.commentMedia, isTrue);
+  });
+
+  test('GifResult.fromJson parses a slim gif result and derives its aspect ratio', () {
+    final g = GifResult.fromJson({
+      'id': '123',
+      'title': 'high five',
+      'previewUrl': 'https://static.klipy.com/sm.webp',
+      'previewWidth': 150,
+      'previewHeight': 84,
+      'gifUrl': 'https://static.klipy.com/md.gif',
+      'width': 300,
+      'height': 169,
+    });
+    expect(g.id, '123');
+    expect(g.gifUrl, 'https://static.klipy.com/md.gif');
+    expect(g.previewAspectRatio, closeTo(150 / 84, 0.0001));
+  });
+
+  test('GifResult with no reported dimensions has no aspect ratio (falls back to square)', () {
+    final g = GifResult.fromJson({'id': '1', 'previewUrl': 'x', 'gifUrl': 'y'});
+    expect(g.previewAspectRatio, isNull);
+  });
+
+  test('GifSearchPage.fromJson parses gifs and hasNext', () {
+    final page = GifSearchPage.fromJson({
+      'gifs': [
+        {'id': '1', 'previewUrl': 'a', 'gifUrl': 'b'},
+      ],
+      'hasNext': true,
+    });
+    expect(page.gifs, hasLength(1));
+    expect(page.hasNext, isTrue);
+  });
+
+  test('CommentPreview shows the body normally, and "GIF" only for an empty body with media', () {
+    final withBody = CommentPreview(authorId: 1, authorName: 'Ada', body: 'nice!', mediaId: 9);
+    expect(withBody.previewText, 'nice!', reason: 'a body always wins over the media fallback');
+
+    final gifOnly = CommentPreview(authorId: 1, authorName: 'Ada', body: '', mediaId: 9);
+    expect(gifOnly.previewText, 'GIF');
+
+    final emptyNoMedia = CommentPreview(authorId: 1, authorName: 'Ada', body: '');
+    expect(emptyNoMedia.previewText, '', reason: 'no media means nothing to fall back to');
+  });
+
+  test('CommentPreview.fromJson parses mediaId, absent by default', () {
+    final withMedia = CommentPreview.fromJson({'authorId': 1, 'authorName': 'Ada', 'mediaId': 7});
+    expect(withMedia.mediaId, 7);
+    final without = CommentPreview.fromJson({'authorId': 1, 'authorName': 'Ada'});
+    expect(without.mediaId, isNull);
+  });
+
+  test('Comment.fromJson parses mediaId and preserves it through withGroup', () {
+    final c = Comment.fromJson({
+      'id': 7,
+      'userId': 2,
+      'authorName': 'Bob',
+      'body': '',
+      'createdAt': '2026-01-01T12:00:00Z',
+      'mediaId': 42,
+    });
+    expect(c.mediaId, 42);
+    expect(c.withGroup('g').mediaId, 42);
   });
 
   test('AuthResult parses token and user', () {

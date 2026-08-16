@@ -15,8 +15,8 @@ import (
 // commentPreviewExpr is a SELECT-list fragment returning the 2 most recent comments on
 // post p as a JSON array (oldest-of-the-two first), for inline feed previews.
 const commentPreviewExpr = `, COALESCE((
-		SELECT json_agg(json_build_object('authorId', t.user_id, 'authorName', t.name, 'body', t.body) ORDER BY t.created_at)
-		FROM (SELECT c.user_id, u2.name, c.body, c.created_at FROM comments c JOIN users u2 ON u2.id = c.user_id
+		SELECT json_agg(json_build_object('authorId', t.user_id, 'authorName', t.name, 'body', t.body, 'mediaId', t.media_id) ORDER BY t.created_at)
+		FROM (SELECT c.user_id, u2.name, c.body, c.media_id, c.created_at FROM comments c JOIN users u2 ON u2.id = c.user_id
 		      WHERE c.post_id = p.id
 		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)
 		      ORDER BY c.created_at DESC LIMIT 2) t), '[]'::json)`
@@ -1179,8 +1179,8 @@ func collectPostMedia(ctx context.Context, tx pgx.Tx, postID int64) ([]int64, er
 }
 
 // deleteOrphanMedia removes any candidate media rows no longer referenced by a post cover,
-// post_media, or a profile photo, returning their stored file paths. Run after the post is
-// deleted so its own references are already gone.
+// post_media, a comment, or a profile photo, returning their stored file paths. Run after
+// the referencing row is deleted so its own reference is already gone.
 //
 // A video row owns two files, so the poster comes back alongside the clip. Returning only
 // the clip would leave a file on disk that nothing references and nothing will ever look
@@ -1193,6 +1193,7 @@ func deleteOrphanMedia(ctx context.Context, tx pgx.Tx, candidates []int64) ([]st
 			DELETE FROM media m WHERE m.id = $1
 			  AND NOT EXISTS (SELECT 1 FROM posts p WHERE p.media_id = m.id)
 			  AND NOT EXISTS (SELECT 1 FROM post_media pm WHERE pm.media_id = m.id)
+			  AND NOT EXISTS (SELECT 1 FROM comments c WHERE c.media_id = m.id)
 			  AND NOT EXISTS (SELECT 1 FROM users u WHERE u.profile_media_id = m.id)
 			RETURNING m.path, m.poster_path`, mid).Scan(&path, &poster)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1209,23 +1210,53 @@ func deleteOrphanMedia(ctx context.Context, tx pgx.Tx, candidates []int64) ([]st
 	return paths, nil
 }
 
-// AdminDeleteComment removes any comment by id (operator dashboard moderation).
-func (d *DB) AdminDeleteComment(ctx context.Context, commentID int64) error {
-	ct, err := d.Pool.Exec(ctx, `DELETE FROM comments WHERE id = $1`, commentID)
+// AdminDeleteComment removes any comment by id (operator dashboard moderation), plus its
+// media if that leaves it orphaned, returning the stored file path to remove (empty when
+// the comment carried no attachment or its media is still used elsewhere - by another
+// comment, a post, or a profile photo).
+func (d *DB) AdminDeleteComment(ctx context.Context, commentID int64) ([]string, error) {
+	tx, err := d.Pool.Begin(ctx)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	var mediaID *int64
+	err = tx.QueryRow(ctx, `SELECT media_id FROM comments WHERE id = $1`, commentID).Scan(&mediaID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	ct, err := tx.Exec(ctx, `DELETE FROM comments WHERE id = $1`, commentID)
+	if err != nil {
+		return nil, err
 	}
 	if ct.RowsAffected() == 0 {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
-	return nil
+
+	var candidates []int64
+	if mediaID != nil {
+		candidates = []int64{*mediaID}
+	}
+	paths, err := deleteOrphanMedia(ctx, tx, candidates)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return paths, nil
 }
 
 // RecentComments returns the latest comments across all posts with their author name,
 // for the operator dashboard's activity view.
 func (d *DB) RecentComments(ctx context.Context, limit int) ([]Comment, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT c.id, c.post_id, c.user_id, c.body, c.created_at, u.name
+		SELECT c.id, c.post_id, c.user_id, c.body, c.created_at, c.media_id, u.name
 		FROM comments c JOIN users u ON u.id = c.user_id
 		ORDER BY c.created_at DESC
 		LIMIT $1`, limit)
@@ -1236,7 +1267,7 @@ func (d *DB) RecentComments(ctx context.Context, limit int) ([]Comment, error) {
 	var out []Comment
 	for rows.Next() {
 		var c Comment
-		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.AuthorName); err != nil {
+		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.MediaID, &c.AuthorName); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -1310,28 +1341,64 @@ func (d *DB) UnlikePost(ctx context.Context, postID, userID int64) error {
 // ---- comments ----
 
 // AddComment inserts a comment and returns it. parentID, when non-nil, links it to the
-// comment it replies to (validated by the caller to belong to the same post).
-func (d *DB) AddComment(ctx context.Context, postID, userID int64, body string, parentID *int64) (Comment, error) {
+// comment it replies to (validated by the caller to belong to the same post). mediaID, when
+// non-nil, attaches a gif the caller must own - the same IDOR protection CreatePost applies
+// to its attachments, since without it a member could point a comment at someone else's
+// not-yet-posted upload and have it exposed to the whole group.
+func (d *DB) AddComment(ctx context.Context, postID, userID int64, body string, parentID, mediaID *int64) (Comment, error) {
 	var c Comment
+	tx, err := d.Pool.Begin(ctx)
+	if err != nil {
+		return c, err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := commentMediaOwned(ctx, tx, mediaID, userID); err != nil {
+		return c, err
+	}
+
 	// Return the author's name + photo alongside the new row (via CTE) so the response
 	// matches ListComments — otherwise the client renders the just-posted comment with an
 	// empty name and a placeholder avatar.
-	err := d.Pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		WITH ins AS (
-			INSERT INTO comments (post_id, user_id, body, parent_comment_id) VALUES ($1, $2, $3, $4)
-			RETURNING id, post_id, user_id, body, created_at, parent_comment_id
+			INSERT INTO comments (post_id, user_id, body, parent_comment_id, media_id) VALUES ($1, $2, $3, $4, $5)
+			RETURNING id, post_id, user_id, body, created_at, parent_comment_id, media_id
 		)
-		SELECT ins.id, ins.post_id, ins.user_id, ins.body, ins.created_at, ins.parent_comment_id, u.name, u.profile_media_id
+		SELECT ins.id, ins.post_id, ins.user_id, ins.body, ins.created_at, ins.parent_comment_id, ins.media_id, u.name, u.profile_media_id
 		FROM ins JOIN users u ON u.id = ins.user_id`,
-		postID, userID, body, parentID,
-	).Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.ParentCommentID, &c.AuthorName, &c.AuthorPhotoID)
-	return c, err
+		postID, userID, body, parentID, mediaID,
+	).Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.ParentCommentID, &c.MediaID, &c.AuthorName, &c.AuthorPhotoID)
+	if err != nil {
+		return c, err
+	}
+	return c, tx.Commit(ctx)
+}
+
+// commentMediaOwned reports ErrNotOwned unless mediaID belongs to userID; a nil mediaID
+// (no attachment) always passes. Mirrors ownedMedia's ownership check for post attachments.
+func commentMediaOwned(ctx context.Context, tx pgx.Tx, mediaID *int64, userID int64) error {
+	if mediaID == nil {
+		return nil
+	}
+	var owner *int64
+	err := tx.QueryRow(ctx, `SELECT owner_id FROM media WHERE id = $1`, *mediaID).Scan(&owner)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotOwned
+	}
+	if err != nil {
+		return err
+	}
+	if owner == nil || *owner != userID {
+		return ErrNotOwned
+	}
+	return nil
 }
 
 // ListComments returns comments on a post in chronological order with author info.
 func (d *DB) ListComments(ctx context.Context, postID, viewerID int64) ([]Comment, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT c.id, c.post_id, c.user_id, c.body, c.created_at, c.parent_comment_id, u.name, u.profile_media_id
+		SELECT c.id, c.post_id, c.user_id, c.body, c.created_at, c.parent_comment_id, c.media_id, u.name, u.profile_media_id
 		FROM comments c JOIN users u ON u.id = c.user_id
 		WHERE c.post_id = $1
 		  AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $2)
@@ -1343,7 +1410,7 @@ func (d *DB) ListComments(ctx context.Context, postID, viewerID int64) ([]Commen
 	var comments []Comment
 	for rows.Next() {
 		var c Comment
-		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.ParentCommentID, &c.AuthorName, &c.AuthorPhotoID); err != nil {
+		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.ParentCommentID, &c.MediaID, &c.AuthorName, &c.AuthorPhotoID); err != nil {
 			return nil, err
 		}
 		comments = append(comments, c)

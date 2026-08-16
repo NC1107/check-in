@@ -46,6 +46,15 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		// option against a self-hosted server that has not been updated yet; older clients
 		// ignore the key.
 		"mediaTypes": []string{"image", "gif", "video"},
+		// Whether the Klipy gif-search proxy is usable, i.e. a key is configured. A client
+		// hides the gif picker entry point rather than opening a picker that 503s on every
+		// search.
+		"gifSearch": s.cfg.KlipyKey != "",
+		// Always true from this server version on. The field's absence, not its value, is
+		// what an older server speaks: it predates comment media and 400s a comment create
+		// carrying mediaId (DisallowUnknownFields), so the client gates sending mediaId on
+		// this key being present at all, not on it being true.
+		"commentMedia": true,
 		// recap is this server's capability signal for the whole recap feature: lat/lng in
 		// createPost, and the recapCadence/recapWeekday/recapHour/recapOffset fields below
 		// and on PATCH /api/admin/server. This server rejects unknown JSON fields

@@ -23,6 +23,7 @@ import '../../state/taggable_people.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/feed_autoplay.dart';
+import '../../widgets/gif_picker.dart';
 import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
 import '../profile/profile_screen.dart';
@@ -121,6 +122,20 @@ bool mediaTypesSupportsVideo(List<String> mediaTypes) => mediaTypes.contains('vi
 bool clipComposeAllowed(Iterable<ServerAccount> selectedTargets) {
   final list = selectedTargets.toList();
   return list.isNotEmpty && list.every((g) => mediaTypesSupportsVideo(g.mediaTypes));
+}
+
+/// Whether compose may offer the gif picker: [active] (the group whose proxy answers the
+/// search) has to be signed in and able to search gifs, and every cross-post target has to
+/// be able to actually store one. Search only ever goes through one group's server - Klipy's
+/// results don't depend on whose key asked - but the attachment is uploaded to every target,
+/// so mediaTypes support is checked against all of them, the same way clipComposeAllowed
+/// checks video support.
+bool gifComposeAllowed(ServerAccount? active, Iterable<ServerAccount> selectedTargets) {
+  final list = selectedTargets.toList();
+  return active != null &&
+      active.gifSearch &&
+      list.isNotEmpty &&
+      list.every((g) => g.mediaTypes.contains('gif'));
 }
 
 /// The native trim/location seam, overridable in tests with a fake so the clip flow can be
@@ -425,6 +440,8 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
   // than a bare play badge on a black box before it is posted.
   Uint8List? _clipPosterPreview;
   bool _processingClip = false;
+  // Downloading + staging a picked gif before it joins _images as an ordinary attachment.
+  bool _attachingGif = false;
   // The humans the author tags as appearing in the post. Each carries the member id it has
   // in every selected group, so a cross-post can tag the same person on every server.
   final List<TaggablePerson> _tagged = [];
@@ -530,6 +547,41 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
       }
     });
     await _resolveLocation();
+  }
+
+  /// Opens the gif picker against [active]'s server and, on a pick, downloads the gif and
+  /// stages it as an ordinary compose attachment - so submit's existing per-group upload
+  /// loop (_uploadCompressed) re-hosts it exactly like a picked photo, no separate path.
+  ///
+  /// Staging means writing the downloaded bytes to a real temp file and holding it as an
+  /// XFile: uploadKindFor/needsReencodeBeforeUpload dispatch on the file's extension, and
+  /// _uploadCompressed reads the file from disk for the raw (non-reencoded) path a gif
+  /// takes - an in-memory-only XFile has no disk-backed path for that read to open.
+  Future<void> _attachGif(ServerAccount active) async {
+    final api = ref.read(apiForGroupProvider(active.id));
+    final picked =
+        await showGifPicker(context, search: (q, page) => api.gifSearch(query: q, page: page));
+    if (picked == null || !mounted) return;
+    setState(() => _attachingGif = true);
+    try {
+      final bytes = await ApiClient.downloadExternalGif(picked.gifUrl);
+      final dir = await Directory.systemTemp.createTemp('checkin_gif_');
+      final file = File('${dir.path}/${picked.id}.gif');
+      await file.writeAsBytes(bytes);
+      if (!mounted) return;
+      setState(() {
+        // A check-in is one clip or a set of photos, never both; a gif takes the photo slot.
+        _clip = null;
+        _clipEncodedPath = null;
+        _clipPoster = null;
+        _clipPosterPreview = null;
+        if (_images.length < _maxImages) _images.add(XFile(file.path));
+        _attachingGif = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _attachingGif = false);
+      _toast("Couldn't add that gif. Try again.");
+    }
   }
 
   /// The Camera button's two-way chooser: a photo or a clip, since image_picker has no single
@@ -1100,6 +1152,11 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
     final me = ref.watch(currentAccountProvider)?.user;
     final hasContent = (_bodyCtrl.text.trim().isNotEmpty || _images.isNotEmpty || _clip != null) &&
         _targets.isNotEmpty;
+    final selectedTargets = [
+      for (final g in session.signedIn)
+        if (_targets.contains(g.id)) g
+    ];
+    final gifAllowed = gifComposeAllowed(session.current, selectedTargets);
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     final retrying = _posted.isNotEmpty;
     // Give the sheet a comfortable working height (roughly half the screen) in every state so
@@ -1289,6 +1346,27 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
                       ),
                     ),
                   ),
+                  // Right-aligned inside the input area, matching the comment field's gif
+                  // icon. Hidden entirely rather than disabled: a group whose server can't
+                  // search or store a gif has no working action to grey out.
+                  if (gifAllowed)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 2, top: 2),
+                      child: IconButton(
+                        onPressed: _attachingGif ? null : () => _attachGif(session.current!),
+                        tooltip: 'Add a gif',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                        icon: _attachingGif
+                            ? SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: context.accent),
+                              )
+                            : Icon(Icons.gif_box_outlined, color: context.accent, size: 24),
+                      ),
+                    ),
                 ],
               ),
             ),

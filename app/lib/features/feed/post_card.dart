@@ -718,7 +718,7 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                               ),
                             ),
                             TextSpan(
-                                text: c.body,
+                                text: c.previewText,
                                 style: const TextStyle(
                                     color: _fgSecondary, fontSize: 13, height: 1.3)),
                           ]),

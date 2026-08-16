@@ -280,6 +280,9 @@ type CommentPreview struct {
 	AuthorID   int64  `json:"authorId"`
 	AuthorName string `json:"authorName"`
 	Body       string `json:"body"`
+	// MediaID is the comment's gif attachment, if any. A client shows "GIF" in place of an
+	// empty body when this is set - a gif-only comment has nothing else to preview.
+	MediaID *int64 `json:"mediaId,omitempty"`
 }
 
 // Comment is a reply on a post. ParentCommentID, when set, points at the comment this one
@@ -294,6 +297,19 @@ type Comment struct {
 	ParentCommentID *int64    `json:"parentCommentId,omitempty"`
 	AuthorName      string    `json:"authorName,omitempty"`
 	AuthorPhotoID   *int64    `json:"authorPhotoId,omitempty"`
+	// MediaID is a gif attached to the comment (re-hosted, never a hotlink). A comment may
+	// carry one and no body at all - see the empty-body allowance in handleAddComment.
+	MediaID *int64 `json:"mediaId,omitempty"`
+}
+
+// PreviewBody is what a plain-text summary of this comment should show: the body, or "GIF"
+// for a gif-only comment (empty body, media attached) - the same fallback the app's own
+// CommentPreview.previewText applies, used here by the debug dashboard's activity table.
+func (c Comment) PreviewBody() string {
+	if c.Body == "" && c.MediaID != nil {
+		return "GIF"
+	}
+	return c.Body
 }
 
 // Birthday is a lightweight projection used by the upcoming-birthdays endpoint that

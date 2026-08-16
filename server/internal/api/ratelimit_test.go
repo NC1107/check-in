@@ -82,3 +82,18 @@ func TestContentBurstsClearOneWholeCheckIn(t *testing.T) {
 		t.Error("every content bucket must allow at least one action")
 	}
 }
+
+// The gif proxy is search-as-you-type: the client debounces, but a burst still has to clear
+// a few keystrokes fired before the debounce catches up.
+func TestGifRateLimitMatchesSpec(t *testing.T) {
+	limits := newContentLimits()
+	if limits.gifs == nil {
+		t.Fatal("content limits must include a gifs bucket")
+	}
+	if limits.gifs.burst != 15 {
+		t.Errorf("gifs burst = %v, want 15", limits.gifs.burst)
+	}
+	if limits.gifs.rate*60 != 30 {
+		t.Errorf("gifs rate = %v/min, want 30/min", limits.gifs.rate*60)
+	}
+}
