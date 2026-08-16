@@ -1,9 +1,9 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
@@ -12,6 +12,9 @@ import 'package:checkin/state/app_state.dart';
 import 'package:checkin/widgets/feed_autoplay.dart';
 import 'package:checkin/widgets/feed_clip.dart';
 import 'package:checkin/widgets/media_frame.dart';
+import 'package:checkin/widgets/post_image_carousel.dart';
+
+import 'support/fake_video_platform.dart';
 
 /// Feed autoplay. The rule the whole design hangs on is that exactly one clip in the feed
 /// holds a player: Android's decoder pool is small and this feed has a history of paying
@@ -169,13 +172,14 @@ void main() {
       hasPoster: true,
     );
 
-    late _FakePlayerPlatform platform;
+    late FakeVideoPlatform platform;
     late List<VideoPlayerController> built;
 
     setUp(() {
-      platform = _FakePlayerPlatform();
+      platform = FakeVideoPlatform();
       VideoPlayerPlatform.instance = platform;
       built = [];
+      SharedPreferences.setMockInitialValues({});
     });
 
     // Two clips in a scrolling list, sized so the first fills the 600pt test viewport and
@@ -255,15 +259,17 @@ void main() {
       await tester.pumpAndSettle();
     });
 
-    testWidgets('the feed plays muted and looping, and says so', (tester) async {
+    testWidgets('the feed plays with sound and loops, and says so', (tester) async {
       await tester.pumpWidget(host());
       await settle(tester);
 
       final controller = built.single;
       expect(controller.value.isPlaying, isTrue);
-      expect(controller.value.volume, 0); // Instagram behaviour: sound lives in the viewer
+      // Reels, not the muted Instagram feed: the silent switch is what silences this, and
+      // that is the audio session's job, not a hardcoded zero here.
+      expect(controller.value.volume, 1);
       expect(controller.value.isLooping, isTrue);
-      expect(find.byIcon(Icons.volume_off_rounded), findsOneWidget);
+      expect(find.byIcon(Icons.volume_up_rounded), findsOneWidget);
       // The play badge gives way to the picture rather than sitting on top of it.
       expect(
         find.descendant(
@@ -271,6 +277,137 @@ void main() {
           matching: find.byIcon(Icons.play_arrow_rounded),
         ),
         findsNothing,
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('a device that muted clips before starts this one muted', (tester) async {
+      SharedPreferences.setMockInitialValues({'feed_autoplay_muted': true});
+
+      await tester.pumpWidget(host());
+      await settle(tester);
+
+      expect(built.single.value.volume, 0);
+      expect(find.byIcon(Icons.volume_off_rounded), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('the badge mutes the clip and remembers it for the next one', (tester) async {
+      await tester.pumpWidget(host());
+      await settle(tester);
+      expect(built.single.value.volume, 1);
+
+      await tester.tap(find.byIcon(Icons.volume_up_rounded));
+      await settle(tester);
+
+      expect(built.single.value.volume, 0);
+      expect(find.byIcon(Icons.volume_off_rounded), findsOneWidget);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool('feed_autoplay_muted'), isTrue);
+
+      // The next clip along starts from the same choice rather than blaring again.
+      await tester.drag(find.byType(ListView), const Offset(0, -600));
+      await settle(tester);
+      expect(built.last.value.volume, 0);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    // The badge lives inside the carousel's tap target, which is what opens the viewer. A
+    // mute that also opened full screen would be worse than no mute button at all, so the
+    // two are asserted together, assembled the way the feed card assembles them.
+    testWidgets('the mute badge takes its own tap, not the card\'s', (tester) async {
+      const wide = PostMedia(
+        id: 10,
+        mime: 'video/mp4',
+        width: 1920,
+        height: 1080,
+        durationMs: 5000,
+        hasPoster: true,
+      );
+      final opened = <int>[];
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          multiSessionProvider.overrideWith(
+            () => MultiSessionController.seeded(
+              const MultiSession(groups: [account], restored: true),
+            ),
+          ),
+          feedVideoFactoryProvider.overrideWithValue((url, headers) {
+            final controller = VideoPlayerController.networkUrl(url, httpHeaders: headers);
+            built.add(controller);
+            return controller;
+          }),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: FeedAutoplayScope(
+              enabled: true,
+              child: PostImageCarousel(
+                media: const [wide],
+                groupId: 'alpha.invalid',
+                onImageTap: opened.add,
+              ),
+            ),
+          ),
+        ),
+      ));
+      await settle(tester);
+      expect(built.single.value.volume, 1);
+
+      await tester.tap(find.byIcon(Icons.volume_up_rounded));
+      await settle(tester);
+
+      expect(built.single.value.volume, 0);
+      expect(opened, isEmpty);
+
+      // ...and the rest of the clip still opens it.
+      await tester.tapAt(tester.getCenter(find.byType(FeedClip)));
+      await settle(tester);
+      expect(opened, [10]);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('the playing clip offers where it has got to, and only it', (tester) async {
+      // What a controller polls itself up to, so the tile has a real position to offer
+      // rather than the zero a freshly-created player reports.
+      platform.position = const Duration(seconds: 2);
+      await tester.pumpWidget(host());
+      await settle(tester);
+
+      final context = tester.element(find.byType(FeedClip).first);
+      expect(
+        FeedAutoplayScope.continuation(context, mediaId: 8, groupId: 'alpha.invalid'),
+        {8: const Duration(seconds: 2)},
+      );
+      // The clip below is a poster, and the same clip under another group is another tile:
+      // neither has a position to hand over.
+      expect(
+        FeedAutoplayScope.continuation(context, mediaId: 9, groupId: 'alpha.invalid'),
+        isEmpty,
+      );
+      expect(
+        FeedAutoplayScope.continuation(context, mediaId: 8, groupId: 'beta.invalid'),
+        isEmpty,
+      );
+
+      // Scrolling on hands the player over, and the offer with it - a stale position would
+      // open the viewer partway into a clip nobody was watching.
+      await tester.drag(find.byType(ListView), const Offset(0, -600));
+      await settle(tester);
+      final after = tester.element(find.byType(FeedClip).last);
+      expect(FeedAutoplayScope.continuation(after, mediaId: 8, groupId: 'alpha.invalid'), isEmpty);
+      expect(
+        FeedAutoplayScope.continuation(after, mediaId: 9, groupId: 'alpha.invalid'),
+        {9: const Duration(seconds: 2)},
       );
 
       await tester.pumpWidget(const SizedBox());
@@ -314,6 +451,12 @@ void main() {
       expect(find.byType(VideoPlayer), findsNothing);
       await drain(tester);
       expect(platform.disposed.length, 1);
+
+      // Closing the viewer gives the feed its player back - the position is deliberately
+      // not carried the other way: a feed clip looping from the top is normal.
+      navigator.pop();
+      await settle(tester);
+      expect(find.byType(VideoPlayer), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
@@ -394,79 +537,4 @@ void main() {
       expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
     });
   });
-}
-
-/// Stands in for the platform video player. A widget test has none, so without this every
-/// clip would fall into the poster fallback and the interesting half of autoplay could not
-/// be asserted at all.
-class _FakePlayerPlatform extends VideoPlayerPlatform {
-  final List<int> disposed = [];
-
-  /// URL fragments this platform refuses to open, for the failure path.
-  final Set<String> refuse = {};
-
-  final Map<int, StreamController<VideoEvent>> _events = {};
-  int _nextId = 0;
-
-  @override
-  Future<void> init() async {}
-
-  @override
-  Future<int?> createWithOptions(VideoCreationOptions options) async {
-    final uri = options.dataSource.uri ?? '';
-    if (refuse.any(uri.contains)) {
-      throw PlatformException(code: 'VideoError', message: 'no player for $uri');
-    }
-    final id = ++_nextId;
-    final events = StreamController<VideoEvent>.broadcast();
-    // Announce readiness only once someone is listening: a broadcast stream drops whatever
-    // was sent before that, and the controller subscribes after create returns.
-    events.onListen = () => scheduleMicrotask(() {
-          if (events.isClosed) return;
-          events.add(VideoEvent(
-            eventType: VideoEventType.initialized,
-            duration: const Duration(seconds: 6),
-            size: const Size(720, 1280),
-          ));
-        });
-    _events[id] = events;
-    return id;
-  }
-
-  @override
-  Future<void> dispose(int playerId) async {
-    disposed.add(playerId);
-    await _events.remove(playerId)?.close();
-  }
-
-  @override
-  Stream<VideoEvent> videoEventsFor(int playerId) =>
-      _events[playerId]?.stream ?? const Stream<VideoEvent>.empty();
-
-  @override
-  Future<void> setLooping(int playerId, bool looping) async {}
-
-  @override
-  Future<void> play(int playerId) async {}
-
-  @override
-  Future<void> pause(int playerId) async {}
-
-  @override
-  Future<void> setVolume(int playerId, double volume) async {}
-
-  @override
-  Future<void> setPlaybackSpeed(int playerId, double speed) async {}
-
-  @override
-  Future<void> seekTo(int playerId, Duration position) async {}
-
-  @override
-  Future<Duration> getPosition(int playerId) async => Duration.zero;
-
-  @override
-  Future<void> setMixWithOthers(bool mixWithOthers) async {}
-
-  @override
-  Widget buildViewWithOptions(VideoViewOptions options) => const SizedBox.expand();
 }

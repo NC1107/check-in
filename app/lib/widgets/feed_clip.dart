@@ -1,15 +1,18 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:video_player/video_player.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
 import '../api/models.dart';
+import '../media/video_native.dart';
 import '../state/app_state.dart';
 import 'clip_poster.dart';
 import 'feed_autoplay.dart';
 
 /// One clip in the feed: its poster until [FeedAutoplayController] hands this tile the
-/// single autoplay slot, then the clip itself - muted, looping - drawn over that same
+/// single autoplay slot, then the clip itself - looping, with sound - drawn over that same
 /// poster.
 ///
 /// The tile only ever asks; the manager decides, which is what keeps the whole feed to one
@@ -19,9 +22,12 @@ import 'feed_autoplay.dart';
 /// poster exactly as it was. Autoplay is decoration - it must never turn a check-in into an
 /// error card.
 ///
-/// Sound belongs to the full-screen viewer, which the existing tap already opens. A
-/// data-saver setting ("autoplay on wifi only") would hang off the manager rather than here;
-/// there is no such setting yet and clips are capped at ten seconds.
+/// Sound follows the phone: the ambient audio session means a clip is audible with the
+/// ringer on and silent with the switch flipped, no ringer detection in Dart. On top of that
+/// the speaker badge is a real toggle backed by [clipsMutedProvider], so a mute here is the
+/// same mute the full-screen viewer and every later clip start from. A data-saver setting
+/// ("autoplay on wifi only") would hang off the manager rather than here; there is no such
+/// setting yet and clips are capped at ten seconds.
 class FeedClip extends ConsumerStatefulWidget {
   const FeedClip({
     super.key,
@@ -116,7 +122,19 @@ class _FeedClipState extends ConsumerState<FeedClip> with WidgetsBindingObserver
     controller.initialize().then((_) {
       if (!mounted || _controller != controller) return;
       controller.setLooping(true);
-      controller.setVolume(0); // the feed is silent; the viewer is where a clip has sound
+      controller.setVolume(ref.read(clipsMutedProvider) ? 0 : 1);
+      // Make that volume follow the Ring/Silent switch (ambient category) rather than play
+      // through silent mode, which is video_player's forced default. Re-asserted here
+      // because that default is set on the plugin's first init and never downgrades.
+      unawaited(const VideoNative().respectSilentSwitch());
+      // Offer where this clip has got to, so tapping the card opens the viewer there rather
+      // than starting the same clip over.
+      widget.autoplay.publish(
+        _slot,
+        mediaId: widget.media.id,
+        groupId: widget.groupId,
+        position: () => controller.value.position,
+      );
       if (widget.autoplay.isActive(_slot)) controller.play();
       setState(() => _firstFrame = true);
     }).catchError((_) {
@@ -128,6 +146,7 @@ class _FeedClipState extends ConsumerState<FeedClip> with WidgetsBindingObserver
     final controller = _controller;
     _controller = null;
     _firstFrame = false;
+    widget.autoplay.unpublish(_slot);
     controller?.pause();
     controller?.dispose();
   }
@@ -136,6 +155,10 @@ class _FeedClipState extends ConsumerState<FeedClip> with WidgetsBindingObserver
   Widget build(BuildContext context) {
     final controller = _controller;
     final playing = _firstFrame && controller != null;
+    final muted = ref.watch(clipsMutedProvider);
+    // The choice is shared, so it can change while this clip is the one playing - muted in
+    // the viewer, or by the stored value arriving after playback started.
+    ref.listen(clipsMutedProvider, (_, next) => _controller?.setVolume(next ? 0 : 1));
     return VisibilityDetector(
       key: _slot,
       onVisibilityChanged: (info) {
@@ -152,9 +175,18 @@ class _FeedClipState extends ConsumerState<FeedClip> with WidgetsBindingObserver
             showOverlays: !playing,
           ),
           if (playing) _video(controller),
-          // Say why there is no sound. Not a button: the tap belongs to the card, which
-          // opens the clip full-screen where sound is a real choice.
-          if (playing) const Positioned(right: 8, bottom: 8, child: _MutedBadge()),
+          // Sound is on by default, so the badge has to be able to turn it off where the
+          // user meets it. Its own tap beats the card's, which still opens the clip
+          // full-screen.
+          if (playing)
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: _MuteButton(
+                muted: muted,
+                onTap: () => ref.read(clipsMutedProvider.notifier).toggle(),
+              ),
+            ),
         ],
       ),
     );
@@ -179,22 +211,38 @@ class _FeedClipState extends ConsumerState<FeedClip> with WidgetsBindingObserver
   }
 }
 
-class _MutedBadge extends StatelessWidget {
-  const _MutedBadge();
+/// The speaker badge over a playing clip. The circle stays the small corner mark it always
+/// was; the padding around it is what makes the target big enough to hit with a thumb
+/// without the badge itself growing or moving.
+class _MuteButton extends StatelessWidget {
+  const _MuteButton({required this.muted, required this.onTap});
+
+  final bool muted;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(5),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.5),
-        shape: BoxShape.circle,
-      ),
-      child: const Icon(
-        Icons.volume_off_rounded,
-        color: Colors.white,
-        size: 15,
-        semanticLabel: 'Muted',
+    return Semantics(
+      button: true,
+      label: muted ? 'Unmute' : 'Mute',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Container(
+            padding: const EdgeInsets.all(5),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.5),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+              color: Colors.white,
+              size: 15,
+            ),
+          ),
+        ),
       ),
     );
   }

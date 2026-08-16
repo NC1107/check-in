@@ -696,6 +696,40 @@ Future<bool> shouldPromptForAccent({required bool hasGroups}) async {
   return prefs.getString(_kAccentId) == null;
 }
 
+const _kClipsMuted = 'feed_autoplay_muted';
+
+/// Whether clips play muted, remembered per-device.
+///
+/// Clips autoplay with sound the way Reels does, and a silenced phone stays silent without
+/// the app deciding anything: the ambient audio session hands that to the Ring/Silent switch
+/// (see `VideoNative.respectSilentSwitch`). This is the choice that sits on top of the
+/// switch - one sticky mute shared by the feed tiles and the full-screen viewer, so muting a
+/// clip anywhere keeps every later clip muted until it is turned back on.
+class ClipMuteController extends Notifier<bool> {
+  @override
+  bool build() {
+    // Preferences are async, so the stored choice lands a frame or two in. No clip can
+    // autoplay that early - the feed has to load first - so nothing is heard before it.
+    _load();
+    return false;
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    state = prefs.getBool(_kClipsMuted) ?? false;
+  }
+
+  Future<void> toggle() => setMuted(!state);
+
+  Future<void> setMuted(bool muted) async {
+    state = muted;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kClipsMuted, muted);
+  }
+}
+
+final clipsMutedProvider = NotifierProvider<ClipMuteController, bool>(ClipMuteController.new);
+
 /// The location filter applied to the home feed - empty means all places. Only applies
 /// to a single group's feed (the filter is hidden in the All view).
 class FeedLocationFilter extends Notifier<Set<String>> {
