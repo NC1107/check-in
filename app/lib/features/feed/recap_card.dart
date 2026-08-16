@@ -100,12 +100,10 @@ class RecapDeckState extends State<RecapDeck> {
       mainAxisSize: MainAxisSize.min,
       children: [
         AspectRatio(
-          // A normal media-frame aspect (matching post_image_carousel's own default), not
-          // the tall hero the cover used to render at - the deck reads as a normal post's
-          // footprint now, distinguished by its accent outline, not its size. Every page,
-          // including a chunked Wall page, renders inside this exact same footprint - see
-          // _buildPages and _WallPanel for how a chunk is kept from ever exceeding it.
-          aspectRatio: 4 / 3,
+          // Every page - the cover, an awards page, a chunked Wall page - shares this one
+          // footprint; see _deckAspectRatio's own doc comment for why it's 4:5 rather than
+          // round 3's 4:3.
+          aspectRatio: _deckAspectRatio,
           child: PageView.builder(
             controller: _controller,
             itemCount: pageCount,
@@ -126,11 +124,12 @@ class RecapDeckState extends State<RecapDeck> {
 
   /// Flattens the recap's panels into the deck's actual pages: the cover, then one page per
   /// panel - except the collage ("The Wall"), which chunks its cards across as many pages as
-  /// it takes to stay inside the deck's fixed 4:3 footprint instead of overflowing a single
-  /// page (see _WallPanel's doc comment for why a page can only ever hold one chunk's worth
-  /// of cards). This is what fixes the round-3 regression: a 4-card (or 20-card) collage no
-  /// longer clips its lower cards behind an unreachable, unscrollable grid - it gets its own
-  /// extra deck pages instead, reachable the same way every other page already is: swiping.
+  /// it takes to stay inside the deck's fixed footprint instead of overflowing a single page
+  /// (see _WallPanel's and _deckAspectRatio's doc comments for how a chunk is kept from ever
+  /// exceeding it). This is what fixes the round-3 regression: a 4-card (or 20-card) collage
+  /// no longer clips its lower cards behind an unreachable, unscrollable grid - it gets its
+  /// own extra deck pages instead, reachable the same way every other page already is:
+  /// swiping.
   List<Widget> _buildPages() {
     final pages = <Widget>[
       _RecapCoverPage(recap: widget.recap, groupId: widget.groupId, postId: widget.postId),
@@ -154,12 +153,28 @@ class RecapDeckState extends State<RecapDeck> {
   }
 }
 
-/// How many Wall cards share one deck page. A single row (see _WallPanel) rather than a
-/// grid, so this is really "how many columns", not a height-derived limit - four reads as a
-/// proper collage row without the tiles going so narrow they stop reading as photos, and it
-/// matches what a monthly recap's 20-card cap works out to: 5 Wall pages, 6 dots total with
-/// the cover - the founder's own back-of-envelope number for what "up to 6 dots" should be.
+/// How many Wall cards share one deck page - one 2x2 grid's worth (see _WallPanel), which is
+/// also what a monthly recap's 20-card cap works out to: 5 Wall pages, 6 dots total with the
+/// cover - the founder's own back-of-envelope number for what "up to 6 dots" should be.
 const _wallCardsPerPage = 4;
+
+/// The deck's page footprint: width:height. Portrait, not round 3's 4:3 - a 2x2 grid of
+/// portrait (0.85-aspect) tiles needs more height than a 4:3 page has room for, which is what
+/// let the second row go unreachable in the first place. The arithmetic, page width W and
+/// this ratio R (so page height H = W / R):
+///   - content width after the panel's 10px padding: Wc = W - 20
+///   - each cell (2 columns, 8px crossAxisSpacing): Cw = (Wc - 8) / 2
+///   - each cell's height at childAspectRatio 0.85:    Ch = Cw / 0.85
+///   - two rows plus 8px mainAxisSpacing need:          2*Ch + 8
+///   - available grid height, after the same 10px padding and the panel title's own ~36px
+///     block (present on a chunk's first page, the tightest case): H - 20 - 36
+/// Solving 2*Ch + 8 <= H - 20 - 36 for R leaves R <= ~0.79 at a typical card width - so 4:5
+/// (0.8) is already at the edge of the model, but 4:5 is also "a normal post size" in this
+/// app (an ordinary portrait photo post renders at the same ratio) rather than a bespoke
+/// number invented for this fix, and the widget tests below (the tile-aspect-band test in
+/// particular) are what actually confirm it holds with real text metrics, not just this
+/// estimate.
+const _deckAspectRatio = 4 / 5;
 
 /// Splits [cards] into consecutive groups of at most [size], preserving order.
 List<List<RecapCard>> _chunkCards(List<RecapCard> cards, int size) {
@@ -536,14 +551,15 @@ class _OverflowBubble extends StatelessWidget {
 }
 
 /// "The Wall": the ranked collage, fridge-door style - one deck page per chunk of up to
-/// [_wallCardsPerPage] cards (see RecapDeckState._buildPages), laid out as a single
-/// horizontal row rather than a multi-row grid. That's deliberate, not cosmetic: a grid's
-/// row count grows with the chunk size, so its total height can exceed the page's fixed 4:3
-/// footprint - exactly the round-3 regression (a 2x2 grid's second row landing almost
-/// entirely below the visible page, unreachable, no scroll). A single row's height is
-/// always exactly the page's own available height, via Expanded/stretch, however many tiles
-/// are in it - so it can never clip, by construction, not by having tuned the numbers to
-/// happen to fit.
+/// [_wallCardsPerPage] cards (see RecapDeckState._buildPages), each chunk laid out as the
+/// same 2x2 grid of portrait tiles that always shipped here - exactly what the founder's own
+/// screenshot showed, and he never complained about how the tiles looked, only that the
+/// second row was unreachable. That's a page-height problem, not a tile-layout problem:
+/// squashing the tiles into a single wide-and-short row instead (an earlier version of this
+/// fix did exactly that) traded an unreachable row for an unrecognisable ~1:3 sliver of
+/// every photo. The real fix is _deckAspectRatio - tall enough that a 2x2 grid of these
+/// portrait tiles, the panel title, and its padding all fit inside one page with room to
+/// spare (see _deckAspectRatio's own doc comment for the arithmetic).
 class _WallPanel extends StatelessWidget {
   const _WallPanel({required this.title, required this.cards, required this.groupId});
 
@@ -570,14 +586,16 @@ class _WallPanel extends StatelessWidget {
                         color: _fgPrimary, fontWeight: FontWeight.w800, fontSize: 18)),
               ),
             Expanded(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  for (var i = 0; i < cards.length; i++) ...[
-                    if (i > 0) const SizedBox(width: 8),
-                    Expanded(child: _WallTile(card: cards[i], groupId: groupId)),
-                  ],
-                ],
+              child: GridView.builder(
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  mainAxisSpacing: 8,
+                  crossAxisSpacing: 8,
+                  childAspectRatio: 0.85,
+                ),
+                itemCount: cards.length,
+                itemBuilder: (context, i) => _WallTile(card: cards[i], groupId: groupId),
               ),
             ),
           ],

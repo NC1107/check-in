@@ -495,8 +495,8 @@ void main() {
     expect(find.text('Ada'), findsNWidgets(2));
   });
 
-  /// The founder-reported round-3 regression: the Wall's grid overflowed a single 4:3 deck
-  /// page, so with 4 cards only the top row was ever visible - the bottom row was clipped,
+  /// The founder-reported round-3 regression: the Wall's grid overflowed a single deck page,
+  /// so with 4 cards only the top row was ever visible - the bottom row was clipped,
   /// unreachable, no scroll. The fix chunks the collage across its own deck pages (see
   /// RecapDeckState._buildPages) instead of overflowing one; these run it at every card
   /// count from 1 up to the monthly cap (20) and confirm every single card is reachable by
@@ -543,10 +543,48 @@ void main() {
     });
   }
 
+  /// Pins tile geometry, not just the absence of overflow - the gap that let the round-3
+  /// clipping regression ship in the first place, and the same gap an earlier version of
+  /// this very fix fell into: a single-row layout technically never clips, but it slices 4
+  /// tiles sharing one page's full height into a roughly 1:3 sliver, unrecognisable as a
+  /// photo. The Wall's tiles are a fixed-aspect 2x2 grid regardless of how many cards are on
+  /// the page (1 to [_wallCardsPerPage]), so every tile at every count should land in the
+  /// same sane portrait/landscape band.
+  for (final n in [1, 2, 3, 4]) {
+    testWidgets('the Wall tile aspect stays in a sane band at $n card(s) on a page',
+        (tester) async {
+      final cards = [for (var i = 1; i <= n; i++) quoteCard(authorId: i, authorName: 'Member $i')];
+      final recap = RecapPayload(
+        periodLabel: 'August 2026',
+        cadence: 'monthly',
+        groupName: 'Ridgeway Family',
+        groupColor: 'coral',
+        stats: stats(),
+        panels: [RecapCollagePanel(title: 'The Wall', cards: cards)],
+      );
+      await pumpDeck(tester, recap);
+      await swipeToPage(tester, find.byType(PageView), 1);
+      expect(tester.takeException(), isNull);
+
+      // Every Wall tile's outer ClipRRect - nothing else in the deck uses one - so this
+      // measures the tile's actual on-screen shape rather than trusting the GridView
+      // delegate's childAspectRatio parameter at face value.
+      final tiles = find.byType(ClipRRect);
+      expect(tiles, findsNWidgets(n));
+      for (var i = 0; i < n; i++) {
+        final size = tester.getSize(tiles.at(i));
+        final aspect = size.width / size.height;
+        expect(aspect, inInclusiveRange(0.6, 1.4),
+            reason: 'tile $i of $n rendered at $size (aspect ${aspect.toStringAsFixed(2)}) - '
+                'outside the band a recognisable photo needs');
+      }
+    });
+  }
+
   testWidgets('the Wall panel title is shown once, on the chunk\'s first page only',
       (tester) async {
     // 5 cards -> 2 wall pages at 4/page. The title must not repeat on the second page - it
-    // would eat into the tight vertical space a 4:3 page has for the tiles themselves.
+    // would eat into the tight vertical space the page has for the tiles themselves.
     final cards = [for (var i = 1; i <= 5; i++) quoteCard(authorId: i, authorName: 'Member $i')];
     final recap = RecapPayload(
       periodLabel: 'August 2026',
