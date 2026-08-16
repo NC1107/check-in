@@ -77,6 +77,34 @@ jobs:
         # Expression syntax has no arithmetic, so derive a single monotonic build number
         # (run_number * 100 + run_attempt) in the shell and share it via an output.
         run: echo "build_number=$(( ${{ github.run_number }} * 100 + ${{ github.run_attempt }} ))" >> "$GITHUB_OUTPUT"
+      # A feature release must ship an update log. The What's New sheet only shows what the
+      # curated list in release_notes.dart contains, and it silently starved for six releases
+      # once nobody remembered to feed it. Predict the bump the tag action is about to make
+      # (same rules: feat -> minor, BREAKING -> major, else patch) and refuse a minor/major
+      # release whose MAJOR.MINOR has no matching entry. Patch releases pass freely - fixes
+      # do not owe a changelog, and blocking hotfixes on prose would be worse. Runs before
+      # the tag step so a refusal strands nothing.
+      - name: Require release notes for a feature release
+        run: |
+          last=$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)
+          log=$(git log --format='%s%n%b' "$last"..HEAD)
+          major=$(echo "$last" | sed 's/^v//' | cut -d. -f1)
+          minor=$(echo "$last" | sed 's/^v//' | cut -d. -f2)
+          if echo "$log" | grep -qE '^BREAKING CHANGE|^[a-z]+(\([^)]*\))?!:'; then
+            major=$((major+1)); minor=0
+          elif echo "$log" | grep -qE '^feat(\([^)]*\))?:'; then
+            minor=$((minor+1))
+          else
+            echo "patch release: no notes required"; exit 0
+          fi
+          want="$major.$minor"
+          have=$(grep -m1 "version: '" app/lib/features/whats_new/release_notes.dart | sed "s/.*version: '\([^']*\)'.*/\1/")
+          if [ "$have" != "$want" ]; then
+            echo "::error::This release bumps to $want but the newest What's New entry is '$have'."
+            echo "::error::Members who update will see no changelog. Add a ReleaseNote(version: '$want', ...) to app/lib/features/whats_new/release_notes.dart."
+            exit 1
+          fi
+          echo "release notes present for $want"
       - name: Bump version and tag
         id: tag
         uses: mathieudutour/github-tag-action@v6.2
