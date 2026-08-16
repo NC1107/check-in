@@ -789,94 +789,109 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     final gifAllowed = commentGifAllowed(targetAccount);
     return SafeArea(
       top: false,
-      child: Container(
-        decoration: const BoxDecoration(
-          color: kBgMain,
-          border: Border(top: BorderSide(color: kBorder)),
-        ),
-        padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (_replyTo case final r?) _replyBanner(r),
-            // Cross-post: a comment goes to exactly one group. Let the poster pick which -
-            // the others never see it. Defaults to the first group shared to. While replying
-            // the group is pinned to the parent's, so the picker is hidden.
-            if (_isCrossPost && widget.copies != null && _replyTo == null)
-              _groupPicker(widget.copies!),
-            if (_pendingGifMediaId != null) _pendingGifThumbnail(),
-            Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Outside the bar's surface: an attached gif should read as the gif itself,
+          // not as a panel the width of the screen.
+          if (_pendingGifMediaId != null)
+            Padding(
+              padding: const EdgeInsets.only(left: 14, top: 10),
+              child: _pendingGifThumbnail(),
+            ),
+          Container(
+            decoration: const BoxDecoration(
+              color: kBgMain,
+              border: Border(top: BorderSide(color: kBorder)),
+            ),
+            padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: _comment,
-                    focusNode: _commentFocus,
-                    onSubmitted: (_) => _send(),
-                    textInputAction: TextInputAction.send,
-                    style: const TextStyle(color: kFgPrimary, fontSize: 14),
-                    cursorColor: context.accent,
-                    decoration: InputDecoration(
-                      hintText:
-                          _replyTo != null ? 'Reply to ${_replyTo!.authorName}…' : 'Add a comment…',
-                      hintStyle: const TextStyle(color: kFgMuted),
-                      filled: true,
-                      fillColor: kBgSurface,
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(9999),
-                        borderSide: const BorderSide(color: kBorder),
+                if (_replyTo case final r?) _replyBanner(r),
+                // Cross-post: a comment goes to exactly one group. Let the poster pick which -
+                // the others never see it. Defaults to the first group shared to. While replying
+                // the group is pinned to the parent's, so the picker is hidden.
+                if (_isCrossPost && widget.copies != null && _replyTo == null)
+                  _groupPicker(widget.copies!),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _comment,
+                        focusNode: _commentFocus,
+                        onSubmitted: (_) => _send(),
+                        textInputAction: TextInputAction.send,
+                        style: const TextStyle(color: kFgPrimary, fontSize: 14),
+                        cursorColor: context.accent,
+                        decoration: InputDecoration(
+                          hintText: _replyTo != null
+                              ? 'Reply to ${_replyTo!.authorName}…'
+                              : 'Add a comment…',
+                          hintStyle: const TextStyle(color: kFgMuted),
+                          filled: true,
+                          fillColor: kBgSurface,
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(9999),
+                            borderSide: const BorderSide(color: kBorder),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(9999),
+                            borderSide: BorderSide(color: context.accent),
+                          ),
+                          // Right-aligned inside the field, matching compose's own gif icon.
+                          suffixIcon: !gifAllowed
+                              ? null
+                              : IconButton(
+                                  onPressed:
+                                      _attachingGif ? null : () => _attachGif(targetAccount!),
+                                  padding: EdgeInsets.zero,
+                                  tooltip: 'Add a gif',
+                                  icon: _attachingGif
+                                      ? SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(
+                                              strokeWidth: 2, color: context.accent))
+                                      : Icon(Icons.gif_box_outlined,
+                                          color: context.accent, size: 22),
+                                ),
+                        ),
                       ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(9999),
-                        borderSide: BorderSide(color: context.accent),
-                      ),
-                      // Right-aligned inside the field, matching compose's own gif icon.
-                      suffixIcon: !gifAllowed
-                          ? null
-                          : IconButton(
-                              onPressed: _attachingGif ? null : () => _attachGif(targetAccount!),
-                              padding: EdgeInsets.zero,
-                              tooltip: 'Add a gif',
-                              icon: _attachingGif
-                                  ? SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2, color: context.accent))
-                                  : Icon(Icons.gif_box_outlined, color: context.accent, size: 22),
-                            ),
                     ),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                ValueListenableBuilder<TextEditingValue>(
-                  valueListenable: _comment,
-                  builder: (_, val, __) {
-                    final canSend =
-                        (val.text.trim().isNotEmpty || _pendingGifMediaId != null) && !_sending;
-                    return IconButton(
-                      onPressed: canSend ? _send : null,
-                      icon: _sending
-                          ? SizedBox(
-                              height: 18,
-                              width: 18,
-                              child:
-                                  CircularProgressIndicator(strokeWidth: 2, color: context.accent))
-                          : Icon(Icons.arrow_upward_rounded,
-                              color: canSend ? context.accent : kFgMuted),
-                      style: IconButton.styleFrom(
-                        backgroundColor: canSend ? context.accentLight : kBgSurface,
-                        shape: const CircleBorder(),
-                      ),
-                    );
-                  },
+                    const SizedBox(width: 6),
+                    ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: _comment,
+                      builder: (_, val, __) {
+                        final canSend =
+                            (val.text.trim().isNotEmpty || _pendingGifMediaId != null) && !_sending;
+                        return IconButton(
+                          onPressed: canSend ? _send : null,
+                          icon: _sending
+                              ? SizedBox(
+                                  height: 18,
+                                  width: 18,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2, color: context.accent))
+                              : Icon(Icons.arrow_upward_rounded,
+                                  color: canSend ? context.accent : kFgMuted),
+                          style: IconButton.styleFrom(
+                            backgroundColor: canSend ? context.accentLight : kBgSurface,
+                            shape: const CircleBorder(),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
                 ),
               ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
