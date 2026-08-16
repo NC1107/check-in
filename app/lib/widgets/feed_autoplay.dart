@@ -19,11 +19,11 @@ final feedVideoFactoryProvider = Provider<FeedVideoFactory>(
 /// Decides which feed clip - at most one, ever - may hold a video player.
 ///
 /// Feed clips autoplay the way Reels does: the clip you are looking at plays and loops,
-/// every other clip stays a poster. That has to be one controller for
-/// the whole feed, not one per card: Android hands out a small pool of hardware video
-/// decoders, and this codebase already has a scar from a feed list that built more per-item
-/// state than it could carry. So the invariant lives here, in one object every tile has to
-/// ask, instead of in each tile's own judgement.
+/// every other clip stays a poster. That has to be one controller for the whole feed, not
+/// one per card: Android hands out a small pool of hardware video decoders, and this
+/// codebase already has a scar from a feed list that built more per-item state than it could
+/// carry. So the invariant lives here, in one object every tile has to ask, instead of in
+/// each tile's own judgement.
 ///
 /// Tiles report how much of themselves is on screen and the manager settles on a winner
 /// after a short pause, so a fast scroll flies past a dozen clips without creating and
@@ -47,6 +47,11 @@ class FeedAutoplayController extends ChangeNotifier {
   Timer? _settle;
   bool _enabled = true;
 
+  // Where the clip holding the slot has got to. A getter rather than a value, because the
+  // position moves between the tile offering it and the tap that reads it; one record
+  // rather than a map, because there is only ever one player.
+  ({Object slot, int mediaId, String? groupId, ValueGetter<Duration> position})? _playing;
+
   /// The slot allowed to play right now, or null when nothing should be playing.
   Object? get activeSlot => _active;
 
@@ -67,7 +72,33 @@ class FeedAutoplayController extends ChangeNotifier {
   void forget(Object slot) {
     _visible.remove(slot);
     if (_active == slot) _active = null;
+    unpublish(slot);
     _schedule(Duration.zero);
+  }
+
+  /// Offers [slot]'s live playback position for as long as it holds the player, so a tap can
+  /// open the full-screen viewer where the feed had got to rather than back at zero.
+  void publish(
+    Object slot, {
+    required int mediaId,
+    required ValueGetter<Duration> position,
+    String? groupId,
+  }) {
+    _playing = (slot: slot, mediaId: mediaId, groupId: groupId, position: position);
+  }
+
+  /// [slot]'s player is gone, and its position with it.
+  void unpublish(Object slot) {
+    if (_playing?.slot == slot) _playing = null;
+  }
+
+  /// How far into [mediaId] the feed is right now, or null when that is not the clip
+  /// playing. Scoped by group as well: a cross-post puts one media id under two groups, and
+  /// only the tile the user is actually watching knows a position.
+  Duration? positionOf({required int mediaId, String? groupId}) {
+    final playing = _playing;
+    if (playing == null || playing.mediaId != mediaId || playing.groupId != groupId) return null;
+    return playing.position();
   }
 
   /// Turns autoplay off while the feed is not what the user is looking at: another tab, or a
@@ -129,6 +160,22 @@ class FeedAutoplayScope extends StatefulWidget {
   /// The feed's autoplay manager, or null outside a feed - where a clip is simply a poster.
   static FeedAutoplayController? maybeOf(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<_FeedAutoplayHandle>()?.controller;
+
+  /// What the full-screen viewer needs to carry a feed clip's playback across: where
+  /// [mediaId] has got to, if it is the clip playing right now, and nothing at all
+  /// otherwise (a poster, another tile's clip, or no feed above this at all).
+  ///
+  /// Read without subscribing, because this answers a tap rather than a build.
+  static Map<int, Duration> continuation(
+    BuildContext context, {
+    required int mediaId,
+    String? groupId,
+  }) {
+    final handle = context.getElementForInheritedWidgetOfExactType<_FeedAutoplayHandle>()?.widget
+        as _FeedAutoplayHandle?;
+    final at = handle?.controller.positionOf(mediaId: mediaId, groupId: groupId);
+    return at == null || at == Duration.zero ? const {} : {mediaId: at};
+  }
 
   @override
   State<FeedAutoplayScope> createState() => _FeedAutoplayScopeState();

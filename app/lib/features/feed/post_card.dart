@@ -11,6 +11,7 @@ import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/feed_autoplay.dart';
 import '../../widgets/likers_sheet.dart';
 import '../../widgets/photo_viewer.dart';
 import '../../widgets/post_image_carousel.dart';
@@ -604,6 +605,13 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                     initialIndex:
                         p.media.indexWhere((m) => m.id == mediaId).clamp(0, p.media.length - 1),
                     groupId: p.groupId,
+                    // A clip tapped while it was autoplaying here opens where it had got to,
+                    // not back at its first frame.
+                    initialClipPositions: FeedAutoplayScope.continuation(
+                      context,
+                      mediaId: mediaId,
+                      groupId: p.groupId,
+                    ),
                   ),
                 ),
                 Positioned.fill(

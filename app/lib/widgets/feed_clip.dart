@@ -127,6 +127,14 @@ class _FeedClipState extends ConsumerState<FeedClip> with WidgetsBindingObserver
       // through silent mode, which is video_player's forced default. Re-asserted here
       // because that default is set on the plugin's first init and never downgrades.
       unawaited(const VideoNative().respectSilentSwitch());
+      // Offer where this clip has got to, so tapping the card opens the viewer there rather
+      // than starting the same clip over.
+      widget.autoplay.publish(
+        _slot,
+        mediaId: widget.media.id,
+        groupId: widget.groupId,
+        position: () => controller.value.position,
+      );
       if (widget.autoplay.isActive(_slot)) controller.play();
       setState(() => _firstFrame = true);
     }).catchError((_) {
@@ -138,6 +146,7 @@ class _FeedClipState extends ConsumerState<FeedClip> with WidgetsBindingObserver
     final controller = _controller;
     _controller = null;
     _firstFrame = false;
+    widget.autoplay.unpublish(_slot);
     controller?.pause();
     controller?.dispose();
   }

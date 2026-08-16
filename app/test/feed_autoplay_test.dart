@@ -317,6 +317,44 @@ void main() {
       await tester.pumpAndSettle();
     });
 
+    testWidgets('the playing clip offers where it has got to, and only it', (tester) async {
+      // What a controller polls itself up to, so the tile has a real position to offer
+      // rather than the zero a freshly-created player reports.
+      platform.position = const Duration(seconds: 2);
+      await tester.pumpWidget(host());
+      await settle(tester);
+
+      final context = tester.element(find.byType(FeedClip).first);
+      expect(
+        FeedAutoplayScope.continuation(context, mediaId: 8, groupId: 'alpha.invalid'),
+        {8: const Duration(seconds: 2)},
+      );
+      // The clip below is a poster, and the same clip under another group is another tile:
+      // neither has a position to hand over.
+      expect(
+        FeedAutoplayScope.continuation(context, mediaId: 9, groupId: 'alpha.invalid'),
+        isEmpty,
+      );
+      expect(
+        FeedAutoplayScope.continuation(context, mediaId: 8, groupId: 'beta.invalid'),
+        isEmpty,
+      );
+
+      // Scrolling on hands the player over, and the offer with it - a stale position would
+      // open the viewer partway into a clip nobody was watching.
+      await tester.drag(find.byType(ListView), const Offset(0, -600));
+      await settle(tester);
+      final after = tester.element(find.byType(FeedClip).last);
+      expect(FeedAutoplayScope.continuation(after, mediaId: 8, groupId: 'alpha.invalid'), isEmpty);
+      expect(
+        FeedAutoplayScope.continuation(after, mediaId: 9, groupId: 'alpha.invalid'),
+        {9: const Duration(seconds: 2)},
+      );
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
     testWidgets('scrolling hands the one player on to the next clip', (tester) async {
       await tester.pumpWidget(host());
       await settle(tester);
@@ -354,6 +392,12 @@ void main() {
       expect(find.byType(VideoPlayer), findsNothing);
       await drain(tester);
       expect(platform.disposed.length, 1);
+
+      // Closing the viewer gives the feed its player back - the position is deliberately
+      // not carried the other way: a feed clip looping from the top is normal.
+      navigator.pop();
+      await settle(tester);
+      expect(find.byType(VideoPlayer), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
