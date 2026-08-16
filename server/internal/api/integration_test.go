@@ -411,6 +411,30 @@ func TestJoinPageIsPublicAndLockedDown(t *testing.T) {
 	}
 }
 
+// Content endpoints are throttled per member, so one member running a script cannot fill the
+// group's feed, and cannot slow anybody else down while trying.
+func TestPostingPastTheBurstIsThrottled(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+	other := h.member(admin, "Sam")
+
+	burst := int(newContentLimits().posts.burst)
+	for i := 0; i < burst; i++ {
+		h.post("/api/posts", admin.Token,
+			map[string]any{"kind": "text", "body": "flood"}).expect(http.StatusCreated)
+	}
+
+	res := h.post("/api/posts", admin.Token,
+		map[string]any{"kind": "text", "body": "one too many"}).expect(http.StatusTooManyRequests)
+	if !strings.Contains(res.errorMessage(), "slow down") {
+		t.Errorf("error = %q, want it to tell the member to slow down", res.errorMessage())
+	}
+
+	// The throttle is that member's alone.
+	h.post("/api/posts", other.Token,
+		map[string]any{"kind": "text", "body": "unaffected"}).expect(http.StatusCreated)
+}
+
 // ---- helpers ----
 
 // idOrZero and strOrEmpty keep failure messages readable: %v on a pointer prints an address,

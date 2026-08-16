@@ -95,6 +95,18 @@ Check the server log on boot. It always states the push mode in one line.
 Notifications are also easy to lose at the device end: check that the member granted
 notification permission, and note that iOS suppresses banners while the app is foregrounded.
 
+## "Too many requests, slow down"
+
+The server throttles how fast one member can post, comment, like, and upload, so a runaway
+client or a script can't flood the group.
+The limits sit well above normal use (30 check-ins, 60 comments, 60 likes and 30 uploads a
+minute, each with a generous burst on top), and the allowance refills continuously - waiting
+a few seconds is enough.
+
+Each member has their own allowance, so seeing this does not affect anyone else in the group.
+If it shows up during ordinary use, it's worth reporting: the numbers are meant to be
+invisible to a person tapping.
+
 ## 502 Bad Gateway
 
 Caddy is up but can't reach the server container.

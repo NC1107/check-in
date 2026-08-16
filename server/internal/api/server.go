@@ -20,7 +20,8 @@ type Server struct {
 	db      *db.DB
 	store   *storage.Store
 	push    push.Notifier // nil when push isn't configured (direct FCM or relay)
-	authLim *rateLimiter  // limits signup/login attempts
+	authLim *rateLimiter  // limits signup/login attempts, per IP
+	content contentLimits // limits what a member can create, per user
 }
 
 // New constructs a Server. A nil notifier disables push; pass a genuinely nil interface
@@ -32,6 +33,7 @@ func New(cfg config.Config, database *db.DB, store *storage.Store, notifier push
 		store:   store,
 		push:    notifier,
 		authLim: newRateLimiter(20, 10), // 20/min, burst 10, per IP
+		content: newContentLimits(),
 	}
 }
 
@@ -97,14 +99,16 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/users/{id}", s.handleGetUser)
 		r.Get("/api/users/{id}/posts", s.handleUserPosts)
 
-		r.Post("/api/posts", s.handleCreatePost)
+		// The routes that create something are throttled per member (see contentLimits);
+		// reading is not.
+		r.With(s.rateLimitUser(s.content.posts)).Post("/api/posts", s.handleCreatePost)
 		r.Get("/api/posts/{id}", s.handleGetPost)
 		r.Delete("/api/posts/{id}", s.handleDeletePost)
-		r.Post("/api/posts/{id}/like", s.handleLike)
-		r.Delete("/api/posts/{id}/like", s.handleUnlike)
+		r.With(s.rateLimitUser(s.content.likes)).Post("/api/posts/{id}/like", s.handleLike)
+		r.With(s.rateLimitUser(s.content.likes)).Delete("/api/posts/{id}/like", s.handleUnlike)
 		r.Get("/api/posts/{id}/likes", s.handleListLikers)
 		r.Get("/api/posts/{id}/comments", s.handleListComments)
-		r.Post("/api/posts/{id}/comments", s.handleAddComment)
+		r.With(s.rateLimitUser(s.content.comments)).Post("/api/posts/{id}/comments", s.handleAddComment)
 
 		r.Post("/api/posts/{id}/report", s.handleReportPost)
 		r.Post("/api/comments/{id}/report", s.handleReportComment)
@@ -116,9 +120,9 @@ func (s *Server) Router() http.Handler {
 
 		r.Get("/api/birthdays/upcoming", s.handleUpcomingBirthdays)
 
-		r.Post("/api/media", s.handleUploadMedia)
+		r.With(s.rateLimitUser(s.content.media)).Post("/api/media", s.handleUploadMedia)
 		r.Get("/api/media/{id}", s.handleServeMedia)
-		r.Post("/api/media/{id}/poster", s.handleSetMediaPoster)
+		r.With(s.rateLimitUser(s.content.media)).Post("/api/media/{id}/poster", s.handleSetMediaPoster)
 
 		// Admin-only.
 		r.Group(func(r chi.Router) {

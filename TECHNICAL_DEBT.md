@@ -9,7 +9,7 @@ per-IP auth rate limiting with idle eviction, server-side image re-encode that s
 EXIF/GPS, and a sensible secure-headers/CSP baseline. The items below are the gaps found.
 
 ## Summary
-**Fixed in 2026-06-25 pass: 6 · Resolved since: 4 · Remaining (documented): 5** - Critical: 0 · High: 0 · Medium: 1 · Low: 4
+**Fixed in 2026-06-25 pass: 6 · Resolved since: 5 · Remaining (documented): 4** - Critical: 0 · High: 0 · Medium: 1 · Low: 3
 
 ---
 
@@ -32,6 +32,15 @@ EXIF/GPS, and a sensible secure-headers/CSP baseline. The items below are the ga
   (oversize, over-length clip, non-media), media serving (Range 206, `?variant=poster` 404
   when absent, IDOR on an unposted upload), orphaned clip *and poster* removal on delete,
   block filtering across feed and direct link, and the public `/join` page's headers.
+- **[security/low] Content endpoints unthrottled - done** - only the auth endpoints had a
+  limiter, so `POST /api/posts`, `/comments`, `/like` and `/media` were bounded by nothing but
+  the body-size cap. `contentLimits` (`server/internal/api/ratelimit.go`) adds a bucket per
+  action, keyed per USER rather than per IP: these routes are authenticated, and a household
+  behind one address must not share a posting budget. 30 posts/min (burst 10), 60 comments/min
+  (burst 20), 60 likes/min (burst 30), 30 uploads/min (burst 20 - a ten-clip check-in is twenty
+  requests, each clip plus its poster, so a smaller burst would reject a post the app let the
+  member build). The limits stop automation rather than pacing anyone, and a drained bucket
+  refills continuously, so the app recovers on its own.
 
 ---
 
@@ -142,9 +151,6 @@ green; `gofmt` clean.
   Fine at current scale; revisit with JOINs/aggregates if the feed grows. Effort: medium.
 
 ### Low
-- **[security] Content endpoints unthrottled** — only auth endpoints are rate-limited;
-  `POST /api/posts`, `/comments`, `/like`, `/media` are not. Trusted group → low risk; add
-  a per-user limiter if the tester pool widens. Effort: small.
 - **[maintenance] Orphan media** — an upload followed by a failed `createPost` leaves an
   unreferenced media row + file (cleanup only runs via `DeletePost`; nothing reclaims an
   upload that never became a post). Add a periodic sweep or make upload+post transactional.
@@ -171,7 +177,7 @@ green; `gofmt` clean.
 - [x] iPhone HEIC upload fix (client-side transcode)
 - [x] DB-backed handler/integration tests
 - [ ] Feed query optimization
-- [ ] Content-endpoint throttling
+- [x] Content-endpoint throttling
 - [ ] Orphan-media cleanup
 - [ ] Global search pagination
 - [ ] Tap-target Semantics (a11y)
