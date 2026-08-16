@@ -48,6 +48,7 @@ class PostDetailScreen extends ConsumerStatefulWidget {
     this.groupId,
     this.focusComments = false,
     this.copies,
+    this.gifDownloader,
   });
 
   final int postId;
@@ -61,6 +62,11 @@ class PostDetailScreen extends ConsumerStatefulWidget {
   /// set, the thread merges every group's comments and likers, each tagged with its group,
   /// and a new comment is posted to a group the viewer picks. Null for an ordinary post.
   final List<PostCopy>? copies;
+
+  /// Fetches a chosen gif's bytes ahead of re-upload. Defaults to
+  /// [ApiClient.downloadExternalGif] (a real fetch from Klipy's CDN); overridable so a
+  /// widget test can drive the attach flow without a network.
+  final Future<List<int>> Function(String url)? gifDownloader;
 
   @override
   ConsumerState<PostDetailScreen> createState() => _PostDetailScreenState();
@@ -92,12 +98,22 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
 
   bool get _isCrossPost => (widget.copies?.length ?? 0) > 1;
 
+  /// Switches which group a new comment posts to, clearing any gif already staged for the
+  /// old target. Media ids are only unique per server (see AuthImage's own doc comment), so
+  /// a pending attachment uploaded to one group's server is meaningless - or, on an id
+  /// collision, actively wrong - once retargeted at another's.
+  void _setComposeGroup(String? groupId) {
+    if (groupId == _composeGroupId) return;
+    _composeGroupId = groupId;
+    _pendingGifMediaId = null;
+  }
+
   /// Starts a reply to [c]: pins the compose group to the parent's (so it lands on the right
   /// server) and focuses the field. Tapping "Reply" on another comment just re-targets.
   void _startReply(Comment c) {
     setState(() {
       _replyTo = c;
-      if (_isCrossPost && c.groupId != null) _composeGroupId = c.groupId;
+      if (_isCrossPost && c.groupId != null) _setComposeGroup(c.groupId);
     });
     _commentFocus.requestFocus();
   }
@@ -285,12 +301,17 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     if (picked == null || !mounted) return;
     setState(() => _attachingGif = true);
     try {
-      final bytes = await ApiClient.downloadExternalGif(picked.gifUrl);
+      final download = widget.gifDownloader ?? ApiClient.downloadExternalGif;
+      final bytes = await download(picked.gifUrl);
       final mediaId = await api.uploadImageBytes(bytes, filename: '${picked.id}.gif');
       if (!mounted) return;
       setState(() {
-        _pendingGifMediaId = mediaId;
         _attachingGif = false;
+        // The compose target may have been switched away from [account] while the
+        // download/upload was in flight (see _setComposeGroup). Media ids are only unique
+        // per server, so a result from the group asked for is meaningless - or, on an id
+        // collision, actively wrong - once attached to whichever group is current now.
+        if (!_isCrossPost || _composeGroupId == account.id) _pendingGifMediaId = mediaId;
       });
     } catch (_) {
       if (mounted) setState(() => _attachingGif = false);
@@ -573,7 +594,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     return Padding(
       padding: const EdgeInsets.only(right: 6),
       child: GestureDetector(
-        onTap: () => setState(() => _composeGroupId = groupId),
+        onTap: () => setState(() => _setComposeGroup(groupId)),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
           decoration: BoxDecoration(
