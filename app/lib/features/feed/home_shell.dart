@@ -25,6 +25,7 @@ import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
 import '../profile/profile_screen.dart';
 import '../whats_new/release_notes.dart';
+import 'compose_media_buttons.dart';
 import 'feed_screen.dart';
 
 /// Whether a picked file has to be re-encoded before upload. Photos do: it transcodes the
@@ -812,18 +813,20 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
     );
   }
 
-  Widget _mediaButton(IconData icon, String label, VoidCallback onTap) {
-    return OutlinedButton.icon(
-      onPressed: onTap,
-      icon: Icon(icon, color: context.accent, size: 19),
-      label: Text(label,
-          style: const TextStyle(color: _fgSecondary, fontWeight: FontWeight.w600, fontSize: 13)),
-      style: OutlinedButton.styleFrom(
-        side: const BorderSide(color: _border),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        padding: const EdgeInsets.symmetric(vertical: 11),
-      ),
-    );
+  /// Drops the attached clip and everything derived from it: the encode and poster computed
+  /// for upload, the tile's preview frame, and the place read off the clip. Shared by the
+  /// tile's remove control and by a confirmed replace, so neither can leave a stale poster
+  /// or location behind on the next post.
+  void _clearClip() {
+    setState(() {
+      _clip = null;
+      _clipEncodedPath = null;
+      _clipPoster = null;
+      _clipPosterPreview = null;
+      _clipDurationMs = 0;
+      _location = null;
+      _locationSource = null;
+    });
   }
 
   /// Publishes the check-in to every selected group, one server at a time. Media is
@@ -1232,6 +1235,8 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
             // clip via a chooser). The pick entry points handle the one-clip-or-photos rule and
             // the video-capable-group gating.
             const Divider(color: _border, height: 24),
+            // The row is only ever replaced by the preparing-clip progress, never by an
+            // attached clip: swapping a clip is a pick away (see [ComposeMediaButtons]).
             if (_processingClip)
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
@@ -1248,21 +1253,15 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
                   ],
                 ),
               )
-            // A clip is the whole post; remove it (via its tile) to switch back to photos.
-            else if (_clip == null)
+            else
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: _mediaButton(Icons.photo_library_outlined,
-                          _images.isEmpty ? 'Gallery' : 'Add more', _pickFromGallery),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: _mediaButton(Icons.photo_camera_outlined, 'Camera', _pickFromCamera),
-                    ),
-                  ],
+                child: ComposeMediaButtons(
+                  hasClip: _clip != null,
+                  hasPhotos: _images.isNotEmpty,
+                  onGallery: _pickFromGallery,
+                  onCamera: _pickFromCamera,
+                  onReplaceClip: _clearClip,
                 ),
               ),
           ],
@@ -1319,15 +1318,7 @@ class _ComposeSheetState extends ConsumerState<_ComposeSheet> {
             button: true,
             label: 'Remove clip',
             child: GestureDetector(
-              onTap: () => setState(() {
-                _clip = null;
-                _clipEncodedPath = null;
-                _clipPoster = null;
-                _clipPosterPreview = null;
-                _clipDurationMs = 0;
-                _location = null;
-                _locationSource = null;
-              }),
+              onTap: _clearClip,
               behavior: HitTestBehavior.opaque,
               child: SizedBox(
                 width: 44,
