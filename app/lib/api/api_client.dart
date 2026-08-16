@@ -31,6 +31,21 @@ String fileExtension(String path) {
   return dot < 0 ? '' : path.substring(dot + 1).toLowerCase();
 }
 
+/// Thrown by [ApiClient.generateRecap] when a manual recap already exists for the exact
+/// same period and panel set, so the caller can offer to replace it instead of retrying
+/// blind.
+class RecapAlreadyExists implements Exception {
+  const RecapAlreadyExists(this.existingPostId);
+
+  final int existingPostId;
+}
+
+/// Thrown by [ApiClient.generateRecap] when the period doesn't clear the server's quality
+/// bar (too little activity to build a meaningful deck).
+class RecapEmptyPeriod implements Exception {
+  const RecapEmptyPeriod();
+}
+
 /// ApiClient wraps all HTTP calls to a Check-In server. The base URL (server address)
 /// and bearer token are injected after the user connects and logs in.
 class ApiClient {
@@ -269,13 +284,19 @@ class ApiClient {
     return Post.fromJson(r.data as Map<String, dynamic>);
   }
 
+  /// lat/lng are only ever sent by the caller when the target server's server-info
+  /// advertised the "recap" capability (see [ServerInfo.recapCapable]) - this server
+  /// rejects unknown JSON fields, so an unguarded send would 400 every post against a
+  /// server that predates the feature.
   Future<Post> createPost(
       {required String kind,
       required String body,
       List<int>? mediaIds,
       String? location,
       List<int>? peopleIds,
-      String? crossPostId}) async {
+      String? crossPostId,
+      double? lat,
+      double? lng}) async {
     final r = await _dio.post('/api/posts', data: {
       'kind': kind,
       'body': body,
@@ -283,6 +304,8 @@ class ApiClient {
       if (location != null && location.isNotEmpty) 'location': location,
       if (peopleIds != null && peopleIds.isNotEmpty) 'peopleIds': peopleIds,
       if (crossPostId != null) 'crossPostId': crossPostId,
+      if (lat != null) 'lat': lat,
+      if (lng != null) 'lng': lng,
     });
     return Post.fromJson(r.data as Map<String, dynamic>);
   }
@@ -403,6 +426,59 @@ class ApiClient {
   /// id clears it back to the automatic color.
   Future<void> setGroupColor(String colorId) =>
       _dio.patch('/api/admin/server', data: {'color': colorId});
+
+  /// setRecapSettings updates the group's standing recap cadence (admin only). Callers must
+  /// only reach this once the group's server has advertised [ServerInfo.recapCapable].
+  ///
+  /// Returns nothing rather than a [ServerInfo]: the PATCH response only carries
+  /// name/color/recap settings, not the "recap" capability flag itself, so parsing it as a
+  /// full ServerInfo would read recapCapable back as false - a trap for a future caller who
+  /// reasonably expects the return value of a ServerInfo-shaped call to be trustworthy.
+  /// Refresh the account's real capability from [serverInfo] if it's ever needed here.
+  Future<void> setRecapSettings({
+    required String cadence,
+    required int weekday,
+    required int hour,
+    required int offset,
+  }) async {
+    await _dio.patch('/api/admin/server', data: {
+      'recapCadence': cadence,
+      'recapWeekday': weekday,
+      'recapHour': hour,
+      'recapOffset': offset,
+    });
+  }
+
+  /// generateRecap asks the server to build an on-demand recap for [periodStart,
+  /// periodEnd) covering [panels] (admin only). A duplicate request for the same period and
+  /// panel set is refused with a [RecapAlreadyExists] exception unless [replace] is true, in
+  /// which case the prior one is deleted and replaced in a single transaction.
+  Future<Post> generateRecap({
+    required DateTime periodStart,
+    required DateTime periodEnd,
+    required List<String> panels,
+    bool replace = false,
+  }) async {
+    try {
+      final r = await _dio.post('/api/admin/recaps', data: {
+        'periodStart': periodStart.toUtc().toIso8601String(),
+        'periodEnd': periodEnd.toUtc().toIso8601String(),
+        'panels': panels,
+        'replace': replace,
+      });
+      return Post.fromJson(r.data as Map<String, dynamic>);
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 409) {
+        final data = e.response?.data;
+        final existingId = data is Map ? (data['postId'] as num?)?.toInt() : null;
+        throw RecapAlreadyExists(existingId ?? 0);
+      }
+      if (e.response?.statusCode == 422) {
+        throw const RecapEmptyPeriod();
+      }
+      rethrow;
+    }
+  }
 
   // ---- reports ----
 

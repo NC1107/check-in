@@ -136,6 +136,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/api/admin/reports", s.handleAdminListReports)
 			r.Delete("/api/admin/reports/{id}", s.handleAdminDismissReport)
 			r.Patch("/api/admin/server", s.handleUpdateServer)
+			r.With(s.rateLimitUser(s.content.posts)).Post("/api/admin/recaps", s.handleGenerateRecap)
 		})
 	})
 

@@ -42,7 +42,7 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	posts, err := s.db.Feed(r.Context(), viewer.ID, authorID, locations, before, beforeID, limit)
+	posts, err := s.db.Feed(r.Context(), viewer.ID, authorID, locations, before, beforeID, limit, false)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
@@ -111,7 +111,9 @@ func (s *Server) handleGetUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleUserPosts returns one person's timeline (git-history style): their posts in
-// reverse-chronological order with cursor pagination.
+// reverse-chronological order with cursor pagination. Recap posts are excluded even for
+// the admin whose id authors them - a recap is a group artifact, not something they
+// personally posted, and does not belong on their profile.
 func (s *Server) handleUserPosts(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
@@ -124,7 +126,7 @@ func (s *Server) handleUserPosts(w http.ResponseWriter, r *http.Request) {
 			before = &t
 		}
 	}
-	posts, err := s.db.Feed(r.Context(), userFrom(r).ID, &id, nil, before, nil, parseLimit(r, 30, 100))
+	posts, err := s.db.Feed(r.Context(), userFrom(r).ID, &id, nil, before, nil, parseLimit(r, 30, 100), true)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
@@ -132,10 +134,12 @@ func (s *Server) handleUserPosts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"posts": posts})
 }
 
-// createPostReq deliberately gains no fields as media types are added. Servers reject
-// unknown fields, so anything new here would make a new client unable to post to a server
-// that has not been updated yet - and nothing new is needed: what the attachments are is
-// already knowable from the attachments themselves.
+// createPostReq mostly gains no fields as media types are added: this server rejects
+// unknown fields (decodeJSON's DisallowUnknownFields), so anything new here would make a
+// new client unable to post to a server that has not been updated yet. Lat/Lng are the one
+// exception, and the client is required to gate them the same way: it only sends them to a
+// server whose /api/server-info advertises the "recap" capability, so an old server never
+// sees a field it doesn't understand.
 type createPostReq struct {
 	Kind      string  `json:"kind"`      // client's claim about the post; validated, not stored
 	Body      string  `json:"body"`      // text body or image caption
@@ -146,6 +150,11 @@ type createPostReq struct {
 	// CrossPostID ties this copy to the same post shared to other groups. Client-generated
 	// and opaque; the server only stores it so the multi-group client can collapse copies.
 	CrossPostID *string `json:"crossPostId"`
+	// Lat/Lng are the coordinates behind Location, rounded client-side to 2 decimal places
+	// (~1.1km) - strictly coarser than the place string itself. Stored for the v1.5 map
+	// panel; nothing reads them back yet.
+	Lat *float64 `json:"lat"`
+	Lng *float64 `json:"lng"`
 }
 
 func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
@@ -214,8 +223,18 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Coordinates ride along with location and are dropped the same way when there's no
+	// attachment to have carried GPS in the first place. Whatever the client sent is
+	// clamped and rounded to 2 decimal places in CreatePost itself, not here - so a
+	// modified client or a raw API call cannot smuggle full-precision GPS past this
+	// handler by any other path into CreatePost.
+	var lat, lng *float64
+	if len(mediaIDs) > 0 {
+		lat, lng = req.Lat, req.Lng
+	}
+
 	me := userFrom(r)
-	post, err := s.db.CreatePost(r.Context(), me.ID, req.Body, mediaIDs, location, req.PeopleIDs, crossPostID)
+	post, err := s.db.CreatePost(r.Context(), me.ID, req.Body, mediaIDs, location, req.PeopleIDs, crossPostID, lat, lng)
 	if errors.Is(err, db.ErrNotOwned) {
 		writeErr(w, http.StatusBadRequest, "one or more attachments are not yours")
 		return
