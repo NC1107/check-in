@@ -5,10 +5,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
 import 'package:intl/intl.dart';
 
+import '../../api/api_client.dart';
 import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/auth_image.dart';
+import '../../widgets/gif_picker.dart';
 import '../../widgets/likers_sheet.dart';
 import '../../widgets/photo_viewer.dart';
 import '../../widgets/post_image_carousel.dart';
@@ -27,6 +30,13 @@ String _relativeTime(DateTime dt) {
 
 /// The exact local date + time, for the long-press tooltip on a relative timestamp.
 String _fullLocalTime(DateTime dt) => DateFormat('MMM d, y · h:mm a').format(dt.toLocal());
+
+/// Whether the comment composer may offer the gif picker for [account]'s server: it has to
+/// be able to search gifs at all, and to accept a `mediaId` on a comment. An older server
+/// predates the field entirely and would 400 on it (DisallowUnknownFields) - see
+/// [ServerInfo.commentMedia] - so both must be true, not just gifSearch.
+bool commentGifAllowed(ServerAccount? account) =>
+    account != null && account.gifSearch && account.commentMedia;
 
 /// PostDetailScreen shows a single post with its full comment thread and a composer.
 /// [groupId] is the connected group the post lives on (null = the current group);
@@ -75,6 +85,10 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   // The comment being replied to, or null for a top-level comment. A reply always goes to
   // the parent's own group, so replying pins the compose target to it.
   Comment? _replyTo;
+  // A gif picked for the comment being composed, already uploaded to the target group's
+  // server and held here until send (or removed via the thumbnail's X).
+  int? _pendingGifMediaId;
+  bool _attachingGif = false;
 
   bool get _isCrossPost => (widget.copies?.length ?? 0) > 1;
 
@@ -226,7 +240,8 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
 
   Future<void> _send() async {
     final text = _comment.text.trim();
-    if (text.isEmpty || _sending) return;
+    final gifMediaId = _pendingGifMediaId;
+    if ((text.isEmpty && gifMediaId == null) || _sending) return;
     setState(() => _sending = true);
     FocusScope.of(context).unfocus();
     // On a cross-post, a comment goes to exactly one group - the one the viewer picked. The
@@ -238,7 +253,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     try {
       final added = (await ref
               .read(contentApiProvider(target.groupId))
-              .addComment(target.postId, text, parentCommentId: replyToId))
+              .addComment(target.postId, text, parentCommentId: replyToId, mediaId: gifMediaId))
           .withGroup(_isCrossPost ? target.groupId : null);
       _comment.clear();
       // Append in place - no re-fetch, so the post and existing comments don't flash.
@@ -246,6 +261,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
         setState(() {
           _comments = [..._comments, added];
           _replyTo = null;
+          _pendingGifMediaId = null;
         });
       }
     } catch (_) {
@@ -258,6 +274,31 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       if (mounted) setState(() => _sending = false);
     }
   }
+
+  /// Opens the gif picker against [account]'s server, downloads the pick, and uploads it to
+  /// that same server so the comment attaches re-hosted media - never a Klipy hotlink. Holds
+  /// the resulting media id until send (or a tap on the thumbnail's X clears it).
+  Future<void> _attachGif(ServerAccount account) async {
+    final api = ref.read(contentApiProvider(account.id));
+    final picked =
+        await showGifPicker(context, search: (q, page) => api.gifSearch(query: q, page: page));
+    if (picked == null || !mounted) return;
+    setState(() => _attachingGif = true);
+    try {
+      final bytes = await ApiClient.downloadExternalGif(picked.gifUrl);
+      final mediaId = await api.uploadImageBytes(bytes, filename: '${picked.id}.gif');
+      if (!mounted) return;
+      setState(() {
+        _pendingGifMediaId = mediaId;
+        _attachingGif = false;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _attachingGif = false);
+      _snack("Couldn't add that gif. Try again.");
+    }
+  }
+
+  void _removeGif() => setState(() => _pendingGifMediaId = null);
 
   /// Where a new comment is sent: the picked group's copy for a cross-post, else the post
   /// itself. Falls back to the representative if the picked group somehow isn't a copy.
@@ -694,8 +735,19 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   ),
                 ],
                 const SizedBox(height: 2),
-                Text(c.body,
-                    style: const TextStyle(color: kFgSecondary, fontSize: 14, height: 1.35)),
+                if (c.body.isNotEmpty)
+                  Text(c.body,
+                      style: const TextStyle(color: kFgSecondary, fontSize: 14, height: 1.35)),
+                if (c.mediaId case final mediaId?) ...[
+                  if (c.body.isNotEmpty) const SizedBox(height: 6),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 200),
+                      child: AuthImage(mediaId: mediaId, groupId: gid, fit: BoxFit.contain),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 4),
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
@@ -712,6 +764,8 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   }
 
   Widget _composer() {
+    final targetAccount = ref.watch(contentAccountProvider(_sendTarget().groupId));
+    final gifAllowed = commentGifAllowed(targetAccount);
     return SafeArea(
       top: false,
       child: Container(
@@ -730,6 +784,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
             // the group is pinned to the parent's, so the picker is hidden.
             if (_isCrossPost && widget.copies != null && _replyTo == null)
               _groupPicker(widget.copies!),
+            if (_pendingGifMediaId != null) _pendingGifThumbnail(),
             Row(
               children: [
                 Expanded(
@@ -756,6 +811,21 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                         borderRadius: BorderRadius.circular(9999),
                         borderSide: BorderSide(color: context.accent),
                       ),
+                      // Right-aligned inside the field, matching compose's own gif icon.
+                      suffixIcon: !gifAllowed
+                          ? null
+                          : IconButton(
+                              onPressed: _attachingGif ? null : () => _attachGif(targetAccount!),
+                              padding: EdgeInsets.zero,
+                              tooltip: 'Add a gif',
+                              icon: _attachingGif
+                                  ? SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2, color: context.accent))
+                                  : Icon(Icons.gif_box_outlined, color: context.accent, size: 22),
+                            ),
                     ),
                   ),
                 ),
@@ -763,7 +833,8 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                 ValueListenableBuilder<TextEditingValue>(
                   valueListenable: _comment,
                   builder: (_, val, __) {
-                    final canSend = val.text.trim().isNotEmpty && !_sending;
+                    final canSend =
+                        (val.text.trim().isNotEmpty || _pendingGifMediaId != null) && !_sending;
                     return IconButton(
                       onPressed: canSend ? _send : null,
                       icon: _sending
@@ -785,6 +856,41 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// A small removable preview of the gif attached to the comment being composed, shown
+  /// above the input until sent (or removed).
+  Widget _pendingGifThumbnail() {
+    final mediaId = _pendingGifMediaId;
+    if (mediaId == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8, left: 2),
+      child: Stack(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: SizedBox(
+              width: 84,
+              height: 84,
+              child: AuthImage(mediaId: mediaId, groupId: _sendTarget().groupId),
+            ),
+          ),
+          Positioned(
+            top: -6,
+            right: -6,
+            child: GestureDetector(
+              onTap: _removeGif,
+              behavior: HitTestBehavior.opaque,
+              child: Container(
+                padding: const EdgeInsets.all(3),
+                decoration: const BoxDecoration(color: kBgSurfaceHover, shape: BoxShape.circle),
+                child: const Icon(Icons.close, size: 14, color: kFgPrimary),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
