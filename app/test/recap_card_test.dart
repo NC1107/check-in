@@ -7,11 +7,11 @@ import 'package:checkin/features/feed/recap_card.dart';
 import 'package:checkin/state/app_state.dart';
 
 /// RecapDeck is the swipeable panel deck a recap post renders in place of ordinary media
-/// (see post_card.dart's `if (p.recap case final recap?)` branch). These tests build the
-/// payload from plain model literals - no server, no fixtures - mirroring
-/// post_card_test.dart's style, including a real ProviderScope + seeded
-/// MultiSessionController so a card that ever reaches for a UserAvatar/MediaFrame image
-/// finds a working provider tree rather than crashing on a missing one.
+/// (see post_card.dart's `if (recap != null)` branch). These tests build the payload from
+/// plain model literals - no server, no fixtures - mirroring post_card_test.dart's style,
+/// including a real ProviderScope + seeded MultiSessionController so a card that ever
+/// reaches for a UserAvatar/MediaFrame image finds a working provider tree rather than
+/// crashing on a missing one.
 void main() {
   final user = User(id: 1, name: 'Nick', phone: '+15550001111', isAdmin: true);
   final account = ServerAccount(
@@ -41,10 +41,32 @@ void main() {
     await tester.pump();
   }
 
-  RecapCard quoteCard({required int authorId, required String authorName, String body = 'hi'}) =>
+  /// Swipes a PageView left, one page at a time - what a real viewer does to get past the
+  /// cover page (always page 0) to a panel's own content.
+  Future<void> swipeToPage(WidgetTester tester, Finder pageView, int index) async {
+    for (var i = 0; i < index; i++) {
+      await tester.drag(pageView, const Offset(-400, 0));
+      await tester.pumpAndSettle();
+    }
+  }
+
+  RecapCard photoCard({required int authorId, required String authorName, int rank = 1}) =>
+      RecapCard(
+        kind: 'photo',
+        rank: rank,
+        guaranteed: true,
+        postId: authorId,
+        authorId: authorId,
+        authorName: authorName,
+        mediaId: 900 + authorId,
+        mime: 'image/jpeg',
+      );
+
+  RecapCard quoteCard(
+          {required int authorId, required String authorName, String body = 'hi', int rank = 1}) =>
       RecapCard(
         kind: 'quote',
-        rank: 1,
+        rank: rank,
         guaranteed: true,
         postId: authorId,
         authorId: authorId,
@@ -62,7 +84,93 @@ void main() {
   RecapStats stats() =>
       RecapStats(posts: 5, photos: 2, clips: 0, likes: 10, comments: 3, places: 2, members: 3);
 
-  testWidgets('Wall panel renders cards with the author name overlaid', (tester) async {
+  testWidgets('the cover page is always page 0, ahead of every panel', (tester) async {
+    final recap = RecapPayload(
+      periodLabel: 'Aug 10-16',
+      cadence: 'weekly',
+      groupName: 'Ridgeway Family',
+      groupColor: 'coral',
+      stats: stats(),
+      panels: [
+        RecapCollagePanel(title: 'The Wall', cards: [quoteCard(authorId: 1, authorName: 'Ada')]),
+      ],
+    );
+    await pumpDeck(tester, recap);
+
+    // The group name and stats line are on the cover, visible without swiping - and the
+    // Wall's own content ("The Wall" panel title, "Ada") is not, because it sits on the
+    // page after it.
+    expect(find.text('Ridgeway Family'), findsOneWidget);
+    expect(find.textContaining('check-ins'), findsOneWidget);
+    expect(find.text('The Wall'), findsNothing);
+    expect(find.text('Ada'), findsNothing);
+  });
+
+  testWidgets('the cover eyebrow reflects cadence, and the period label is shown too',
+      (tester) async {
+    final weekly = RecapPayload(
+      periodLabel: 'Aug 10-16',
+      cadence: 'weekly',
+      groupName: 'Ridgeway Family',
+      groupColor: 'coral',
+      stats: stats(),
+      panels: [
+        RecapCollagePanel(title: 'The Wall', cards: [quoteCard(authorId: 1, authorName: 'Ada')]),
+      ],
+    );
+    await pumpDeck(tester, weekly);
+    expect(find.text('WEEKLY RECAP'), findsOneWidget);
+    expect(find.text('Aug 10-16'), findsOneWidget);
+  });
+
+  testWidgets('the cover renders without a hero photo when the Wall\'s #1 pick has none',
+      (tester) async {
+    // A quote card (no attachment) as the guaranteed #1 pick - the cover must still render
+    // (tinted background, no backdrop image) rather than crashing on a null media.
+    final recap = RecapPayload(
+      periodLabel: 'Aug 10-16',
+      cadence: 'monthly',
+      groupName: 'Ridgeway Family',
+      groupColor: 'coral',
+      stats: stats(),
+      panels: [
+        RecapCollagePanel(title: 'The Wall', cards: [
+          quoteCard(authorId: 1, authorName: 'Ada', body: 'Rainy Tuesday.'),
+        ]),
+      ],
+    );
+    await pumpDeck(tester, recap);
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('MONTHLY RECAP'), findsOneWidget);
+    expect(find.text('Ridgeway Family'), findsOneWidget);
+  });
+
+  testWidgets('the cover shows a hero backdrop when the Wall\'s #1 pick has a photo',
+      (tester) async {
+    final recap = RecapPayload(
+      periodLabel: 'Aug 10-16',
+      cadence: 'weekly',
+      groupName: 'Ridgeway Family',
+      groupColor: 'coral',
+      stats: stats(),
+      panels: [
+        RecapCollagePanel(title: 'The Wall', cards: [
+          photoCard(authorId: 1, authorName: 'Ada'),
+          quoteCard(authorId: 2, authorName: 'Ben', rank: 2),
+        ]),
+      ],
+    );
+    await pumpDeck(tester, recap);
+
+    expect(tester.takeException(), isNull);
+    // ImageFiltered wraps the blurred hero backdrop - present only when there is one to show.
+    expect(find.byType(ImageFiltered), findsOneWidget);
+  });
+
+  testWidgets(
+      'Wall panel renders cards with the author name overlaid, after swiping past the cover',
+      (tester) async {
     final recap = RecapPayload(
       periodLabel: 'Aug 10-16',
       cadence: 'weekly',
@@ -72,11 +180,12 @@ void main() {
       panels: [
         RecapCollagePanel(title: 'The Wall', cards: [
           quoteCard(authorId: 1, authorName: 'Ada', body: 'Made it to the top, barely.'),
-          quoteCard(authorId: 2, authorName: 'Ben', body: 'Rainy Tuesday.'),
+          quoteCard(authorId: 2, authorName: 'Ben', body: 'Rainy Tuesday.', rank: 2),
         ]),
       ],
     );
     await pumpDeck(tester, recap);
+    await swipeToPage(tester, find.byType(PageView), 1);
 
     expect(find.text('The Wall'), findsOneWidget);
     expect(find.text('Ada'), findsOneWidget);
@@ -84,7 +193,9 @@ void main() {
     expect(find.text('Made it to the top, barely.'), findsOneWidget);
   });
 
-  testWidgets('Awards panel renders every award with its label and winner', (tester) async {
+  testWidgets(
+      'Awards panel renders every award with its label and winner, after swiping past the cover - '
+      'an already-published (pre-retirement) deck still renders exactly as before', (tester) async {
     final recap = RecapPayload(
       periodLabel: 'Aug 10-16',
       cadence: 'weekly',
@@ -99,6 +210,7 @@ void main() {
       ],
     );
     await pumpDeck(tester, recap);
+    await swipeToPage(tester, find.byType(PageView), 1);
 
     expect(find.text('Awards Night'), findsOneWidget);
     expect(find.text('Most Loved'), findsOneWidget);
@@ -108,7 +220,7 @@ void main() {
     expect(find.text('9 likes'), findsNWidgets(2));
   });
 
-  testWidgets('the deck holds exactly one page per panel', (tester) async {
+  testWidgets('the deck holds one page per panel plus the cover page', (tester) async {
     final recap = RecapPayload(
       periodLabel: 'Aug 10-16',
       cadence: 'weekly',
@@ -126,7 +238,7 @@ void main() {
 
     expect(find.byType(PageView), findsOneWidget);
     final pageView = tester.widget<PageView>(find.byType(PageView));
-    expect((pageView.childrenDelegate as SliverChildBuilderDelegate).estimatedChildCount, 2);
+    expect((pageView.childrenDelegate as SliverChildBuilderDelegate).estimatedChildCount, 3);
   });
 
   testWidgets('an unrecognised panel type is dropped by parsing, not rendering', (tester) async {
@@ -174,6 +286,7 @@ void main() {
     expect(recap.panels.single, isA<RecapAwardsPanel>());
 
     await pumpDeck(tester, recap);
+    await swipeToPage(tester, find.byType(PageView), 1);
     expect(tester.takeException(), isNull);
     expect(find.text('Awards Night'), findsOneWidget);
   });
@@ -224,6 +337,7 @@ void main() {
       ],
     );
     await pumpDeck(tester, recap);
+    await swipeToPage(tester, find.byType(PageView), 1);
 
     expect(tester.takeException(), isNull);
     expect(find.byIcon(Icons.image_not_supported_outlined), findsOneWidget);
@@ -260,6 +374,8 @@ void main() {
       ),
     ));
     await tester.pump();
+    await swipeToPage(tester, find.byType(PageView).at(0), 1);
+    await swipeToPage(tester, find.byType(PageView).at(1), 1);
 
     expect(tester.takeException(), isNull);
     expect(find.text('Ada'), findsNWidgets(2));

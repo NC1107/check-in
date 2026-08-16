@@ -36,6 +36,10 @@ class _RecapSettingsScreenState extends ConsumerState<RecapSettingsScreen> {
   late int _weekday;
   late int _hour;
   bool _saving = false;
+  // Whether this group's server advertises the titles capability - gates the "bestow
+  // titles" toggle in the generate sheet (see ServerInfo.titlesCapable's doc comment for
+  // why an older server can't simply ignore the field).
+  bool _titlesCapable = false;
   // Covers the whole generate flow, including the confirm-replace round trip - not just
   // the network call - so a double tap can't launch two on-demand requests while the first
   // is still in flight and the confirm dialog for it hasn't even shown yet.
@@ -62,6 +66,7 @@ class _RecapSettingsScreenState extends ConsumerState<RecapSettingsScreen> {
         _cadence = info.recapCadence;
         _weekday = info.recapWeekday;
         _hour = info.recapHour;
+        _titlesCapable = info.titlesCapable;
       });
     } catch (_) {
       // Keep the defaults; the toggles below still work and will save whatever is chosen.
@@ -144,7 +149,7 @@ class _RecapSettingsScreenState extends ConsumerState<RecapSettingsScreen> {
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
-      builder: (_) => const _GenerateRecapSheet(),
+      builder: (_) => _GenerateRecapSheet(titlesCapable: _titlesCapable),
     );
     if (result == null || !mounted) return;
     setState(() => _generating = true);
@@ -163,6 +168,7 @@ class _RecapSettingsScreenState extends ConsumerState<RecapSettingsScreen> {
         periodEnd: choice.end,
         panels: choice.panels,
         replace: replace,
+        bestowTitles: choice.bestowTitles,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Recap posted.')));
@@ -219,8 +225,8 @@ class _RecapSettingsScreenState extends ConsumerState<RecapSettingsScreen> {
           const Padding(
             padding: EdgeInsets.fromLTRB(20, 12, 20, 12),
             child: Text(
-              'A recap post rounds up the group\'s check-ins into a swipeable deck: '
-              'the best-received photos, and a set of awards for the period.',
+              'A recap post rounds up the group\'s check-ins into a swipeable deck of the '
+              'best-received photos for the period.',
               style: TextStyle(color: kFgMuted, fontSize: 12.5, height: 1.4),
             ),
           ),
@@ -302,19 +308,27 @@ class _RecapSettingsScreenState extends ConsumerState<RecapSettingsScreen> {
   }
 }
 
-/// What [_GenerateRecapSheet] hands back: the chosen period and which panels to include.
+/// What [_GenerateRecapSheet] hands back: the chosen period, which panels to include (just
+/// "collage" - see [recapValidPanels](server-side) - but kept as a list for the same
+/// generateRecap call shape the standing schedule uses), and whether to bestow titles.
 class _GenerateChoice {
-  const _GenerateChoice({required this.start, required this.end, required this.panels});
+  const _GenerateChoice(
+      {required this.start, required this.end, required this.panels, required this.bestowTitles});
 
   final DateTime start;
   final DateTime end;
   final List<String> panels;
+  final bool bestowTitles;
 }
 
 /// The on-demand generate sheet: a period preset (this week / this month / a custom
-/// range) and which panels to include.
+/// range) and, once the server has advertised it, whether to also bestow titles for that
+/// period. There is no panel picker any more - "collage" (The Wall) is the only panel v1
+/// generates; Awards Night was retired in favour of profile titles.
 class _GenerateRecapSheet extends StatefulWidget {
-  const _GenerateRecapSheet();
+  const _GenerateRecapSheet({required this.titlesCapable});
+
+  final bool titlesCapable;
 
   @override
   State<_GenerateRecapSheet> createState() => _GenerateRecapSheetState();
@@ -323,8 +337,7 @@ class _GenerateRecapSheet extends StatefulWidget {
 class _GenerateRecapSheetState extends State<_GenerateRecapSheet> {
   String _preset = 'week';
   DateTimeRange? _custom;
-  bool _wall = true;
-  bool _awards = true;
+  bool _bestowTitles = false;
 
   DateTimeRange get _range {
     final now = DateTime.now();
@@ -353,7 +366,6 @@ class _GenerateRecapSheetState extends State<_GenerateRecapSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final panels = [if (_wall) 'collage', if (_awards) 'awards'];
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
@@ -398,42 +410,32 @@ class _GenerateRecapSheetState extends State<_GenerateRecapSheet> {
                 ],
               ),
             ),
-            const Padding(
-              padding: EdgeInsets.fromLTRB(20, 18, 20, 4),
-              child: Text('PANELS',
-                  style: TextStyle(
-                      color: kFgMuted,
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.6)),
-            ),
-            CheckboxListTile(
-              value: _wall,
-              onChanged: (v) => setState(() => _wall = v ?? true),
-              activeColor: context.accent,
-              title: const Text('The Wall', style: TextStyle(color: kFgPrimary)),
-              subtitle:
-                  const Text('The ranked collage', style: TextStyle(color: kFgMuted, fontSize: 12)),
-            ),
-            CheckboxListTile(
-              value: _awards,
-              onChanged: (v) => setState(() => _awards = v ?? true),
-              activeColor: context.accent,
-              title: const Text('Awards Night', style: TextStyle(color: kFgPrimary)),
-              subtitle: const Text('This period\'s superlatives',
-                  style: TextStyle(color: kFgMuted, fontSize: 12)),
-            ),
+            if (widget.titlesCapable) ...[
+              const SizedBox(height: 4),
+              CheckboxListTile(
+                value: _bestowTitles,
+                onChanged: (v) => setState(() => _bestowTitles = v ?? false),
+                activeColor: context.accent,
+                title: const Text('Bestow titles', style: TextStyle(color: kFgPrimary)),
+                subtitle: const Text(
+                    'Also updates each qualifying member\'s profile title for this period.',
+                    style: TextStyle(color: kFgMuted, fontSize: 12)),
+              ),
+            ],
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
               child: SizedBox(
                 width: double.infinity,
                 child: FilledButton(
-                  onPressed: panels.isEmpty
-                      ? null
-                      : () => Navigator.pop(
-                            context,
-                            _GenerateChoice(start: _range.start, end: _range.end, panels: panels),
-                          ),
+                  onPressed: () => Navigator.pop(
+                    context,
+                    _GenerateChoice(
+                      start: _range.start,
+                      end: _range.end,
+                      panels: const ['collage'],
+                      bestowTitles: _bestowTitles,
+                    ),
+                  ),
                   style: FilledButton.styleFrom(backgroundColor: context.accent),
                   child: const Text('Generate'),
                 ),

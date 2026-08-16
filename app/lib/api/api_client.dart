@@ -478,11 +478,17 @@ class ApiClient {
   /// periodEnd) covering [panels] (admin only). A duplicate request for the same period and
   /// panel set is refused with a [RecapAlreadyExists] exception unless [replace] is true, in
   /// which case the prior one is deleted and replaced in a single transaction.
+  ///
+  /// [bestowTitles], when true, also runs the title-bestowal pass for this period. It must
+  /// only ever be passed true against a server that has advertised [ServerInfo.titlesCapable]
+  /// - and even then, the key is omitted entirely rather than sent as `false`, since this
+  /// server rejects unknown JSON fields and an older one has nowhere to put it.
   Future<Post> generateRecap({
     required DateTime periodStart,
     required DateTime periodEnd,
     required List<String> panels,
     bool replace = false,
+    bool bestowTitles = false,
   }) async {
     try {
       final r = await _dio.post('/api/admin/recaps', data: {
@@ -490,6 +496,7 @@ class ApiClient {
         'periodEnd': periodEnd.toUtc().toIso8601String(),
         'panels': panels,
         'replace': replace,
+        if (bestowTitles) 'bestowTitles': true,
       });
       return Post.fromJson(r.data as Map<String, dynamic>);
     } on DioException catch (e) {
