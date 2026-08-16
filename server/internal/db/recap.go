@@ -506,40 +506,60 @@ func (d *DB) FindManualRecap(ctx context.Context, start, end time.Time, panels [
 // CreateRecapPost writes a recap post (kind = 'recap', authored by the group admin, no
 // media) and its recaps row in one transaction.
 //
-// For a scheduled recap, a Postgres advisory lock scoped to (cadence, periodStart)
-// serializes any concurrent attempt at the very same period - a restart mid-tick, or two
-// processes racing - so the existence check that follows is race-free; the recaps table's
-// partial unique index is a hard backstop in case that lock is ever bypassed. inserted is
-// false (with no error) when another attempt already won the period.
+// A Postgres advisory lock, scoped to whatever makes a recap unique for its origin - see
+// recapLockKey - serializes every concurrent attempt at the exact same recap: two
+// scheduler ticks, two processes, or two identical on-demand requests landing at once. The
+// existence check that decides whether to insert runs inside that same lock, in the same
+// transaction as the insert - closing the gap a separate pre-check (FindManualRecap, or the
+// scheduler's RecapExistsForPeriod) followed by a separate insert would otherwise leave
+// open. The recaps table's partial unique index (scheduled origin only) is a hard backstop
+// in case the lock is ever bypassed.
 //
-// For a manual recap, replacePostID, when non-nil, deletes that post first (its recaps row
-// cascades) so a replace is delete-then-insert in one transaction, never a moment with
-// both or neither. A replace never re-pushes - see the caller.
-func (d *DB) CreateRecapPost(ctx context.Context, adminID int64, spec RecapSpec, payload RecapPayload, replacePostID *int64) (postID int64, inserted bool, err error) {
+// inserted is false when a duplicate already exists and replacePostID is nil; conflictID
+// is that existing post's id for a manual recap (0 for scheduled, which has no replace
+// flow - the scheduler just skips). replacePostID, when non-nil, deletes that post first
+// (its recaps row cascades) so a replace is delete-then-insert in one transaction, never a
+// moment with both or neither. A replace never re-pushes - see the caller.
+func (d *DB) CreateRecapPost(ctx context.Context, adminID int64, spec RecapSpec, payload RecapPayload, replacePostID *int64) (postID int64, inserted bool, conflictID int64, err error) {
 	tx, err := d.Pool.Begin(ctx)
 	if err != nil {
-		return 0, false, err
+		return 0, false, 0, err
 	}
 	defer tx.Rollback(ctx)
 
+	panels := sortedPanelTypes(payload.Panels)
+	lockKey := recapLockKey(spec, panels)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, lockKey); err != nil {
+		return 0, false, 0, err
+	}
+
 	if spec.Origin == "scheduled" {
-		lockKey := fmt.Sprintf("recap:%s:%s", spec.Cadence, spec.PeriodStart.UTC().Format(time.RFC3339))
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, lockKey); err != nil {
-			return 0, false, err
-		}
 		var exists bool
 		if err := tx.QueryRow(ctx, `
 			SELECT EXISTS(SELECT 1 FROM recaps WHERE cadence = $1 AND period_start = $2 AND origin = 'scheduled')`,
 			spec.Cadence, spec.PeriodStart).Scan(&exists); err != nil {
-			return 0, false, err
+			return 0, false, 0, err
 		}
 		if exists {
-			return 0, false, nil
+			return 0, false, 0, nil
+		}
+	} else {
+		var existingID int64
+		err := tx.QueryRow(ctx, `
+			SELECT post_id FROM recaps
+			WHERE origin = 'manual' AND period_start = $1 AND period_end = $2 AND panels = $3
+			ORDER BY created_at DESC LIMIT 1`, spec.PeriodStart, spec.PeriodEnd, panels).Scan(&existingID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return 0, false, 0, err
+		}
+		if err == nil && replacePostID == nil {
+			return 0, false, existingID, nil
 		}
 	}
+
 	if replacePostID != nil {
 		if _, err := tx.Exec(ctx, `DELETE FROM posts WHERE id = $1`, *replacePostID); err != nil {
-			return 0, false, err
+			return 0, false, 0, err
 		}
 	}
 
@@ -547,25 +567,39 @@ func (d *DB) CreateRecapPost(ctx context.Context, adminID int64, spec RecapSpec,
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO posts (author_id, kind, body) VALUES ($1, 'recap', $2)
 		RETURNING id`, adminID, body).Scan(&postID); err != nil {
-		return 0, false, err
+		return 0, false, 0, err
 	}
 
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
-		return 0, false, err
+		return 0, false, 0, err
 	}
-	panels := sortedPanelTypes(payload.Panels)
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO recaps (post_id, cadence, origin, period_start, period_end, panels, payload)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		postID, spec.Cadence, spec.Origin, spec.PeriodStart, spec.PeriodEnd, panels, payloadJSON); err != nil {
-		return 0, false, err
+		return 0, false, 0, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return 0, false, err
+		return 0, false, 0, err
 	}
-	return postID, true, nil
+	return postID, true, 0, nil
+}
+
+// recapLockKey scopes CreateRecapPost's advisory lock to what makes a recap unique for its
+// origin: (cadence, periodStart) for a scheduled recap - panels never vary for it, see
+// recapV1Panels - or (periodStart, periodEnd, panels) for a manual one, matching
+// FindManualRecap's own uniqueness criteria exactly, so both take the same lock for the
+// same recap.
+func recapLockKey(spec RecapSpec, sortedPanels []string) string {
+	if spec.Origin == "scheduled" {
+		return fmt.Sprintf("recap:scheduled:%s:%s", spec.Cadence, spec.PeriodStart.UTC().Format(time.RFC3339))
+	}
+	return fmt.Sprintf("recap:manual:%s:%s:%s",
+		spec.PeriodStart.UTC().Format(time.RFC3339),
+		spec.PeriodEnd.UTC().Format(time.RFC3339),
+		strings.Join(sortedPanels, ","))
 }
 
 // sortedPanelTypes extracts and sorts a payload's panel types, for storage in recaps.panels

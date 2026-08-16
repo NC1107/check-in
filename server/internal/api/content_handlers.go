@@ -42,7 +42,7 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	posts, err := s.db.Feed(r.Context(), viewer.ID, authorID, locations, before, beforeID, limit)
+	posts, err := s.db.Feed(r.Context(), viewer.ID, authorID, locations, before, beforeID, limit, false)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
@@ -111,7 +111,9 @@ func (s *Server) handleGetUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleUserPosts returns one person's timeline (git-history style): their posts in
-// reverse-chronological order with cursor pagination.
+// reverse-chronological order with cursor pagination. Recap posts are excluded even for
+// the admin whose id authors them - a recap is a group artifact, not something they
+// personally posted, and does not belong on their profile.
 func (s *Server) handleUserPosts(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
@@ -124,7 +126,7 @@ func (s *Server) handleUserPosts(w http.ResponseWriter, r *http.Request) {
 			before = &t
 		}
 	}
-	posts, err := s.db.Feed(r.Context(), userFrom(r).ID, &id, nil, before, nil, parseLimit(r, 30, 100))
+	posts, err := s.db.Feed(r.Context(), userFrom(r).ID, &id, nil, before, nil, parseLimit(r, 30, 100), true)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
@@ -222,7 +224,10 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Coordinates ride along with location and are dropped the same way when there's no
-	// attachment to have carried GPS in the first place.
+	// attachment to have carried GPS in the first place. Whatever the client sent is
+	// clamped and rounded to 2 decimal places in CreatePost itself, not here - so a
+	// modified client or a raw API call cannot smuggle full-precision GPS past this
+	// handler by any other path into CreatePost.
 	var lat, lng *float64
 	if len(mediaIDs) > 0 {
 		lat, lng = req.Lat, req.Lng

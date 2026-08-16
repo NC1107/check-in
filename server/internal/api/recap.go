@@ -24,6 +24,11 @@ const recapTick = 10 * time.Minute
 // admin choose) - the map and social-graph panels are v1.5.
 var recapV1Panels = []string{"awards", "collage"}
 
+// recapMaxManualSpan bounds an on-demand recap's custom period: a year plus a day of slack
+// for the query's exclusive end, generous enough for any legitimate "this year" request
+// while ruling out an accidental (or malicious) span that would scan the whole table.
+const recapMaxManualSpan = 366 * 24 * time.Hour
+
 // StartRecapScheduler runs the periodic-recap loop until ctx is cancelled. Unlike
 // StartDigestScheduler it is NOT gated on push being configured: a recap is a feed post,
 // not a push-only feature, so a push-less self-hoster still gets one - only the
@@ -141,7 +146,7 @@ func (s *Server) generateScheduledRecap(ctx context.Context, cadence string, sta
 		log.Printf("generateScheduledRecap: admin: %v", err)
 		return
 	}
-	postID, inserted, err := s.db.CreateRecapPost(ctx, adminID, spec, payload, nil)
+	postID, inserted, _, err := s.db.CreateRecapPost(ctx, adminID, spec, payload, nil)
 	if err != nil {
 		log.Printf("generateScheduledRecap: create: %v", err)
 		return
@@ -211,6 +216,10 @@ func (s *Server) handleGenerateRecap(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "periodEnd must be after periodStart")
 		return
 	}
+	if end.Sub(start) > recapMaxManualSpan {
+		writeErr(w, http.StatusBadRequest, "the period can't be longer than 366 days")
+		return
+	}
 	panels := sortedUniquePanels(req.Panels)
 	if len(panels) == 0 {
 		writeErr(w, http.StatusBadRequest, "panels must include at least one of: collage, awards")
@@ -253,15 +262,21 @@ func (s *Server) handleGenerateRecap(w http.ResponseWriter, r *http.Request) {
 		replacePostID = &existingID
 	}
 	me := userFrom(r)
-	postID, inserted, err := s.db.CreateRecapPost(ctx, me.ID, spec, payload, replacePostID)
+	postID, inserted, conflictID, err := s.db.CreateRecapPost(ctx, me.ID, spec, payload, replacePostID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
 	if !inserted {
-		// Only the scheduled path's advisory lock can produce a no-op insert; a manual
-		// origin never takes it. Stay honest if that ever changes.
-		writeErr(w, http.StatusConflict, "a recap for this period already exists")
+		// The pre-check above (FindManualRecap) found nothing, or replace was requested
+		// against a stale id - but CreateRecapPost's own lock-guarded check, which is the
+		// authoritative one, found a duplicate anyway: another request for this exact
+		// period and panel set won the race between the pre-check and here. Same 409 shape
+		// either way, so the client's replace flow handles it identically.
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":  "a recap for this period and these panels already exists",
+			"postId": conflictID,
+		})
 		return
 	}
 	// A replace is a correction, not a new event - it never re-pushes.

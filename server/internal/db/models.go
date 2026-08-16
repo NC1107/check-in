@@ -118,6 +118,14 @@ type Post struct {
 	Location  *string     `json:"location,omitempty"` // coarse "City, Country", optional
 	CreatedAt time.Time   `json:"createdAt"`
 
+	// Lat/Lng are the coordinates behind Location: clamped to their valid range and
+	// rounded to 2 decimal places (~1.1km) server-side regardless of what the client sent
+	// (see normalizeCoord), so they are never more precise than the "City, Country" string
+	// already carries. Stored for the v1.5 map panel; exposed now since a rounded
+	// coordinate is no more sensitive than the place name sitting right next to it.
+	Lat *float64 `json:"lat,omitempty"`
+	Lng *float64 `json:"lng,omitempty"`
+
 	// CrossPostID groups the copies of one post shared to several groups at once, so the
 	// multi-group client can collapse them into a single card. Null for a single-group post.
 	CrossPostID *string `json:"crossPostId,omitempty"`

@@ -52,6 +52,10 @@ ALTER TABLE server_config ADD COLUMN recap_since   TIMESTAMPTZ NOT NULL DEFAULT 
 -- Coordinates ship in v1 even though the map panel is v1.5, so two or three weeks of real
 -- data have accumulated by the time it needs them. The client rounds to 2 decimal places
 -- (~1.1km) before sending - strictly coarser than the "City, Country" string already
--- stored, so this leaks nothing new (see 0003's contract for that column).
-ALTER TABLE posts ADD COLUMN lat REAL;
-ALTER TABLE posts ADD COLUMN lng REAL;
+-- stored, so this leaks nothing new (see 0003's contract for that column). DOUBLE
+-- PRECISION, not REAL: the value is always rounded to 2 decimal places before it is
+-- written (normalizeCoord in queries.go), and REAL's float32 representation cannot hold
+-- that round trip exactly, which would make a stored value compare unequal to the one that
+-- was written.
+ALTER TABLE posts ADD COLUMN lat DOUBLE PRECISION;
+ALTER TABLE posts ADD COLUMN lng DOUBLE PRECISION;

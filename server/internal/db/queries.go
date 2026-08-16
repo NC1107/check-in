@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"time"
 
@@ -746,10 +747,14 @@ func (d *DB) SetUserProfileMedia(ctx context.Context, userID, mediaID int64) err
 // from the caller: the attachments are already being read here to check ownership, and a
 // post whose kind disagrees with its contents is a rendering bug on every client.
 //
-// lat/lng are the coordinates the client read at capture time, rounded to 2 decimal
-// places; nil for a post with no GPS, and always nil for a text post (mirrors location).
-// Stored for the v1.5 map panel - nothing reads them back yet.
+// lat/lng are the coordinates the client claims to have read at capture time; nil for a
+// post with no GPS, and always nil for a text post (mirrors location). They are clamped
+// and rounded here - at the write boundary, not trusted from any caller - so a modified
+// client or a raw API call can never store more precision than the app itself ever sends.
+// Stored for the v1.5 map panel.
 func (d *DB) CreatePost(ctx context.Context, authorID int64, body string, mediaIDs []int64, location *string, peopleIDs []int64, crossPostID *string, lat, lng *float64) (Post, error) {
+	lat, lng = normalizeCoords(lat, lng)
+
 	var p Post
 	tx, err := d.Pool.Begin(ctx)
 	if err != nil {
@@ -770,9 +775,9 @@ func (d *DB) CreatePost(ctx context.Context, authorID int64, body string, mediaI
 	err = tx.QueryRow(ctx, `
 		INSERT INTO posts (author_id, kind, body, media_id, location, cross_post_id, lat, lng)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id, author_id, kind, body, media_id, location, created_at, cross_post_id`,
+		RETURNING id, author_id, kind, body, media_id, location, created_at, cross_post_id, lat, lng`,
 		authorID, kind, body, cover, location, crossPostID, lat, lng,
-	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID)
+	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng)
 	if err != nil {
 		return p, err
 	}
@@ -884,6 +889,31 @@ func kindFor(media []PostMedia) string {
 	return "image"
 }
 
+// normalizeCoords clamps lat/lng into their valid ranges and rounds each to 2 decimal
+// places (~1.1km), or returns (nil, nil) unless both are present - a lone coordinate is
+// meaningless. The client already rounds before sending (home_shell.dart's _roundCoord),
+// but that is advisory only; this is the actual guarantee, since the data accumulates
+// permanently once a post exists.
+func normalizeCoords(lat, lng *float64) (*float64, *float64) {
+	if lat == nil || lng == nil {
+		return nil, nil
+	}
+	nlat := normalizeCoord(*lat, -90, 90)
+	nlng := normalizeCoord(*lng, -180, 180)
+	return &nlat, &nlng
+}
+
+// normalizeCoord clamps v to [min, max] and rounds it to 2 decimal places.
+func normalizeCoord(v, min, max float64) float64 {
+	if v < min {
+		v = min
+	}
+	if v > max {
+		v = max
+	}
+	return math.Round(v*100) / 100
+}
+
 // dedupeExcluding returns the unique ids in order, dropping any equal to exclude.
 func dedupeExcluding(ids []int64, exclude int64) []int64 {
 	if len(ids) == 0 {
@@ -908,9 +938,14 @@ func dedupeExcluding(ids []int64, exclude int64) []int64 {
 // filtered to a single author, to one or more locations (a post matches if its location is
 // any of them; empty/nil means no location filter), and/or to posts created strictly before
 // a cursor time.
-func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, locations []string, before *time.Time, beforeID *int64, limit int) ([]Post, error) {
+//
+// excludeRecap drops kind = 'recap' posts entirely - used for a member's personal profile
+// timeline (handleUserPosts), where a recap is a group artifact attributed to the admin
+// rather than something they personally posted, and does not belong in their history. The
+// main feed passes false: recaps belong there like any other post.
+func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, locations []string, before *time.Time, beforeID *int64, limit int, excludeRecap bool) ([]Post, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id,
+		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id, p.lat, p.lng,
 		       CASE WHEN p.kind = 'recap' THEN sc.name ELSE u.name END,
 		       CASE WHEN p.kind = 'recap' THEN NULL ELSE u.profile_media_id END,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
@@ -928,8 +963,9 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 		  AND u.status = 'active'
 		  AND (p.kind = 'recap' OR p.author_id NOT IN (
 		      SELECT blocked_id FROM user_blocks WHERE blocker_id = $1))
+		  AND ($7::bool = FALSE OR p.kind <> 'recap')
 		ORDER BY p.created_at DESC, p.id DESC
-		LIMIT $5`, viewerID, authorID, locations, before, limit, beforeID)
+		LIMIT $5`, viewerID, authorID, locations, before, limit, beforeID, excludeRecap)
 	if err != nil {
 		return nil, err
 	}
@@ -938,7 +974,7 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 	for rows.Next() {
 		var p Post
 		var preview, media, people, recap []byte
-		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID,
+		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
 			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people, &recap); err != nil {
 			return nil, err
 		}
@@ -990,7 +1026,7 @@ func (d *DB) Locations(ctx context.Context) ([]LocationCount, error) {
 // (case-insensitive substring), newest first — powering full-content feed search.
 func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limit int) ([]Post, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id,
+		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id, p.lat, p.lng,
 		       CASE WHEN p.kind = 'recap' THEN sc.name ELSE u.name END,
 		       CASE WHEN p.kind = 'recap' THEN NULL ELSE u.profile_media_id END,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
@@ -1017,7 +1053,7 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 	for rows.Next() {
 		var p Post
 		var preview, media, people, recap []byte
-		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID,
+		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
 			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people, &recap); err != nil {
 			return nil, err
 		}
@@ -1039,7 +1075,7 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 	var p Post
 	var preview, media, people, recap []byte
 	err := d.Pool.QueryRow(ctx, `
-		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id,
+		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id, p.lat, p.lng,
 		       CASE WHEN p.kind = 'recap' THEN sc.name ELSE u.name END,
 		       CASE WHEN p.kind = 'recap' THEN NULL ELSE u.profile_media_id END,
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
@@ -1052,7 +1088,7 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 		WHERE p.id = $2 AND u.status = 'active'
 		  AND (p.kind = 'recap' OR p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1))`,
 		viewerID, postID,
-	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID,
+	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
 		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people, &recap)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, ErrNotFound
