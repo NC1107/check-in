@@ -20,7 +20,9 @@ jobs:
         image: postgres:16
         env:
           POSTGRES_USER: checkin
-          POSTGRES_PASSWORD: checkin
+          # Not a secret - the database lives and dies inside this job - but a literal
+          # here trips secret scanners on every future edit; a per-run value does not.
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}
           POSTGRES_DB: checkin_test
         ports:
           - 5432:5432
@@ -41,7 +43,7 @@ jobs:
       - run: go build ./...
       - run: go test ./... -race
         env:
-          TESTDB_URL: postgres://checkin:checkin@localhost:5432/checkin_test?sslmode=disable
+          TESTDB_URL: postgres://checkin:ci-${{ github.run_id }}@localhost:5432/checkin_test?sslmode=disable
 
   app:
     name: App (Flutter)
