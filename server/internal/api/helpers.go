@@ -104,3 +104,18 @@ func (s *Server) rateLimitAuth(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// rateLimitUser throttles a content route by the member making the request. Mount it inside
+// the requireAuth group: the user it keys on is the one that middleware attached, and
+// outside it every request would share the zero-id bucket.
+func (s *Server) rateLimitUser(lim *rateLimiter) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !lim.allow(strconv.FormatInt(userFrom(r).ID, 10)) {
+				writeErr(w, http.StatusTooManyRequests, "too many requests, slow down")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}

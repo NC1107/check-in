@@ -27,6 +27,25 @@ jobs:
     defaults:
       run:
         working-directory: server
+    # Same throwaway database as ci.yml, for the same reason: without TESTDB_URL the
+    # DB-backed handler tests skip, and a release must not be gated on a suite that quietly
+    # ran nothing.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: checkin
+          # Not a secret - the database lives and dies inside this job - but a literal
+          # here trips secret scanners on every future edit; a per-run value does not.
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}
+          POSTGRES_DB: checkin_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -38,6 +57,8 @@ jobs:
       - run: go vet ./...
       - run: go build ./...
       - run: go test ./... -race
+        env:
+          TESTDB_URL: postgres://checkin:ci-${{ github.run_id }}@localhost:5432/checkin_test?sslmode=disable
 
   test-app:
     name: Test app (Flutter)

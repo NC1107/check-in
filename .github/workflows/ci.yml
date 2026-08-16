@@ -12,6 +12,25 @@ jobs:
     defaults:
       run:
         working-directory: server
+    # Throwaway database for the DB-backed handler tests. They skip themselves when
+    # TESTDB_URL is unset, so `go test ./...` on a laptop with no Postgres stays green - CI
+    # always sets it, which is what keeps that skip from quietly becoming permanent.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: checkin
+          # Not a secret - the database lives and dies inside this job - but a literal
+          # here trips secret scanners on every future edit; a per-run value does not.
+          POSTGRES_PASSWORD: ci-${{ github.run_id }}
+          POSTGRES_DB: checkin_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
@@ -23,6 +42,8 @@ jobs:
       - run: go vet ./...
       - run: go build ./...
       - run: go test ./... -race
+        env:
+          TESTDB_URL: postgres://checkin:ci-${{ github.run_id }}@localhost:5432/checkin_test?sslmode=disable
 
   app:
     name: App (Flutter)
