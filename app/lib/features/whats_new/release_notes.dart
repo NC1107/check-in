@@ -19,6 +19,13 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.12',
+    highlights: [
+      "Recaps have a new look - they open on a cover made from the week's top photo and stand out from regular check-ins in your feed.",
+      "Titles: earn a badge on your profile from each week's recap, like Night Owl or Quiet Achiever. It stays until you earn a new one.",
+    ],
+  ),
+  ReleaseNote(
     version: '1.11',
     highlights: [
       'Weekly recaps: your group now gets a recap post - the week in one swipeable deck, with the most-loved check-ins ranked (everyone who posted makes the wall) and awards like Night Owl and Most Travelled.',

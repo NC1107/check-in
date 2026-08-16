@@ -229,7 +229,7 @@ func TestSelectCollageCardsEmpty(t *testing.T) {
 	}
 }
 
-// ---- Awards Night ----
+// ---- title bestowal ----
 
 func award(userID int64, qualifies bool, value int, display string, postID int64) awardEntry {
 	if !qualifies {
@@ -238,30 +238,35 @@ func award(userID int64, qualifies bool, value int, display string, postID int64
 	return awardEntry{Qualifies: true, Value: value, DisplayValue: display, PostID: postID}
 }
 
-func TestSelectAwardsOnlyEmitsQualifyingCategories(t *testing.T) {
+func TestBestAwardPerMemberOnlyIncludesQualifyingMembers(t *testing.T) {
 	candidates := []awardCandidate{
 		{UserID: 1, UserName: "Ada", MostLiked: award(1, true, 9, "9 likes", 1)},
+		{UserID: 2, UserName: "Ben"}, // qualifies for nothing
 	}
-	awards := selectAwards(candidates)
-	if len(awards) != 1 {
-		t.Fatalf("got %d awards, want 1 (only most_liked has a qualifier)", len(awards))
+	best := bestAwardPerMember(candidates)
+	if len(best) != 1 {
+		t.Fatalf("got %d entries, want 1 (only Ada qualifies for anything)", len(best))
 	}
-	if awards[0].ID != "most_liked" || awards[0].UserID != 1 {
-		t.Errorf("award = %+v, want most_liked for user 1", awards[0])
+	if best[1] != "most_liked" {
+		t.Errorf("best[1] = %q, want most_liked", best[1])
 	}
-}
-
-func TestSelectAwardsEmptyInput(t *testing.T) {
-	if got := selectAwards(nil); got != nil {
-		t.Errorf("selectAwards(nil) = %v, want nil", got)
+	if _, ok := best[2]; ok {
+		t.Error("Ben has an entry despite qualifying for no award")
 	}
 }
 
-// TestSelectAwardsSpreadsWhenPossible pins the spreading rule: when Ada is the top
-// qualifier in two categories and Ben is a genuine (if lesser) qualifier in one of them,
-// Ada keeps the category she leads outright and Ben gets the other rather than Ada
-// sweeping both.
-func TestSelectAwardsSpreadsWhenPossible(t *testing.T) {
+func TestBestAwardPerMemberEmptyInput(t *testing.T) {
+	if got := bestAwardPerMember(nil); got != nil {
+		t.Errorf("bestAwardPerMember(nil) = %v, want nil", got)
+	}
+}
+
+// TestBestAwardPerMemberDoesNotSpread pins the deliberate behaviour difference from the
+// retired Awards Night panel: bestAwardPerMember never resolves contention between
+// members, so when Ada is the top qualifier in two categories, both are her "best" and
+// both come back for her - even though Ben also qualifies in one of them. A title is each
+// member's own best showing, never redirected to spread coverage.
+func TestBestAwardPerMemberDoesNotSpread(t *testing.T) {
 	candidates := []awardCandidate{
 		{
 			UserID: 1, UserName: "Ada",
@@ -273,37 +278,30 @@ func TestSelectAwardsSpreadsWhenPossible(t *testing.T) {
 			NightOwl: award(2, true, 1200, "8:00 PM", 2),
 		},
 	}
-	awards := selectAwards(candidates)
-	byID := map[string]RecapAward{}
-	for _, a := range awards {
-		byID[a.ID] = a
+	best := bestAwardPerMember(candidates)
+	if best[1] != "most_liked" {
+		t.Errorf("best[1] = %q, want most_liked (Ada's strongest of her two qualifying categories)", best[1])
 	}
-	if byID["most_liked"].UserID != 1 {
-		t.Errorf("most_liked winner = %d, want 1 (Ada, the only qualifier)", byID["most_liked"].UserID)
-	}
-	if byID["night_owl"].UserID != 2 {
-		t.Errorf("night_owl winner = %d, want 2 (Ben) - Ada should keep most_liked and let Ben "+
-			"have night_owl rather than sweeping both", byID["night_owl"].UserID)
+	if best[2] != "night_owl" {
+		t.Errorf("best[2] = %q, want night_owl (Ben's only qualifying category, regardless of Ada)", best[2])
 	}
 }
 
-// TestSelectAwardsNeverWithholdsASoleQualifier pins that spreading never costs an award
-// its only qualifier: when Ada is the sole qualifier in two categories, she wins both.
-func TestSelectAwardsNeverWithholdsASoleQualifier(t *testing.T) {
+// TestBestAwardPerMemberTiebreaksByAwardOrder pins that when a member ranks equally well
+// (rank 0, i.e. sole or top qualifier) in more than one category, awardOrder's position -
+// not qualification order - decides which one wins as their "best".
+func TestBestAwardPerMemberTiebreaksByAwardOrder(t *testing.T) {
 	candidates := []awardCandidate{
 		{
 			UserID: 1, UserName: "Ada",
-			MostLiked: award(1, true, 9, "9 likes", 1),
-			NightOwl:  award(1, true, 1380, "11:00 PM", 1),
+			// Ada is the sole qualifier in both, so she ranks 0th in each - a genuine tie
+			// that only awardOrder's position (most_liked before longest_thread) can break.
+			LongestThread: award(1, true, 4, "4 comments", 1),
+			MostLiked:     award(1, true, 9, "9 likes", 1),
 		},
 	}
-	awards := selectAwards(candidates)
-	if len(awards) != 2 {
-		t.Fatalf("got %d awards, want 2 (both categories have exactly one qualifier: Ada)", len(awards))
-	}
-	for _, a := range awards {
-		if a.UserID != 1 {
-			t.Errorf("award %s went to user %d, want 1 (Ada, the sole qualifier)", a.ID, a.UserID)
-		}
+	best := bestAwardPerMember(candidates)
+	if best[1] != "most_liked" {
+		t.Errorf("best[1] = %q, want most_liked (earlier in awardOrder than longest_thread)", best[1])
 	}
 }

@@ -61,6 +61,12 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		// (DisallowUnknownFields), so a client must only send any of them once it has seen
 		// this flag - otherwise a new client would 400 every post against an old server.
 		"recap": true,
+		// titles is this server's capability signal for the on-demand recap endpoint's
+		// bestowTitles field: a server predating it rejects unknown JSON fields
+		// (DisallowUnknownFields), so a client must only ever send bestowTitles once this is
+		// true - and even then, only when true (never as an explicit false) so the same
+		// omit-unless-true rule that guards every other capability-gated field here holds.
+		"titles": true,
 	}
 	if settings, err := s.db.GetRecapSettings(r.Context()); err == nil {
 		resp["recapCadence"] = settings.Cadence

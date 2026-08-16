@@ -129,9 +129,9 @@ func (d *DB) CreateUser(ctx context.Context, phone, name, firstName, lastName st
 	err := d.Pool.QueryRow(ctx, `
 		INSERT INTO users (phone, name, first_name, last_name, birthday, profile_media_id, password_hash, is_admin)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING id, phone, name, first_name, last_name, birthday, profile_media_id, is_admin, status, created_at`,
+		RETURNING id, phone, name, first_name, last_name, birthday, profile_media_id, is_admin, status, created_at, title, title_set_at`,
 		phone, name, firstName, lastName, birthday, profileMediaID, passwordHash, isAdmin,
-	).Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt)
+	).Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt, &u.Title, &u.TitleSetAt)
 	return u, err
 }
 
@@ -140,9 +140,9 @@ func (d *DB) GetUserByPhone(ctx context.Context, phone string) (User, string, er
 	var u User
 	var hash string
 	err := d.Pool.QueryRow(ctx, `
-		SELECT id, phone, name, first_name, last_name, birthday, profile_media_id, is_admin, status, created_at, password_hash
+		SELECT id, phone, name, first_name, last_name, birthday, profile_media_id, is_admin, status, created_at, title, title_set_at, password_hash
 		FROM users WHERE phone = $1`, phone,
-	).Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt, &hash)
+	).Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt, &u.Title, &u.TitleSetAt, &hash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return u, "", ErrNotFound
 	}
@@ -202,9 +202,9 @@ func (d *DB) SetPasswordAndClearReset(ctx context.Context, userID int64, passwor
 func (d *DB) GetUser(ctx context.Context, id int64) (User, error) {
 	var u User
 	err := d.Pool.QueryRow(ctx, `
-		SELECT id, phone, name, first_name, last_name, birthday, profile_media_id, is_admin, status, created_at
+		SELECT id, phone, name, first_name, last_name, birthday, profile_media_id, is_admin, status, created_at, title, title_set_at
 		FROM users WHERE id = $1 AND status = 'active'`, id,
-	).Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt)
+	).Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt, &u.Title, &u.TitleSetAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return u, ErrNotFound
 	}
@@ -215,7 +215,7 @@ func (d *DB) GetUser(ctx context.Context, id int64) (User, error) {
 // by name. An empty query returns all users.
 func (d *DB) SearchUsers(ctx context.Context, query string, limit int) ([]User, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT id, phone, name, first_name, last_name, birthday, profile_media_id, is_admin, status, created_at
+		SELECT id, phone, name, first_name, last_name, birthday, profile_media_id, is_admin, status, created_at, title, title_set_at
 		FROM users
 		WHERE status = 'active' AND ($1 = '' OR name ILIKE '%' || $1 || '%')
 		ORDER BY name ASC
@@ -227,7 +227,7 @@ func (d *DB) SearchUsers(ctx context.Context, query string, limit int) ([]User, 
 	var users []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt, &u.Title, &u.TitleSetAt); err != nil {
 			return nil, err
 		}
 		users = append(users, u)
@@ -238,7 +238,7 @@ func (d *DB) SearchUsers(ctx context.Context, query string, limit int) ([]User, 
 // ListAllUsers returns all users including revoked ones for the admin view.
 func (d *DB) ListAllUsers(ctx context.Context) ([]User, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT id, phone, name, first_name, last_name, birthday, profile_media_id, is_admin, status, created_at
+		SELECT id, phone, name, first_name, last_name, birthday, profile_media_id, is_admin, status, created_at, title, title_set_at
 		FROM users ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -247,7 +247,7 @@ func (d *DB) ListAllUsers(ctx context.Context) ([]User, error) {
 	var users []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt, &u.Title, &u.TitleSetAt); err != nil {
 			return nil, err
 		}
 		users = append(users, u)
@@ -261,9 +261,9 @@ func (d *DB) UpdateUserProfile(ctx context.Context, id int64, name, firstName, l
 	var u User
 	err := d.Pool.QueryRow(ctx, `
 		UPDATE users SET name = $2, first_name = $3, last_name = $4 WHERE id = $1
-		RETURNING id, phone, name, first_name, last_name, birthday, profile_media_id, is_admin, status, created_at`,
+		RETURNING id, phone, name, first_name, last_name, birthday, profile_media_id, is_admin, status, created_at, title, title_set_at`,
 		id, name, firstName, lastName,
-	).Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt)
+	).Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt, &u.Title, &u.TitleSetAt)
 	return u, err
 }
 
@@ -467,11 +467,11 @@ func (d *DB) CreateSession(ctx context.Context, userID int64, tokenHash string, 
 func (d *DB) UserForToken(ctx context.Context, tokenHash string) (User, error) {
 	var u User
 	err := d.Pool.QueryRow(ctx, `
-		SELECT u.id, u.phone, u.name, u.first_name, u.last_name, u.birthday, u.profile_media_id, u.is_admin, u.status, u.created_at
+		SELECT u.id, u.phone, u.name, u.first_name, u.last_name, u.birthday, u.profile_media_id, u.is_admin, u.status, u.created_at, u.title, u.title_set_at
 		FROM sessions s
 		JOIN users u ON u.id = s.user_id
 		WHERE s.token_hash = $1 AND s.expires_at > now() AND u.status = 'active'`, tokenHash,
-	).Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt)
+	).Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt, &u.Title, &u.TitleSetAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return u, ErrNotFound
 	}

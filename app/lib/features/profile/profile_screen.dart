@@ -222,6 +222,7 @@ class _MyProfileScreenState extends ConsumerState<MyProfileScreen> {
           const SizedBox(height: 4),
           Text('$count ${count == 1 ? 'check-in' : 'check-ins'}',
               style: const TextStyle(color: kFgMuted, fontSize: 13)),
+          if (_titleLabels[user.title] case final label?) _titleChip(context, label),
           if (user.birthdayLabel.isNotEmpty) _birthdayLine(user.birthdayLabel),
         ],
       ),
@@ -233,6 +234,41 @@ class _MyProfileScreenState extends ConsumerState<MyProfileScreen> {
 Widget _birthdayLine(String label) => Padding(
       padding: const EdgeInsets.only(top: 5),
       child: Text('🎂 $label', style: const TextStyle(color: kFgMuted, fontSize: 13)),
+    );
+
+/// Maps a bestowed title id (an award id from the recap system - see recap_card.dart's
+/// Awards Night, now retired in favour of these) to its display label. longestThread reads
+/// better as a person's title phrased as "Conversation Starter" than its old panel label
+/// "Longest Thread". An id this build doesn't recognise (a future server's new award) has
+/// no entry here and is silently skipped by the call sites below, rather than showing a raw
+/// id like "some_new_award".
+const _titleLabels = {
+  'most_liked': 'Most Loved',
+  'night_owl': 'Night Owl',
+  'early_bird': 'Early Bird',
+  'most_travelled': 'Most Travelled',
+  'chatterbox': 'Chatterbox',
+  'biggest_fan': 'Biggest Fan',
+  'quiet_achiever': 'Quiet Achiever',
+  'most_tagged': 'Most Tagged',
+  'longest_thread': 'Conversation Starter',
+};
+
+/// A small pill for a member's bestowed title (e.g. "Quiet Achiever"), shown below the
+/// check-in count on their profile.
+Widget _titleChip(BuildContext context, String label) => Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration:
+            BoxDecoration(color: context.accentLight, borderRadius: BorderRadius.circular(9999)),
+        child: Text(label,
+            style: TextStyle(
+                color: context.accent,
+                fontWeight: FontWeight.w700,
+                fontSize: 11.5,
+                letterSpacing: 0.3)),
+      ),
     );
 
 /// ProfileScreen shows another member's profile and their timeline on one group.
@@ -444,6 +480,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           const SizedBox(height: 4),
           Text('$count ${count == 1 ? 'check-in' : 'check-ins'}',
               style: const TextStyle(color: kFgMuted, fontSize: 13)),
+          if (_titleLabels[user.title] case final label?) _titleChip(context, label),
           if (user.birthdayLabel.isNotEmpty) _birthdayLine(user.birthdayLabel),
           ...[
             // Block / Unblock for other members' profiles.

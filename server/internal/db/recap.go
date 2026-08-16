@@ -30,9 +30,13 @@ var ErrRecapEmpty = errors.New("recap: not enough activity in this period")
 // include, its cadence, and whether the scheduler or an admin is asking for it.
 type RecapSpec struct {
 	PeriodStart, PeriodEnd time.Time
-	Panels                 []string // "collage" | "awards" in v1, sorted
-	Cadence                string   // weekly | monthly | custom
-	Origin                 string   // scheduled | manual
+	// Panels is "collage" only in v1 (Awards Night was retired in favour of profile titles -
+	// see BestowTitles); the map and social-graph panels are v1.5. Deduped, in the order the
+	// deck should render its pages - BuildRecap's panel switch preserves it exactly, so it is
+	// the caller's job (not BuildRecap's) to pass panels in the desired render order.
+	Panels  []string
+	Cadence string // weekly | monthly | custom
+	Origin  string // scheduled | manual
 }
 
 // RecapSettings is the group's standing recap configuration, mirroring the digest
@@ -114,17 +118,49 @@ func (d *DB) BuildRecap(ctx context.Context, spec RecapSpec) (RecapPayload, erro
 			if cards := selectCollageCards(candidates, memberCount, spec.Cadence); len(cards) > 0 {
 				payload.Panels = append(payload.Panels, RecapPanel{Type: "collage", Title: "The Wall", Cards: cards})
 			}
-		case "awards":
-			awardCandidates, err := d.recapAwardCandidates(ctx, spec.PeriodStart, spec.PeriodEnd, candidates)
-			if err != nil {
-				return RecapPayload{}, fmt.Errorf("award candidates: %w", err)
-			}
-			if awards := selectAwards(awardCandidates); len(awards) > 0 {
-				payload.Panels = append(payload.Panels, RecapPanel{Type: "awards", Title: "Awards Night", Awards: awards})
-			}
 		}
 	}
 	return payload, nil
+}
+
+// BestowTitles runs the title-bestowal pass (bestAwardPerMember - pass 1 only of the
+// retired Awards Night algorithm, no claim/contention resolution and no leftover-fill) over
+// a period and updates every qualifying member's profile title to whichever award they
+// personally rank best in. A member who qualifies for nothing this period keeps whatever
+// title they already have - see 0020_titles.sql. Recomputes the period's candidates itself
+// rather than taking BuildRecap's, so it can be called independently of (and after)
+// generating the recap post - which is exactly how both callers use it: the scheduler and
+// the on-demand endpoint's optional bestowTitles flag.
+func (d *DB) BestowTitles(ctx context.Context, start, end time.Time) error {
+	candidates, err := d.recapCandidates(ctx, start, end)
+	if err != nil {
+		return fmt.Errorf("candidates: %w", err)
+	}
+	awardCandidates, err := d.recapAwardCandidates(ctx, start, end, candidates)
+	if err != nil {
+		return fmt.Errorf("award candidates: %w", err)
+	}
+	titles := bestAwardPerMember(awardCandidates)
+	if len(titles) == 0 {
+		return nil
+	}
+	return d.setTitles(ctx, titles)
+}
+
+// setTitles bulk-updates every member's title in one round trip, mirroring
+// AddAllowedPhones' unnest-array pattern for a small variable-length write.
+func (d *DB) setTitles(ctx context.Context, titles map[int64]string) error {
+	ids := make([]int64, 0, len(titles))
+	values := make([]string, 0, len(titles))
+	for id, title := range titles {
+		ids = append(ids, id)
+		values = append(values, title)
+	}
+	_, err := d.Pool.Exec(ctx, `
+		UPDATE users SET title = t.title, title_set_at = now()
+		FROM unnest($1::bigint[], $2::text[]) AS t(id, title)
+		WHERE users.id = t.id`, ids, values)
+	return err
 }
 
 // recapPeriodLabel renders the period as "Aug 10-16" (weekly, or custom within one month),
@@ -297,7 +333,7 @@ func minuteOfDay(t time.Time) int {
 }
 
 // recapAwardCandidates turns a period's candidates plus three activity-on-others queries
-// into one awardCandidate per active member, ready for selectAwards to judge.
+// into one awardCandidate per active member, ready for bestAwardPerMember to judge.
 func (d *DB) recapAwardCandidates(ctx context.Context, start, end time.Time, candidates []recapCandidate) ([]awardCandidate, error) {
 	members, err := d.activeMembers(ctx)
 	if err != nil {
@@ -397,7 +433,7 @@ func (d *DB) recapAwardCandidates(ctx context.Context, start, end time.Time, can
 			}
 		}
 		if a.earlyBird != nil {
-			// Inverted so "higher Value wins" (selectAwards' one ranking rule) means
+			// Inverted so "higher Value wins" (bestAwardPerMember's one ranking rule) means
 			// earliest, matching every other award's convention.
 			c.EarlyBird = awardEntry{
 				Qualifies: true, Value: 1440 - minuteOfDay(a.earlyBird.CreatedAt),

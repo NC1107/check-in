@@ -16,6 +16,7 @@ class ServerInfo {
     this.recapWeekday = 1,
     this.recapHour = 19,
     this.recapOffset = 0,
+    this.titlesCapable = false,
   });
 
   final String name;
@@ -58,6 +59,11 @@ class ServerInfo {
   final int recapHour; // 0-23, group-local
   final int recapOffset; // minutes east of UTC
 
+  /// Whether this server's on-demand recap endpoint accepts `bestowTitles`. A server
+  /// predating it rejects unknown JSON fields (DisallowUnknownFields), so the "bestow
+  /// titles" toggle in the generate sheet must only appear once this is true.
+  final bool titlesCapable;
+
   factory ServerInfo.fromJson(Map<String, dynamic> j) => ServerInfo(
         name: j['name'] as String? ?? 'Check-In',
         initialized: j['initialized'] as bool? ?? false,
@@ -71,6 +77,7 @@ class ServerInfo {
         recapWeekday: (j['recapWeekday'] as num?)?.toInt() ?? 1,
         recapHour: (j['recapHour'] as num?)?.toInt() ?? 19,
         recapOffset: (j['recapOffset'] as num?)?.toInt() ?? 0,
+        titlesCapable: j['titles'] as bool? ?? false,
       );
 }
 
@@ -212,6 +219,7 @@ class User {
     this.profileMediaId,
     this.birthdayMonth = 0,
     this.birthdayDay = 0,
+    this.title,
   });
 
   final int id;
@@ -227,6 +235,12 @@ class User {
   final int birthdayMonth;
   final int birthdayDay;
 
+  /// The member's bestowed profile title (an award id, e.g. "quiet_achiever"), or null when
+  /// none has ever been bestowed. See profile_screen.dart's title chip for the id-to-label
+  /// mapping - an id this build doesn't recognise (a future server's new award) is rendered
+  /// as nothing rather than a raw id.
+  final String? title;
+
   factory User.fromJson(Map<String, dynamic> j) => User(
         id: j['id'] as int,
         name: j['name'] as String,
@@ -237,6 +251,7 @@ class User {
         profileMediaId: j['profileMediaId'] as int?,
         birthdayMonth: (j['birthdayMonth'] as num?)?.toInt() ?? 0,
         birthdayDay: (j['birthdayDay'] as num?)?.toInt() ?? 0,
+        title: j['title'] as String?,
       );
 
   /// The birthday as "March 14" (month and day only), or '' when unknown.
