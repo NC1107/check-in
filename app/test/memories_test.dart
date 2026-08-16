@@ -189,55 +189,87 @@ void main() {
   });
 
   group('layout stability', () {
-    testWidgets(
-        'the handle occupies the same width whether or not it is capable, so the Feed tab '
-        "and the FAB-notch spacer never shift", (tester) async {
-      // Mirrors the actual bottom bar Row in home_shell.dart: the handle, two Expanded nav
-      // items either side of a fixed notch spacer, and the trailing mirror spacer that
-      // balances the handle's width. Built directly (rather than pumping the whole app)
-      // so this measures the Row's geometry, not anything about HomeShell's other state.
-      Future<double> feedLeftEdge(bool capable) async {
-        // Tear the previous variant's tree down first: pumping a new ProviderScope over an
-        // existing one updates the same element in place, and a NotifierProvider's
-        // overrideWith factory only ever runs once for that element - so without this, the
-        // second call would keep reading the first variant's (already-initialized)
-        // MultiSessionController instead of a fresh one seeded with the new capability.
-        await tester.pumpWidget(const SizedBox.shrink());
-
-        final controller = AnimationController(vsync: const TestVSync());
-        addTearDown(controller.dispose);
-        await tester.pumpWidget(ProviderScope(
-          overrides: [
-            multiSessionProvider.overrideWith(() => MultiSessionController.seeded(MultiSession(
-                groups: [account('a.invalid', memoriesCapable: capable)], restored: true))),
+    // A bottom bar built from exactly the same pieces home_shell.dart now uses, mirrored
+    // side by side: [base] carries no trace of the Memories feature at all (the true
+    // pre-feature shape); [overlay] wraps the identical bar in the Stack + overlaid handle
+    // home_shell.dart actually builds. The regression this guards: an earlier version made
+    // the handle a real Row participant (a fixed-width leading child, mirrored by a
+    // trailing spacer to keep the FAB notch centered) - the notch stayed centered, but the
+    // Feed/You icons still shifted inward by half the handle's width, at every screen size,
+    // which is exactly the kind of visible change an "invisible" feature must never cause.
+    Widget bar({required bool overlay, required AnimationController controller}) {
+      final row = const BottomAppBar(
+        color: Colors.black,
+        elevation: 0,
+        height: 64,
+        padding: EdgeInsets.zero,
+        shape: CircularNotchedRectangle(),
+        notchMargin: 9,
+        child: Row(
+          children: [
+            Expanded(child: Center(key: Key('feed'), child: SizedBox(width: 24, height: 24))),
+            SizedBox(width: 64), // FAB notch
+            Expanded(child: Center(key: Key('you'), child: SizedBox(width: 24, height: 24))),
           ],
-          child: MaterialApp(
-            home: Scaffold(
-              bottomNavigationBar: SizedBox(
-                height: 64,
-                child: Row(
-                  children: [
-                    MemoriesHandle(controller: controller),
-                    const Expanded(child: SizedBox(key: Key('feed'))),
-                    const SizedBox(width: 64), // FAB notch
-                    const Expanded(child: SizedBox(key: Key('you'))),
-                    const SizedBox(width: kMemoriesHandleWidth), // mirrors home_shell.dart
-                  ],
-                ),
-              ),
-            ),
+        ),
+      );
+      if (!overlay) return row;
+      return Stack(
+        alignment: Alignment.centerLeft,
+        children: [
+          row,
+          SizedBox(
+            width: kMemoriesHandleWidth,
+            height: 64,
+            child: MemoriesHandle(controller: controller),
           ),
-        ));
-        await tester.pump();
-        return tester.getTopLeft(find.byKey(const Key('feed'))).dx;
-      }
+        ],
+      );
+    }
 
-      final incapableEdge = await feedLeftEdge(false);
-      final capableEdge = await feedLeftEdge(true);
+    Future<void> pumpBar(WidgetTester tester,
+        {required bool overlay, required double width}) async {
+      tester.view.devicePixelRatio = 1.0;
+      tester.view.physicalSize = Size(width, 600);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      // Torn down and rebuilt fresh each call (rather than reused across calls in the same
+      // test) so a NotifierProvider override - which only ever runs its factory once for a
+      // living element - can't leave a stale MultiSessionController behind. See the
+      // "surface content" tests' pumpHost for the same reasoning.
+      await tester.pumpWidget(const SizedBox.shrink());
+      final controller = AnimationController(vsync: const TestVSync());
+      addTearDown(controller.dispose);
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          multiSessionProvider.overrideWith(() => MultiSessionController.seeded(
+              MultiSession(groups: [account('a.invalid', memoriesCapable: true)], restored: true))),
+        ],
+        child: MaterialApp(
+          home: Scaffold(bottomNavigationBar: bar(overlay: overlay, controller: controller)),
+        ),
+      ));
+      await tester.pump();
+    }
 
-      expect(capableEdge, incapableEdge,
-          reason: 'the handle becoming visible/interactive must not move where Feed starts');
-    });
+    for (final width in const [320.0, 800.0]) {
+      testWidgets(
+          'the Feed and You icons sit exactly where they do without the handle at all, at '
+          'width $width', (tester) async {
+        await pumpBar(tester, overlay: false, width: width);
+        final baseFeed = tester.getCenter(find.byKey(const Key('feed'))).dx;
+        final baseYou = tester.getCenter(find.byKey(const Key('you'))).dx;
+
+        await pumpBar(tester, overlay: true, width: width);
+        final overlayFeed = tester.getCenter(find.byKey(const Key('feed'))).dx;
+        final overlayYou = tester.getCenter(find.byKey(const Key('you'))).dx;
+
+        expect(overlayFeed, baseFeed,
+            reason: 'the overlaid handle must not move the Feed icon at width $width');
+        expect(overlayYou, baseYou,
+            reason: 'the overlaid handle must not move the You icon at width $width');
+      });
+    }
   });
 
   group('opening', () {
@@ -346,6 +378,83 @@ void main() {
       expect(key.currentState!.controller.value, 0,
           reason: 'a drag that never reached the threshold must settle closed even without '
               'live tracking to show it falling short');
+    });
+  });
+
+  group('drag cancel', () {
+    // A system-cancelled gesture (app backgrounded mid-drag, another recognizer stealing
+    // the arena) never fires onHorizontalDragEnd - only onHorizontalDragCancel - so without
+    // wiring that up too, the controller is simply abandoned wherever the drag had got to,
+    // and the surface can sit part-open indefinitely. Exercised directly against
+    // MemoriesDragDriver (no widget needed) since it is the one place this logic lives.
+    testWidgets('a cancel mid-drag settles open past the threshold, zero velocity', (tester) async {
+      final controller = AnimationController(
+          vsync: const TestVSync(), duration: const Duration(milliseconds: 220));
+      addTearDown(controller.dispose);
+      final drag = MemoriesDragDriver(controller);
+
+      drag.start();
+      drag.update(
+          DragUpdateDetails(
+              globalPosition: Offset.zero, delta: const Offset(0.7, 0), primaryDelta: 0.7),
+          1,
+          false);
+      expect(controller.value, closeTo(0.7, 0.0001));
+
+      drag.cancel(false);
+      await tester.pumpAndSettle();
+
+      expect(controller.value, 1,
+          reason: 'a cancel past the open threshold must still commit open, exactly like a '
+              'zero-velocity release would');
+    });
+
+    testWidgets('a cancel mid-drag below the threshold settles closed', (tester) async {
+      final controller = AnimationController(
+          vsync: const TestVSync(), duration: const Duration(milliseconds: 220));
+      addTearDown(controller.dispose);
+      final drag = MemoriesDragDriver(controller);
+
+      drag.start();
+      drag.update(
+          DragUpdateDetails(
+              globalPosition: Offset.zero, delta: const Offset(0.1, 0), primaryDelta: 0.1),
+          1,
+          false);
+      expect(controller.value, closeTo(0.1, 0.0001));
+
+      drag.cancel(false);
+      await tester.pumpAndSettle();
+
+      expect(controller.value, 0,
+          reason: 'a cancel below the open threshold must settle closed, not sit stuck '
+              'part-open');
+    });
+
+    testWidgets(
+        'a cancel with no drag in progress is a no-op - an ordinary tap must not '
+        'move the surface', (tester) async {
+      // Starts fully OPEN, deliberately not 0: a buggy cancel that ignores whether a drag
+      // was actually in progress would call settleMemoriesTarget with the driver's default
+      // (untouched) _dragAccum of 0, which is below the open threshold, and yank the
+      // surface closed - exactly the real scenario of tapping "Give me a memory" or
+      // "Another" while the surface is sitting open. Starting at 0 could not tell a
+      // present guard from a missing one: either way the controller would settle at 0,
+      // since that is also what settleMemoriesTarget(0, 0) computes.
+      final controller = AnimationController(
+          vsync: const TestVSync(), value: 1, duration: const Duration(milliseconds: 220));
+      addTearDown(controller.dispose);
+      final drag = MemoriesDragDriver(controller);
+
+      // No start()/update() first - this is exactly what Flutter's DragGestureRecognizer
+      // fires for a plain tap that a sibling tap recognizer won instead of this one (see
+      // DragGestureRecognizer.didStopTrackingLastPointer): onCancel with no onStart ever
+      // having happened.
+      drag.cancel(false);
+      await tester.pumpAndSettle();
+
+      expect(controller.value, 1,
+          reason: 'a cancel that never followed a start must not touch the controller at all');
     });
   });
 
