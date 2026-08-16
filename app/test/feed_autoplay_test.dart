@@ -12,6 +12,7 @@ import 'package:checkin/state/app_state.dart';
 import 'package:checkin/widgets/feed_autoplay.dart';
 import 'package:checkin/widgets/feed_clip.dart';
 import 'package:checkin/widgets/media_frame.dart';
+import 'package:checkin/widgets/post_image_carousel.dart';
 
 import 'support/fake_video_platform.dart';
 
@@ -312,6 +313,64 @@ void main() {
       await tester.drag(find.byType(ListView), const Offset(0, -600));
       await settle(tester);
       expect(built.last.value.volume, 0);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    });
+
+    // The badge lives inside the carousel's tap target, which is what opens the viewer. A
+    // mute that also opened full screen would be worse than no mute button at all, so the
+    // two are asserted together, assembled the way the feed card assembles them.
+    testWidgets('the mute badge takes its own tap, not the card\'s', (tester) async {
+      const wide = PostMedia(
+        id: 10,
+        mime: 'video/mp4',
+        width: 1920,
+        height: 1080,
+        durationMs: 5000,
+        hasPoster: true,
+      );
+      final opened = <int>[];
+
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          multiSessionProvider.overrideWith(
+            () => MultiSessionController.seeded(
+              const MultiSession(groups: [account], restored: true),
+            ),
+          ),
+          feedVideoFactoryProvider.overrideWithValue((url, headers) {
+            final controller = VideoPlayerController.networkUrl(url, httpHeaders: headers);
+            built.add(controller);
+            return controller;
+          }),
+        ],
+        child: MaterialApp(
+          home: Scaffold(
+            body: FeedAutoplayScope(
+              enabled: true,
+              child: PostImageCarousel(
+                media: const [wide],
+                groupId: 'alpha.invalid',
+                onImageTap: opened.add,
+              ),
+            ),
+          ),
+        ),
+      ));
+      await settle(tester);
+      expect(built.single.value.volume, 1);
+
+      await tester.tap(find.byIcon(Icons.volume_up_rounded));
+      await settle(tester);
+
+      expect(built.single.value.volume, 0);
+      expect(opened, isEmpty);
+
+      // ...and the rest of the clip still opens it.
+      await tester.tapAt(tester.getCenter(find.byType(FeedClip)));
+      await settle(tester);
+      expect(opened, [10]);
 
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
