@@ -67,6 +67,11 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		// true - and even then, only when true (never as an explicit false) so the same
 		// omit-unless-true rule that guards every other capability-gated field here holds.
 		"titles": true,
+		// memories is the capability signal for GET /api/memories/random. A server predating
+		// it doesn't have the route at all (a client that asked would just 404), so the app
+		// gates showing the Memories entry point on this being true rather than probing the
+		// endpoint and hiding it after a failed request.
+		"memories": true,
 	}
 	if settings, err := s.db.GetRecapSettings(r.Context()); err == nil {
 		resp["recapCadence"] = settings.Cadence

@@ -273,6 +273,49 @@ void main() {
     expect(find.byType(ImageFiltered), findsOneWidget);
   });
 
+  /// The cover used to blend the group accent into its own background, which no other page
+  /// did, so swiping off it read as the card changing colour underneath you. The accent
+  /// belongs on the card's border and the RECAP pill, not washed across one page's surface.
+  testWidgets('the cover shares the wall pages background, no accent wash', (tester) async {
+    final recap = RecapPayload(
+      periodLabel: 'Aug 10-16',
+      cadence: 'weekly',
+      groupName: 'Ridgeway Family',
+      groupColor: 'coral',
+      stats: stats(),
+      panels: [
+        RecapCollagePanel(title: 'The Wall', cards: [
+          photoCard(authorId: 1, authorName: 'Ada'),
+        ]),
+      ],
+    );
+    await pumpDeck(tester, recap);
+
+    // A page's own surface fill: a flat colour with no gradient and no rounding, which
+    // skips the RECAP pill (rounded) and the scrim above the backdrop (a gradient).
+    final surfaceFill = find.byWidgetPredicate((w) =>
+        w is DecoratedBox &&
+        w.decoration is BoxDecoration &&
+        (w.decoration as BoxDecoration).color != null &&
+        (w.decoration as BoxDecoration).gradient == null &&
+        (w.decoration as BoxDecoration).borderRadius == null);
+
+    Color colorOf(Finder f) =>
+        ((tester.widget<DecoratedBox>(f).decoration) as BoxDecoration).color!;
+
+    final coverColor = colorOf(find
+        .descendant(of: find.byKey(const ValueKey('recap-cover-1')), matching: surfaceFill)
+        .first);
+
+    final pageView = find.byType(PageView);
+    await swipeToPageWithMedia(tester, pageView, 1);
+    final wallColor =
+        colorOf(find.ancestor(of: find.byType(GridView), matching: surfaceFill).first);
+
+    expect(coverColor, wallColor,
+        reason: 'the cover must not tint its surface with the group accent');
+  });
+
   RecapPayload payloadWithPeople(List<RecapPerson> people) => RecapPayload(
         periodLabel: 'Aug 10-16',
         cadence: 'weekly',

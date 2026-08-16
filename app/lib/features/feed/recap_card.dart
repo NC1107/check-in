@@ -361,15 +361,18 @@ class _RecapCoverPageState extends State<_RecapCoverPage> {
     return VisibilityDetector(
       key: ValueKey('recap-cover-${widget.postId}'),
       onVisibilityChanged: _onVisibilityChanged,
+      // The cover shares the wall pages' surface rather than tinting it with the group
+      // accent: the tint only existed on page 0, so swiping to the wall read as the card
+      // changing colour underneath you. The accent still marks the card, on its border ring
+      // and the RECAP pill.
       child: DecoratedBox(
-        decoration:
-            BoxDecoration(color: Color.alphaBlend(accent.base.withValues(alpha: 0.16), _bgSurface)),
+        decoration: const BoxDecoration(color: _bgSurface),
         child: Stack(
           fit: StackFit.expand,
           children: [
             // No photos this period (an awards-only historical deck, or a period that was
-            // entirely quote cards) degrades to the plain tinted background above - nothing
-            // extra to guard here, see _CoverBackdrop's own empty-list branch.
+            // entirely quote cards) degrades to the plain background above - nothing extra
+            // to guard here, see _CoverBackdrop's own empty-list branch.
             if (photos.isNotEmpty)
               _CoverBackdrop(photos: photos, groupId: widget.groupId, visible: _visible),
             DecoratedBox(
@@ -379,8 +382,7 @@ class _RecapCoverPageState extends State<_RecapCoverPage> {
                   end: Alignment.bottomCenter,
                   colors: [
                     Colors.black.withValues(alpha: photos.isEmpty ? 0.05 : 0.35),
-                    Color.alphaBlend(accent.base.withValues(alpha: 0.24), _bgSurface)
-                        .withValues(alpha: 0.94),
+                    _bgSurface.withValues(alpha: 0.94),
                   ],
                 ),
               ),

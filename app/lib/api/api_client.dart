@@ -284,6 +284,16 @@ class ApiClient {
     return Post.fromJson(r.data as Map<String, dynamic>);
   }
 
+  /// randomMemory fetches one random post from this group's history for the hidden
+  /// Memories surface, or null when nothing is eligible yet (a clean empty result, not a
+  /// failure - see the server's handleRandomMemory). Only ever called against a group whose
+  /// server-info advertised [ServerInfo.memoriesCapable]; an older server has no such route.
+  Future<Post?> randomMemory() async {
+    final r = await _dio.get('/api/memories/random');
+    final post = (r.data as Map<String, dynamic>)['post'];
+    return post == null ? null : Post.fromJson(post as Map<String, dynamic>);
+  }
+
   /// lat/lng are only ever sent by the caller when the target server's server-info
   /// advertised the "recap" capability (see [ServerInfo.recapCapable]) - this server
   /// rejects unknown JSON fields, so an unguarded send would 400 every post against a

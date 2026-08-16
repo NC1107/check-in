@@ -82,6 +82,7 @@ type contentLimits struct {
 	likes    *rateLimiter
 	media    *rateLimiter
 	gifs     *rateLimiter
+	memories *rateLimiter
 }
 
 // mediaBurst is the media allowance, and 20 is a requirement rather than a preference: a
@@ -103,6 +104,10 @@ func newContentLimits() contentLimits {
 		// Search-as-you-type protection: the client debounces too, but a burst has to clear
 		// a few quick keystrokes before the debounce catches up.
 		gifs: newRateLimiter(30, 15),
+		// "Another" is a single tap and, unlike gifs, there's no debounce ahead of it - the
+		// burst is sized to clear someone genuinely mashing it for a minute rather than the
+		// occasional double-tap.
+		memories: newRateLimiter(30, 15),
 	}
 }
 

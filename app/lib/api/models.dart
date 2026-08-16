@@ -17,6 +17,7 @@ class ServerInfo {
     this.recapHour = 19,
     this.recapOffset = 0,
     this.titlesCapable = false,
+    this.memoriesCapable = false,
   });
 
   final String name;
@@ -64,6 +65,11 @@ class ServerInfo {
   /// titles" toggle in the generate sheet must only appear once this is true.
   final bool titlesCapable;
 
+  /// Whether this server has GET /api/memories/random at all. A server predating the hidden
+  /// Memories surface has no such route and would 404 the request, so the client must hide
+  /// the handle entirely rather than opening a surface that can never load anything.
+  final bool memoriesCapable;
+
   factory ServerInfo.fromJson(Map<String, dynamic> j) => ServerInfo(
         name: j['name'] as String? ?? 'Check-In',
         initialized: j['initialized'] as bool? ?? false,
@@ -78,6 +84,7 @@ class ServerInfo {
         recapHour: (j['recapHour'] as num?)?.toInt() ?? 19,
         recapOffset: (j['recapOffset'] as num?)?.toInt() ?? 0,
         titlesCapable: j['titles'] as bool? ?? false,
+        memoriesCapable: j['memories'] as bool? ?? false,
       );
 }
 
