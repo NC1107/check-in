@@ -1,15 +1,20 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:gal/gal.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 
 import '../../api/models.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/feed_autoplay.dart';
 import '../../widgets/media_frame.dart';
+import '../../widgets/photo_viewer.dart';
 import '../../widgets/user_avatar.dart';
+import '../post/post_detail_screen.dart';
 
 const _bgSurface = kBgSurface;
 const _bgSurfaceHover = kBgSurfaceHover;
@@ -101,8 +106,7 @@ class RecapDeckState extends State<RecapDeck> {
       children: [
         AspectRatio(
           // Every page - the cover, an awards page, a chunked Wall page - shares this one
-          // footprint; see _deckAspectRatio's own doc comment for why it's 3:4 rather than
-          // round 3's 4:3.
+          // footprint; see _deckAspectRatio's own doc comment for the measurement behind it.
           aspectRatio: _deckAspectRatio,
           child: PageView.builder(
             controller: _controller,
@@ -138,12 +142,11 @@ class RecapDeckState extends State<RecapDeck> {
       switch (panel) {
         case RecapCollagePanel p:
           final chunks = _chunkCards(p.cards, _wallCardsPerPage);
-          for (var i = 0; i < chunks.length; i++) {
-            // The panel title is shown once, on the chunk's first page only - repeating it
-            // on every chunk would eat into the exact vertical space that was clipping
-            // cards in the first place.
-            pages.add(_WallPanel(
-                title: i == 0 ? p.title : null, cards: chunks[i], groupId: widget.groupId));
+          for (final chunk in chunks) {
+            // p.title ("The Wall") is deliberately never rendered - see _WallPanel's own
+            // doc comment. It stays on the model/JSON only for a server that still expects
+            // to read it back unchanged.
+            pages.add(_WallPanel(cards: chunk, groupId: widget.groupId));
           }
         case RecapAwardsPanel p:
           pages.add(_AwardsPanel(panel: p, groupId: widget.groupId));
@@ -162,21 +165,25 @@ const _wallCardsPerPage = 4;
 /// portrait (0.85-aspect) tiles needs more height than a 4:3 page has room for, which is what
 /// let the second row go unreachable in the first place.
 ///
-/// 4:5 (0.8) - the first ratio tried here - looked right on paper but left almost no real
-/// margin: measured at a 320dp-wide device (this app's floor) at the platform's default text
-/// scale, the second row cleared the page by well under a pixel, and at 1.3x text scale (an
-/// ordinary accessibility setting - textScaler is never clamped anywhere in this app) it
-/// clipped outright, by several px per tile. Tile height comes from the grid delegate, not
-/// from the page it sits in, so nothing in the tile-aspect-band test below is sensitive to
-/// this - only measuring a tile's actual painted bounds against the page's is, which is what
-/// the textScaler-parameterised tests do.
+/// Round 4 landed on 3:4 (0.75) for this, with the Wall page still carrying its own panel
+/// title ("The Wall") above the grid - real headroom rather than the calculated edge, but
+/// still textScale-sensitive: the title's own text grew with textScaler (never clamped
+/// anywhere in this app), eating into the grid's share of the page, which is why that
+/// round's clearance shrank as scale grew (~27px at the default scale, ~20px at 1.3x, ~12px
+/// at 1.6x).
 ///
-/// 3:4 (0.75) is what's used instead - picked the same way, but leaving real headroom rather
-/// than sitting at the calculated edge again: at 320dp width it clears the second row by
-/// ~27px at the default text scale, ~20px at 1.3x, and ~12px even at 1.6x (a device set
-/// noticeably larger than "large text") - margin wide enough to absorb real font-metric
-/// variance across platforms, not just this one measurement.
-const _deckAspectRatio = 3 / 4;
+/// Round 5 drops that title entirely (the founder found it redundant with the post card's
+/// own header - see _WallPanel's doc comment), which changes the shape of this problem: the
+/// Wall page's grid is now the page's *only* content, sized purely by this ratio and the
+/// page's own fixed padding - nothing left in that layout scales with text at all, so
+/// clearance is identical at every scale rather than shrinking at 1.3x/1.6x the way it used
+/// to. That is what actually buys back the room to shrink the ratio itself: measured the same
+/// way as round 4 (a 320dp-wide device, four cards, painted tile bounds against the page's
+/// own), 0.84 clears the second row by ~19px, uniformly across 1.0x/1.3x/1.6x text scale -
+/// comfortably past the "keep double-digit clearance, don't sit at the edge" bar this
+/// measurement has to clear, while still noticeably shorter than 3:4 (roughly a tenth less
+/// tall for the same width) - the actual "downsize it a bit" the founder asked for.
+const _deckAspectRatio = 0.84;
 
 /// Splits [cards] into consecutive groups of at most [size], preserving order. An empty
 /// [cards] is never actually reached here - BuildRecap (recap.go) only ever appends a
@@ -235,44 +242,67 @@ class _PageDots extends StatelessWidget {
   }
 }
 
-/// The deck's first page: a system moment, not a normal post header. A dimmed, blurred hero
-/// backdrop (the Wall's #1 photo, when there is one) sits behind a pile of the period's
-/// posters' avatars and the at-a-glance stats - what makes a recap post read as a group
-/// artifact at a glance rather than one more check-in in the feed. The group's own name is
-/// deliberately not repeated here - the post card's header already carries it (see
-/// post_card.dart's group-name label next to the RECAP badge).
-class _RecapCoverPage extends StatelessWidget {
+/// The deck's first page: a system moment, not a normal post header. A slow cross-fading
+/// montage of the period's own photos sits behind a pile of the period's posters' avatars
+/// and the at-a-glance stats - what makes a recap post read as a group artifact at a glance
+/// rather than one more check-in in the feed. The group's own name is deliberately not
+/// repeated here - the post card's header already carries it (see post_card.dart's
+/// group-name label next to the RECAP badge).
+///
+/// Stateful (round 5) so it can gate its two ambient animations - the backdrop montage and
+/// the avatar cluster's entrance/float, see [_CoverBackdrop] and [_BubbleCluster] - behind
+/// real on-screen visibility: this page sits in a scrolling feed, and a repeating ticker
+/// nobody is looking at is exactly the leak feed_autoplay.dart already solved for clips (see
+/// this class's own [_onVisibilityChanged], which copies that same activate/release/debounce
+/// discipline).
+class _RecapCoverPage extends StatefulWidget {
   const _RecapCoverPage({required this.recap, required this.groupId, required this.postId});
 
   final RecapPayload recap;
   final String? groupId;
 
   /// The recap post's own id, threaded down for the bubble cluster's deterministic seed -
-  /// see _BubbleCluster's doc comment.
+  /// see _BubbleCluster's doc comment - and used as this page's own VisibilityDetector key.
   final int postId;
 
-  /// The Wall panel's rank-1 card, when it carries a photo or clip - the "top photo" the
-  /// backdrop is built from. Null for an awards-only historical deck, a text-only #1 pick,
-  /// or simply no collage panel at all; the cover still renders, just without a photo.
-  RecapCard? get _hero {
-    for (final panel in recap.panels) {
+  @override
+  State<_RecapCoverPage> createState() => _RecapCoverPageState();
+}
+
+class _RecapCoverPageState extends State<_RecapCoverPage> {
+  bool _visible = false;
+  Timer? _settle;
+
+  /// Every card across every Wall chunk that carries a photo or clip, in the server's own
+  /// rank order - the montage's source material. Capped rather than handing the backdrop
+  /// every card a big monthly recap can carry: the montage only needs enough variety to
+  /// read as "alive", not a slideshow of all twenty, and a shorter list also means a
+  /// shorter full loop before it repeats.
+  static const _montageCap = 8;
+
+  List<PostMedia> get _photos {
+    final out = <PostMedia>[];
+    for (final panel in widget.recap.panels) {
       if (panel is RecapCollagePanel) {
         for (final card in panel.cards) {
-          if (card.rank == 1 && card.media != null) return card;
+          if (card.media != null) {
+            out.add(card.media!);
+            if (out.length >= _montageCap) return out;
+          }
         }
       }
     }
-    return null;
+    return out;
   }
 
-  String get _eyebrow => switch (recap.cadence) {
+  String get _eyebrow => switch (widget.recap.cadence) {
         'weekly' => 'WEEKLY RECAP',
         'monthly' => 'MONTHLY RECAP',
         _ => 'RECAP',
       };
 
   String get _statsLine {
-    final s = recap.stats;
+    final s = widget.recap.stats;
     return [
       '${s.posts} ${s.posts == 1 ? 'check-in' : 'check-ins'}',
       '${s.places} ${s.places == 1 ? 'place' : 'places'}',
@@ -280,87 +310,251 @@ class _RecapCoverPage extends StatelessWidget {
     ].join(' · ');
   }
 
+  // No initState override to tune VisibilityDetectorController's batching interval here
+  // (unlike feed_autoplay.dart's FeedAutoplayScope, which does): the recap cover sits inside
+  // that same scope whenever it's in the main feed - by far the common case - so it already
+  // gets that fast interval for free. Setting it again here would only fight a widget test
+  // that has deliberately chosen `Duration.zero` for its own determinism (see
+  // recap_card_test.dart), for no real benefit: the package's ordinary default just means a
+  // cover reached some other way (a profile's post list, say) starts its ambient animation
+  // up to half a second later, never something worth trading test control away for.
+
+  @override
+  void dispose() {
+    _settle?.cancel();
+    super.dispose();
+  }
+
+  /// Debounced the same way [FeedAutoplayController] debounces a clip's slot, and against
+  /// the exact same thresholds ([FeedAutoplayController.activateAbove] /
+  /// `.releaseBelow`) - reused rather than re-typed so the two "only animate while it's
+  /// actually on screen" gates in this app can't quietly drift apart. A settle timer per
+  /// cover rather than one shared timer: unlike the feed's one video slot, every recap
+  /// cover's animation is independent, so there is no single winner to arbitrate.
+  ///
+  /// Guarded on [mounted] up front, not just inside the timer it schedules: the detector's
+  /// last "gone invisible" report can arrive from its own layer-disposal callback after this
+  /// State is already disposed (a card that's scrolled away and torn down in the same beat),
+  /// and there is nothing useful left to debounce towards at that point - just a Timer this
+  /// State will never get the chance to cancel.
+  void _onVisibilityChanged(VisibilityInfo info) {
+    if (!mounted) return;
+    final fraction = info.visibleFraction;
+    _settle?.cancel();
+    _settle = Timer(const Duration(milliseconds: 200), () {
+      if (!mounted) return;
+      final next = fraction >= FeedAutoplayController.activateAbove
+          ? true
+          : fraction < FeedAutoplayController.releaseBelow
+              ? false
+              : _visible;
+      if (next != _visible) setState(() => _visible = next);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
+    final recap = widget.recap;
     final accent = accentById(recap.groupColor);
-    final hero = _hero;
+    final photos = _photos;
     const textShadows = [Shadow(color: Colors.black87, blurRadius: 10)];
-    return DecoratedBox(
-      decoration:
-          BoxDecoration(color: Color.alphaBlend(accent.base.withValues(alpha: 0.16), _bgSurface)),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // A missing or failed (404) hero degrades to the plain tinted background above -
-          // MediaFrame/AuthImage already render their own placeholder on a load failure, so
-          // there is nothing extra to guard here.
-          if (hero != null)
-            ImageFiltered(
-              imageFilter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-              // Quieter than before (was 0.5): the backdrop is a supporting texture now,
-              // not the cover's focal point - the avatar cluster below is.
-              child:
-                  Opacity(opacity: 0.32, child: MediaFrame(media: hero.media!, groupId: groupId)),
+    return VisibilityDetector(
+      key: ValueKey('recap-cover-${widget.postId}'),
+      onVisibilityChanged: _onVisibilityChanged,
+      child: DecoratedBox(
+        decoration:
+            BoxDecoration(color: Color.alphaBlend(accent.base.withValues(alpha: 0.16), _bgSurface)),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // No photos this period (an awards-only historical deck, or a period that was
+            // entirely quote cards) degrades to the plain tinted background above - nothing
+            // extra to guard here, see _CoverBackdrop's own empty-list branch.
+            if (photos.isNotEmpty)
+              _CoverBackdrop(photos: photos, groupId: widget.groupId, visible: _visible),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Colors.black.withValues(alpha: photos.isEmpty ? 0.05 : 0.35),
+                    Color.alphaBlend(accent.base.withValues(alpha: 0.24), _bgSurface)
+                        .withValues(alpha: 0.94),
+                  ],
+                ),
+              ),
             ),
-          DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.black.withValues(alpha: hero == null ? 0.05 : 0.35),
-                  Color.alphaBlend(accent.base.withValues(alpha: 0.24), _bgSurface)
-                      .withValues(alpha: 0.94),
+            // The people who posted this period, piled as a cluster of avatar bubbles sized
+            // by contribution - the cover's "who's in this" moment. _BubbleCluster itself
+            // renders nothing (see its empty-list guard) on a payload recorded before
+            // RecapPayload.people existed, which just leaves the plain backdrop above as the
+            // cover's whole focal point, same as it always has.
+            Align(
+              alignment: const Alignment(0, -0.1),
+              child: _BubbleCluster(
+                  people: recap.people,
+                  seed: widget.postId,
+                  groupId: widget.groupId,
+                  visible: _visible),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.end,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                        color: accent.base, borderRadius: BorderRadius.circular(9999)),
+                    child: Text(_eyebrow,
+                        style: TextStyle(
+                            color: accent.onAccent,
+                            fontWeight: FontWeight.w800,
+                            fontSize: 11,
+                            letterSpacing: 1.1)),
+                  ),
+                  const SizedBox(height: 8),
+                  // The period label carries the cover's headline weight now that the group
+                  // name (already in the post card's header) isn't repeated here.
+                  Text(recap.periodLabel,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                          shadows: textShadows)),
+                  const SizedBox(height: 4),
+                  Text(_statsLine,
+                      style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.95),
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12,
+                          shadows: textShadows)),
                 ],
               ),
             ),
-          ),
-          // The people who posted this period, piled as a cluster of avatar bubbles sized by
-          // contribution - the cover's "who's in this" moment. _BubbleCluster itself renders
-          // nothing (see its empty-list guard) on a payload recorded before
-          // RecapPayload.people existed, which just leaves the plain backdrop above as the
-          // cover's whole focal point, same as it always has.
-          Align(
-            alignment: const Alignment(0, -0.1),
-            child: _BubbleCluster(people: recap.people, seed: postId, groupId: groupId),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.end,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration:
-                      BoxDecoration(color: accent.base, borderRadius: BorderRadius.circular(9999)),
-                  child: Text(_eyebrow,
-                      style: TextStyle(
-                          color: accent.onAccent,
-                          fontWeight: FontWeight.w800,
-                          fontSize: 11,
-                          letterSpacing: 1.1)),
-                ),
-                const SizedBox(height: 10),
-                // The period label carries the cover's headline weight now that the group
-                // name (already in the post card's header) isn't repeated here.
-                Text(recap.periodLabel,
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 16,
-                        shadows: textShadows)),
-                const SizedBox(height: 6),
-                Text(_statsLine,
-                    style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.95),
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
-                        shadows: textShadows)),
-              ],
-            ),
-          ),
-        ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The cover's animated backdrop: a slow cross-fade through [photos] with a subtle Ken
+/// Burns-style scale drift, heavily blurred and dimmed so it reads as ambient texture behind
+/// the avatar cluster and stats rather than competing with them.
+///
+/// A single [AnimationController] drives the whole cycle (duration scales with the photo
+/// count, so a longer montage still has a sane pace per photo) rather than a per-transition
+/// [Timer]: its progress alone determines which photo is showing, how far into that photo's
+/// segment the crossfade to the next one has got, and the current scale - one animation, one
+/// thing to start/stop/dispose, instead of a Timer and a controller that could fall out of
+/// sync with each other.
+///
+/// Only ever built (see [_RecapCoverPageState.build]) when there is at least one photo, so
+/// there is no empty-list branch here to worry about; the one-photo case still runs the
+/// scale drift (there is simply never anything to crossfade to).
+class _CoverBackdrop extends StatefulWidget {
+  const _CoverBackdrop({required this.photos, required this.groupId, required this.visible});
+
+  final List<PostMedia> photos;
+  final String? groupId;
+
+  /// Whether this cover is currently on screen - see _RecapCoverPageState's visibility gate.
+  final bool visible;
+
+  @override
+  State<_CoverBackdrop> createState() => _CoverBackdropState();
+}
+
+class _CoverBackdropState extends State<_CoverBackdrop> with SingleTickerProviderStateMixin {
+  AnimationController? _cycle;
+  bool _reduceMotion = false;
+
+  static const _secondsPerPhoto = 6;
+  static const _crossfadeFraction = 0.28; // last ~28% of a photo's segment fades to the next
+  static const _kenBurnsScale = 0.08; // grows from 1.0 to 1.08 across a photo's segment
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _reduceMotion = MediaQuery.of(context).disableAnimations;
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(_CoverBackdrop old) {
+    super.didUpdateWidget(old);
+    _sync();
+  }
+
+  /// Starts, resumes or stops the cycle to match [widget.visible] and [_reduceMotion].
+  /// `.stop()` rather than disposing on every drop: a card that scrolls in and out
+  /// repeatedly (an ordinary scroll wiggle near the viewport edge) resumes the montage where
+  /// it left off instead of restarting the whole cycle each time.
+  void _sync() {
+    if (widget.visible && !_reduceMotion) {
+      final c = _cycle ??= AnimationController(
+        vsync: this,
+        duration: Duration(seconds: _secondsPerPhoto * widget.photos.length),
+      );
+      if (!c.isAnimating) c.repeat();
+    } else {
+      _cycle?.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _cycle?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final photos = widget.photos;
+    final cycle = _cycle;
+    // Static (unstarted controller, or reduced motion): the first photo, at rest - exactly
+    // what a single-photo montage looks like mid-cycle anyway, so this is not a visually
+    // distinct "degraded" state, just a still frame of the same thing.
+    if (cycle == null || _reduceMotion) return _layer(photos.first, scale: 1, opacity: 1);
+    return AnimatedBuilder(
+      animation: cycle,
+      builder: (context, _) {
+        final segment = 1.0 / photos.length;
+        final raw = cycle.value / segment;
+        final index = raw.floor().clamp(0, photos.length - 1);
+        final localT = raw - index;
+        final scale = 1 + _kenBurnsScale * localT;
+        final fadeStart = 1 - _crossfadeFraction;
+        final fadeT = localT <= fadeStart ? 0.0 : (localT - fadeStart) / _crossfadeFraction;
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            _layer(photos[index], scale: scale, opacity: 1),
+            if (photos.length > 1 && fadeT > 0)
+              _layer(photos[(index + 1) % photos.length], scale: 1, opacity: fadeT),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _layer(PostMedia media, {required double scale, required double opacity}) {
+    return Opacity(
+      // 0.32 is the layer's own full strength (matched to the old single-photo backdrop);
+      // [opacity] on top of that is only ever <1 for the incoming crossfade layer.
+      opacity: 0.32 * opacity,
+      child: Transform.scale(
+        scale: scale,
+        child: ImageFiltered(
+          imageFilter: ui.ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          // A missing or failed (404) photo degrades to MediaFrame/AuthImage's own
+          // placeholder - still a photo-shaped blurred rectangle, not a gap in the montage.
+          child: MediaFrame(media: media, groupId: widget.groupId),
+        ),
       ),
     );
   }
@@ -370,8 +564,17 @@ class _RecapCoverPage extends StatelessWidget {
 /// (the biggest poster gets the biggest bubble) and packed into a jittered but deterministic
 /// cluster - never a rigid grid, but the same recap always packs identically (see
 /// [_packCircles]'s doc comment for why).
-class _BubbleCluster extends StatelessWidget {
-  const _BubbleCluster({required this.people, required this.seed, required this.groupId});
+///
+/// Round 5 adds two ambient touches on top of that same packing, deliberately kept out of
+/// the packing itself: each bubble pops in with a staggered spring/scale entrance, then
+/// drifts in a very subtle continuous float - a paint-only [Transform.translate]/
+/// [Transform.scale] layered over each bubble's already-fixed [Positioned] slot, never a
+/// change to the slot itself. That split is what keeps the layout deterministic (see the
+/// "lays out identically across two builds" test, which this must still pass) while the
+/// cluster still reads as alive rather than pasted onto the backdrop.
+class _BubbleCluster extends StatefulWidget {
+  const _BubbleCluster(
+      {required this.people, required this.seed, required this.groupId, required this.visible});
 
   final List<RecapPerson> people;
 
@@ -383,6 +586,11 @@ class _BubbleCluster extends StatelessWidget {
   final int seed;
   final String? groupId;
 
+  /// Whether the cover is currently on screen - gates the continuous float (not the
+  /// one-shot entrance, which is short and bounded enough to just play out on mount; see
+  /// _BubbleClusterState's own doc comment).
+  final bool visible;
+
   /// At most this many bubbles render as avatars; anyone past it is folded into a single
   /// "+N" bubble. [people] is already ordered by contribution desc (server-side), so the
   /// cap always drops the least active posters, not an arbitrary subset.
@@ -390,18 +598,108 @@ class _BubbleCluster extends StatelessWidget {
   static const _minSize = 30.0;
   static const _maxSize = 62.0;
 
+  /// Linear interpolation from the smallest to the largest bubble size, by this member's
+  /// post count as a share of the top contributor's - the biggest poster gets the biggest
+  /// bubble, everyone else scales down from there.
+  static double _sizeFor(int posts, int maxPosts) {
+    final t = (posts / maxPosts).clamp(0.0, 1.0);
+    return _minSize + (_maxSize - _minSize) * t;
+  }
+
+  @override
+  State<_BubbleCluster> createState() => _BubbleClusterState();
+}
+
+/// [_entrance] is a one-shot, bounded (~700ms) reveal: it starts as soon as this state knows
+/// whether reduced motion is on (first [didChangeDependencies]) and is never gated on
+/// [_BubbleCluster.visible] - a card built near the bottom of a feed's cache extent is
+/// already about to be scrolled to, so playing the pop-in on mount rather than waiting for a
+/// separate visibility confirmation reads as timely rather than delayed, and a controller
+/// this short-lived is not the battery/jank concern the PERFORMANCE note is about.
+///
+/// [_float] is the opposite: unbounded (`..repeat()`) for as long as the cluster is on
+/// screen, so it is exactly that concern - created only when [_BubbleCluster.visible] is
+/// true, stopped the moment it isn't, disposed with everything else in [dispose].
+class _BubbleClusterState extends State<_BubbleCluster> with TickerProviderStateMixin {
+  late final AnimationController _entrance =
+      AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
+  AnimationController? _float;
+  bool _reduceMotion = false;
+  bool _startedEntrance = false;
+
+  static const _floatSeconds = 4;
+  static const _floatAmplitude = 2.5; // px - subtle, not a bounce
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _reduceMotion = MediaQuery.of(context).disableAnimations;
+    if (_reduceMotion) {
+      _entrance.stop();
+      _entrance.value = 1;
+    } else if (!_startedEntrance) {
+      _startedEntrance = true;
+      _entrance.forward();
+    }
+    _syncFloat();
+  }
+
+  @override
+  void didUpdateWidget(_BubbleCluster old) {
+    super.didUpdateWidget(old);
+    _syncFloat();
+  }
+
+  void _syncFloat() {
+    if (widget.visible && !_reduceMotion && widget.people.isNotEmpty) {
+      final f = _float ??=
+          AnimationController(vsync: this, duration: const Duration(seconds: _floatSeconds));
+      if (!f.isAnimating) f.repeat();
+    } else {
+      _float?.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _entrance.dispose();
+    _float?.dispose();
+    super.dispose();
+  }
+
+  /// This bubble's own slice of [_entrance]'s 0..1 timeline, offset by [index] so the
+  /// cluster pops in one after another rather than all at once - a stagger, not a single
+  /// synchronized scale.
+  double _entranceT(int index, int count) {
+    if (_reduceMotion) return 1;
+    final start = count <= 1 ? 0.0 : (index / count) * 0.5;
+    final curve = Interval(start, math.min(1.0, start + 0.5), curve: Curves.easeOutBack);
+    return curve.transform(_entrance.value).clamp(0.0, 1.0);
+  }
+
+  /// A smooth, continuous vertical drift for bubble [index] - phase-shifted per index (by an
+  /// irrational-ish offset, so bubbles never drift in lockstep) and ramped in by [entranceT]
+  /// so the float never reads as a jump the instant a bubble finishes popping in.
+  double _floatOffset(int index, double entranceT) {
+    final f = _float;
+    if (_reduceMotion || f == null) return 0;
+    final phase = f.value * 2 * math.pi + index * 1.7;
+    return math.sin(phase) * _floatAmplitude * entranceT;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final people = widget.people;
     if (people.isEmpty) return const SizedBox.shrink();
-    final shown = people.take(_cap).toList();
+    final shown = people.take(_BubbleCluster._cap).toList();
     final overflow = people.length - shown.length;
     final maxPosts = shown.first.posts <= 0 ? 1 : shown.first.posts;
 
     final radii = <double>[
-      for (final p in shown) _sizeFor(p.posts, maxPosts) / 2,
-      if (overflow > 0) _minSize / 2,
+      for (final p in shown) _BubbleCluster._sizeFor(p.posts, maxPosts) / 2,
+      if (overflow > 0) _BubbleCluster._minSize / 2,
     ];
-    final centers = _packCircles(radii, math.Random(seed));
+    final centers = _packCircles(radii, math.Random(widget.seed));
 
     var minX = double.infinity, minY = double.infinity;
     var maxX = -double.infinity, maxY = -double.infinity;
@@ -412,35 +710,64 @@ class _BubbleCluster extends StatelessWidget {
       maxY = math.max(maxY, centers[i].dy + radii[i]);
     }
 
-    return SizedBox(
-      width: maxX - minX,
-      height: maxY - minY,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          for (var i = 0; i < shown.length; i++)
-            Positioned(
-              left: centers[i].dx - radii[i] - minX,
-              top: centers[i].dy - radii[i] - minY,
-              child: _Bubble(person: shown[i], size: radii[i] * 2, groupId: groupId),
-            ),
-          if (overflow > 0)
-            Positioned(
-              left: centers.last.dx - radii.last - minX,
-              top: centers.last.dy - radii.last - minY,
-              child: _OverflowBubble(count: overflow, size: radii.last * 2),
-            ),
-        ],
+    return AnimatedBuilder(
+      animation: _float == null ? _entrance : Listenable.merge([_entrance, _float!]),
+      builder: (context, _) => SizedBox(
+        width: maxX - minX,
+        height: maxY - minY,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            for (var i = 0; i < shown.length; i++)
+              _positioned(
+                center: centers[i],
+                radius: radii[i],
+                minX: minX,
+                minY: minY,
+                entranceT: _entranceT(i, shown.length),
+                floatOffset: _floatOffset(i, _entranceT(i, shown.length)),
+                child: _Bubble(person: shown[i], size: radii[i] * 2, groupId: widget.groupId),
+              ),
+            if (overflow > 0)
+              _positioned(
+                center: centers.last,
+                radius: radii.last,
+                minX: minX,
+                minY: minY,
+                entranceT: _entranceT(shown.length, shown.length),
+                floatOffset: _floatOffset(shown.length, _entranceT(shown.length, shown.length)),
+                child: _OverflowBubble(count: overflow, size: radii.last * 2),
+              ),
+          ],
+        ),
       ),
     );
   }
 
-  /// Linear interpolation from the smallest to the largest bubble size, by this member's
-  /// post count as a share of the top contributor's - the biggest poster gets the biggest
-  /// bubble, everyone else scales down from there.
-  static double _sizeFor(int posts, int maxPosts) {
-    final t = (posts / maxPosts).clamp(0.0, 1.0);
-    return _minSize + (_maxSize - _minSize) * t;
+  /// One bubble at its packed [center]/[radius] - the [Positioned] left/top are exactly what
+  /// the packer computed, untouched by animation; only the paint-layer transforms inside
+  /// move, so the packing itself (what the determinism test asserts) never changes.
+  Widget _positioned({
+    required Offset center,
+    required double radius,
+    required double minX,
+    required double minY,
+    required double entranceT,
+    required double floatOffset,
+    required Widget child,
+  }) {
+    return Positioned(
+      left: center.dx - radius - minX,
+      top: center.dy - radius - minY,
+      child: Transform.translate(
+        offset: Offset(0, floatOffset),
+        child: Transform.scale(
+          scale: entranceT,
+          alignment: Alignment.center,
+          child: Opacity(opacity: entranceT, child: child),
+        ),
+      ),
+    );
   }
 }
 
@@ -556,21 +883,23 @@ class _OverflowBubble extends StatelessWidget {
 }
 
 /// "The Wall": the ranked collage, fridge-door style - one deck page per chunk of up to
-/// [_wallCardsPerPage] cards (see RecapDeckState._buildPages), each chunk laid out as the
-/// same 2x2 grid of portrait tiles that always shipped here - exactly what the founder's own
-/// screenshot showed, and he never complained about how the tiles looked, only that the
-/// second row was unreachable. That's a page-height problem, not a tile-layout problem:
-/// squashing the tiles into a single wide-and-short row instead (an earlier version of this
-/// fix did exactly that) traded an unreachable row for an unrecognisable ~1:3 sliver of
-/// every photo. The real fix is _deckAspectRatio - tall enough that a 2x2 grid of these
-/// portrait tiles, the panel title, and its padding all fit inside one page with room to
-/// spare (see _deckAspectRatio's own doc comment for the arithmetic).
+/// [_wallCardsPerPage] cards (see RecapDeckState._buildPages), laid out as the same 2x2 grid
+/// of portrait tiles that always shipped here - exactly what the founder's own screenshot
+/// showed, and he never complained about how the tiles looked, only that the second row was
+/// unreachable. That's a page-height problem, not a tile-layout problem: squashing the tiles
+/// into a single wide-and-short row instead (an earlier version of this fix did exactly
+/// that) traded an unreachable row for an unrecognisable ~1:3 sliver of every photo. The real
+/// fix is _deckAspectRatio - tall enough that a 2x2 grid of these portrait tiles and its
+/// padding fits inside one page with room to spare (see _deckAspectRatio's own doc comment).
+///
+/// No panel title ("The Wall") is rendered here (round 5) - the founder found it redundant
+/// with the RECAP badge and group name already on the post card's header, and dropping it
+/// bought back the vertical margin that let _deckAspectRatio shrink. The title still exists
+/// on [RecapCollagePanel.title] for a server that expects to read it back unchanged; this
+/// panel simply never reads it.
 class _WallPanel extends StatelessWidget {
-  const _WallPanel({required this.title, required this.cards, required this.groupId});
+  const _WallPanel({required this.cards, required this.groupId});
 
-  /// Null on every wall page after the chunk's first - the title is shown once per panel,
-  /// not repeated on every chunked page, so it doesn't eat into the space the tiles have.
-  final String? title;
   final List<RecapCard> cards;
   final String? groupId;
 
@@ -580,30 +909,16 @@ class _WallPanel extends StatelessWidget {
       decoration: const BoxDecoration(color: _bgSurface),
       child: Padding(
         padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (title != null)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
-                child: Text(title!,
-                    style: const TextStyle(
-                        color: _fgPrimary, fontWeight: FontWeight.w800, fontSize: 18)),
-              ),
-            Expanded(
-              child: GridView.builder(
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  mainAxisSpacing: 8,
-                  crossAxisSpacing: 8,
-                  childAspectRatio: 0.85,
-                ),
-                itemCount: cards.length,
-                itemBuilder: (context, i) => _WallTile(card: cards[i], groupId: groupId),
-              ),
-            ),
-          ],
+        child: GridView.builder(
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            mainAxisSpacing: 8,
+            crossAxisSpacing: 8,
+            childAspectRatio: 0.85,
+          ),
+          itemCount: cards.length,
+          itemBuilder: (context, i) => _WallTile(card: cards[i], groupId: groupId),
         ),
       ),
     );
@@ -616,52 +931,72 @@ class _WallTile extends StatelessWidget {
   final RecapCard card;
   final String? groupId;
 
+  /// Tapping a card that still has its photo/clip opens it full screen, the same authenticated
+  /// path a feed post's own carousel uses (see post_card.dart's `_openViewer`); the viewer's
+  /// own "Go to post" button (see [PhotoViewerScreen.postId]) is where a tap on the fullscreen
+  /// photo can reach the original check-in. A quote card has nothing to show full screen, and
+  /// a card whose media is gone (the removed-tile placeholder below) has nothing either - both
+  /// go straight to the post instead, which still exists even once its photo doesn't.
+  void _onTap(BuildContext context) {
+    final media = card.media;
+    if (media == null) {
+      Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => PostDetailScreen(postId: card.postId, groupId: groupId),
+      ));
+      return;
+    }
+    PhotoViewerScreen.open(context, media: [media], groupId: groupId, postId: card.postId);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(10),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          _WallTileContent(card: card, groupId: groupId),
-          Positioned(
-            left: 6,
-            right: 6,
-            top: 6,
-            child: Row(
-              children: [
-                UserAvatar(
-                  name: card.authorName,
-                  size: 20,
-                  mediaId: card.authorPhotoId,
-                  colorSeed: card.authorId,
-                  groupId: groupId,
-                ),
-                const SizedBox(width: 5),
-                Expanded(
-                  child: Text(
-                    card.authorName,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700,
-                      fontSize: 11,
-                      shadows: [Shadow(color: Colors.black87, blurRadius: 4)],
+    return GestureDetector(
+      onTap: () => _onTap(context),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            _WallTileContent(card: card, groupId: groupId),
+            Positioned(
+              left: 6,
+              right: 6,
+              top: 6,
+              child: Row(
+                children: [
+                  UserAvatar(
+                    name: card.authorName,
+                    size: 20,
+                    mediaId: card.authorPhotoId,
+                    colorSeed: card.authorId,
+                    groupId: groupId,
+                  ),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      card.authorName,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 11,
+                        shadows: [Shadow(color: Colors.black87, blurRadius: 4)],
+                      ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          if (card.rank == 1)
-            const Positioned(
-              top: 6,
-              right: 6,
-              child: Icon(Icons.star_rounded, color: Colors.amber, size: 18, shadows: [
-                Shadow(color: Colors.black54, blurRadius: 4),
-              ]),
-            ),
-        ],
+            if (card.rank == 1)
+              const Positioned(
+                top: 6,
+                right: 6,
+                child: Icon(Icons.star_rounded, color: Colors.amber, size: 18, shadows: [
+                  Shadow(color: Colors.black54, blurRadius: 4),
+                ]),
+              ),
+          ],
+        ),
       ),
     );
   }
