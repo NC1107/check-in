@@ -30,7 +30,7 @@ void main() {
       overrides: [multiSessionProvider.overrideWith(() => controller)],
       child: MaterialApp(
         // A phone-width column, like the card the deck actually lives in (post_card.dart's
-        // feed-width card). The deck's 4:3 AspectRatio page needs a bounded width to avoid
+        // feed-width card). The deck's AspectRatio page needs a bounded width to avoid
         // overflowing the test surface's fixed 600-tall viewport.
         home: Scaffold(
           body: SingleChildScrollView(
@@ -493,5 +493,217 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(find.text('Ada'), findsNWidgets(2));
+  });
+
+  /// The founder-reported round-3 regression: the Wall's grid overflowed a single deck page,
+  /// so with 4 cards only the top row was ever visible - the bottom row was clipped,
+  /// unreachable, no scroll. The fix chunks the collage across its own deck pages (see
+  /// RecapDeckState._buildPages) instead of overflowing one; these run it at every card
+  /// count from 1 up to the monthly cap (20) and confirm every single card is reachable by
+  /// swiping, with nothing throwing (no RenderFlex overflow) along the way.
+  for (final n in [1, 2, 4, 5, 9, 20]) {
+    testWidgets(
+        'the Wall paginates across deck pages instead of clipping: $n card(s), every card '
+        'reachable by swiping, nothing overflows', (tester) async {
+      final cards = [
+        for (var i = 1; i <= n; i++) quoteCard(authorId: i, authorName: 'Member $i', rank: i),
+      ];
+      final recap = RecapPayload(
+        periodLabel: 'August 2026',
+        cadence: 'monthly',
+        groupName: 'Ridgeway Family',
+        groupColor: 'coral',
+        stats: stats(),
+        panels: [RecapCollagePanel(title: 'The Wall', cards: cards)],
+      );
+      await pumpDeck(tester, recap);
+      expect(tester.takeException(), isNull);
+
+      // The chunk size (4 cards/page) is load-bearing here, not incidental: reverting to a
+      // single grid page per panel would make this itemCount 2 (cover + one Wall page)
+      // regardless of n, failing this assertion for every n above 4.
+      final wallPages = (n / 4).ceil();
+      final totalPages = wallPages + 1;
+      final pageView = tester.widget<PageView>(find.byType(PageView));
+      expect((pageView.childrenDelegate as SliverChildBuilderDelegate).estimatedChildCount,
+          totalPages);
+
+      // Swipe through every page one at a time - the same gesture a real viewer uses -
+      // asserting no exception (in particular no RenderFlex overflow) at each stop.
+      for (var i = 1; i < totalPages; i++) {
+        await tester.drag(find.byType(PageView), const Offset(-400, 0));
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull,
+            reason: 'page $i of $totalPages must render without overflow/clipping ($n cards)');
+      }
+
+      // The deck's very last card must be reachable, not silently clipped off behind an
+      // unreachable second grid row - the exact bug the founder hit.
+      expect(find.text('Member $n'), findsOneWidget);
+    });
+  }
+
+  /// Pins tile geometry, not just the absence of overflow - the gap that let the round-3
+  /// clipping regression ship in the first place, and the same gap an earlier version of
+  /// this very fix fell into: a single-row layout technically never clips, but it slices 4
+  /// tiles sharing one page's full height into a roughly 1:3 sliver, unrecognisable as a
+  /// photo. The Wall's tiles are a fixed-aspect 2x2 grid regardless of how many cards are on
+  /// the page (1 to [_wallCardsPerPage]), so every tile at every count should land in the
+  /// same sane portrait/landscape band.
+  for (final n in [1, 2, 3, 4]) {
+    testWidgets('the Wall tile aspect stays in a sane band at $n card(s) on a page',
+        (tester) async {
+      final cards = [for (var i = 1; i <= n; i++) quoteCard(authorId: i, authorName: 'Member $i')];
+      final recap = RecapPayload(
+        periodLabel: 'August 2026',
+        cadence: 'monthly',
+        groupName: 'Ridgeway Family',
+        groupColor: 'coral',
+        stats: stats(),
+        panels: [RecapCollagePanel(title: 'The Wall', cards: cards)],
+      );
+      await pumpDeck(tester, recap);
+      await swipeToPage(tester, find.byType(PageView), 1);
+      expect(tester.takeException(), isNull);
+
+      // Every Wall tile's outer ClipRRect - nothing else in the deck uses one - so this
+      // measures the tile's actual on-screen shape rather than trusting the GridView
+      // delegate's childAspectRatio parameter at face value.
+      final tiles = find.byType(ClipRRect);
+      expect(tiles, findsNWidgets(n));
+      for (var i = 0; i < n; i++) {
+        final size = tester.getSize(tiles.at(i));
+        final aspect = size.width / size.height;
+        expect(aspect, inInclusiveRange(0.6, 1.4),
+            reason: 'tile $i of $n rendered at $size (aspect ${aspect.toStringAsFixed(2)}) - '
+                'outside the band a recognisable photo needs');
+      }
+    });
+  }
+
+  /// Pumps the deck at an explicit width and text scale - unlike [pumpDeck]'s fixed 340px,
+  /// used for the clipping-under-text-scale tests below, which specifically need this app's
+  /// narrowest supported width (320dp) and a scale beyond the platform default (this app
+  /// never clamps textScaler - see _deckAspectRatio's doc comment).
+  Future<void> pumpDeckScaled(WidgetTester tester, RecapPayload recap,
+      {required double width, required double textScale}) async {
+    final controller =
+        MultiSessionController.seeded(MultiSession(groups: [account], restored: true));
+    await tester.pumpWidget(ProviderScope(
+      overrides: [multiSessionProvider.overrideWith(() => controller)],
+      child: MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(textScaler: TextScaler.linear(textScale)),
+          child: Scaffold(
+            body: SingleChildScrollView(
+              child: SizedBox(
+                  width: width, child: RecapDeck(recap: recap, groupId: account.id, postId: 1)),
+            ),
+          ),
+        ),
+      ),
+    ));
+    await tester.pump();
+  }
+
+  /// The gap the tile-aspect-band test above cannot see: tile size comes from the grid
+  /// delegate and is blind to whether its ancestor can actually paint it. 4:5 (an earlier
+  /// value tried for _deckAspectRatio) passed that aspect test cleanly while still clipping
+  /// the second row's tiles by several px at 1.3x text scale on a 320dp-wide device - an
+  /// ordinary accessibility setting this app never clamps against. These assert on each
+  /// tile's actual painted bounds against the page's own bounds instead, at the platform
+  /// default scale and two accessibility scales beyond it.
+  for (final scale in [1.0, 1.3, 1.6]) {
+    testWidgets(
+        "the Wall's second row is never clipped at textScaler ${scale}x on a 320dp-wide "
+        'device', (tester) async {
+      final cards = [for (var i = 1; i <= 4; i++) quoteCard(authorId: i, authorName: 'Member $i')];
+      final recap = RecapPayload(
+        periodLabel: 'August 2026',
+        cadence: 'monthly',
+        groupName: 'Ridgeway Family',
+        groupColor: 'coral',
+        stats: stats(),
+        panels: [RecapCollagePanel(title: 'The Wall', cards: cards)],
+      );
+      await pumpDeckScaled(tester, recap, width: 320, textScale: scale);
+      await swipeToPage(tester, find.byType(PageView), 1);
+      expect(tester.takeException(), isNull);
+
+      // The page's own outer bound - what a viewer's eye treats as "the card" - against
+      // each tile's actual painted rect. A tile whose bottom edge falls past the page's own
+      // is clipped by the PageView/GridView's own Viewport, however clean its "logical"
+      // aspect ratio (measured by the test above) looked.
+      final pageRect = tester.getRect(find.byType(AspectRatio));
+      final tiles = find.byType(ClipRRect);
+      expect(tiles, findsNWidgets(4));
+      for (var i = 0; i < 4; i++) {
+        final tileRect = tester.getRect(tiles.at(i));
+        expect(tileRect.bottom, lessThanOrEqualTo(pageRect.bottom),
+            reason: 'tile $i bottom ${tileRect.bottom} exceeds the page bottom '
+                '${pageRect.bottom} at ${scale}x text scale - clipped by '
+                '${tileRect.bottom - pageRect.bottom}px');
+      }
+    });
+  }
+
+  testWidgets('the Wall panel title is shown once, on the chunk\'s first page only',
+      (tester) async {
+    // 5 cards -> 2 wall pages at 4/page. The title must not repeat on the second page - it
+    // would eat into the tight vertical space the page has for the tiles themselves.
+    final cards = [for (var i = 1; i <= 5; i++) quoteCard(authorId: i, authorName: 'Member $i')];
+    final recap = RecapPayload(
+      periodLabel: 'August 2026',
+      cadence: 'monthly',
+      groupName: 'Ridgeway Family',
+      groupColor: 'coral',
+      stats: stats(),
+      panels: [RecapCollagePanel(title: 'The Wall', cards: cards)],
+    );
+    await pumpDeck(tester, recap);
+    await swipeToPage(tester, find.byType(PageView), 1);
+    expect(find.text('The Wall'), findsOneWidget);
+
+    await swipeToPage(tester, find.byType(PageView), 1);
+    expect(find.text('The Wall'), findsNothing);
+  });
+
+  testWidgets('the page-dot row compresses to a bounded window once page count is large',
+      (tester) async {
+    // Only reachable with an oversized group: collageCardCap's memberCount floor can push
+    // the Wall's card cap (and so its page count) well past the 20-card monthly default -
+    // here 36 members forces a 36-card cap, 9 wall pages, 10 pages total with the cover.
+    final cards = [for (var i = 1; i <= 36; i++) quoteCard(authorId: i, authorName: 'Member $i')];
+    final recap = RecapPayload(
+      periodLabel: 'August 2026',
+      cadence: 'monthly',
+      groupName: 'Ridgeway Family',
+      groupColor: 'coral',
+      stats: stats(),
+      panels: [RecapCollagePanel(title: 'The Wall', cards: cards)],
+    );
+    await pumpDeck(tester, recap);
+    expect(tester.takeException(), isNull);
+
+    // Every dot the row renders is a Container with an explicit 6px height (the inactive
+    // dot's own height - the active one shares it too, just a wider width) - a marker no
+    // other widget in the tree sets, so counting them is a direct read of how many dots are
+    // actually on screen. 10 pages total (cover + 9 wall pages) is past the row's
+    // uncompressed ceiling (9): it must render its bounded 7-dot window, not one dot per
+    // page, or the row risks overflowing outright.
+    final dots = find.byWidgetPredicate((w) => w is Container && w.constraints?.maxHeight == 6.0);
+    expect(dots, findsNWidgets(7),
+        reason: 'past the uncompressed ceiling the row must show its bounded window, not one '
+            'dot per page');
+
+    // Swipe to the last page and confirm it's still reachable without overflow, which is
+    // what actually matters - the dot row degrading gracefully must never come at the cost
+    // of a page becoming unreachable.
+    for (var i = 0; i < 9; i++) {
+      await tester.drag(find.byType(PageView), const Offset(-400, 0));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    }
+    expect(find.text('Member 36'), findsOneWidget);
   });
 }

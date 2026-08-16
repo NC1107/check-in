@@ -73,8 +73,8 @@ func TestServerInfoUnionOfGifAndRecapCapabilities(t *testing.T) {
 	if !info.Recap {
 		t.Error(`server-info "recap" = false, want true`)
 	}
-	if info.RecapCadence != "weekly" {
-		t.Errorf("recapCadence = %q, want the schema default %q", info.RecapCadence, "weekly")
+	if info.RecapCadence != "monthly" {
+		t.Errorf("recapCadence = %q, want the schema default %q", info.RecapCadence, "monthly")
 	}
 }
 

@@ -51,7 +51,9 @@ class _RecapSettingsScreenState extends ConsumerState<RecapSettingsScreen> {
     final account = ref.read(contentAccountProvider(widget.groupId));
     // The account's last-known settings (refreshed on every hydrate) prefill the screen
     // instantly; there's no separate GET, so this is as fresh as the last launch/refresh.
-    _cadence = 'weekly';
+    // 'monthly' mirrors the schema default (0021) - the momentary state shown before
+    // _loadCurrent resolves, on a group that has never touched this screen before.
+    _cadence = 'monthly';
     _weekday = 1;
     _hour = 19;
     _loadCurrent(account);

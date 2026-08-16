@@ -1,0 +1,17 @@
+-- Round-4 device feedback: the default recap cadence flips from weekly to monthly. A week
+-- rarely accumulates enough check-ins for a recap to feel like anything but "the same
+-- handful of photos you just scrolled past" - a month gives a group time to actually forget
+-- what happened, so the ranked collage reads as a genuine recap instead of a rerun. The
+-- monthly collage cap (20 vs weekly's 12, see selectCollageCards' collageCardCap) already
+-- assumed this cadence would be the norm; this migration is what makes it the default.
+--
+-- This only changes what a brand new server_config row gets - it deliberately does NOT
+-- touch any existing row. There is no way to tell, from the schema alone, a host who
+-- deliberately chose weekly from one who simply never visited recap settings: recap_since is
+-- stamped once, at column-add time, and never rewritten on a settings change, and a
+-- genuinely-weekly small group that keeps missing the quality bar (recapMinPosts/
+-- recapMinPosters) can go months without ever writing a row to recaps - so "no scheduled
+-- recap yet" is not evidence of "untouched". A host's chosen cadence is theirs; the default
+-- only governs what a new install starts on. (The handful of servers this project itself
+-- operates are moved to monthly by hand, outside this migration, on purpose.)
+ALTER TABLE server_config ALTER COLUMN recap_cadence SET DEFAULT 'monthly';
