@@ -429,19 +429,24 @@ class ApiClient {
 
   /// setRecapSettings updates the group's standing recap cadence (admin only). Callers must
   /// only reach this once the group's server has advertised [ServerInfo.recapCapable].
-  Future<ServerInfo> setRecapSettings({
+  ///
+  /// Returns nothing rather than a [ServerInfo]: the PATCH response only carries
+  /// name/color/recap settings, not the "recap" capability flag itself, so parsing it as a
+  /// full ServerInfo would read recapCapable back as false - a trap for a future caller who
+  /// reasonably expects the return value of a ServerInfo-shaped call to be trustworthy.
+  /// Refresh the account's real capability from [serverInfo] if it's ever needed here.
+  Future<void> setRecapSettings({
     required String cadence,
     required int weekday,
     required int hour,
     required int offset,
   }) async {
-    final r = await _dio.patch('/api/admin/server', data: {
+    await _dio.patch('/api/admin/server', data: {
       'recapCadence': cadence,
       'recapWeekday': weekday,
       'recapHour': hour,
       'recapOffset': offset,
     });
-    return ServerInfo.fromJson(r.data as Map<String, dynamic>);
   }
 
   /// generateRecap asks the server to build an on-demand recap for [periodStart,

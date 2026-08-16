@@ -390,6 +390,17 @@ class _PlaceFix {
   final double lng;
 }
 
+/// The single gate on whether coordinates are sent to [target] with a check-in: only once
+/// its server has advertised the recap capability (see [ServerAccount.recapCapable]). This
+/// server rejects unknown JSON fields, so sending lat/lng to a server that predates the
+/// feature would fail the whole post, not just skip the coordinates - pulled out as its own
+/// top-level function (rather than inlined in [_ComposeSheetState._submit]) specifically so
+/// this guard is directly testable, see recap_coords_gating_test.dart.
+({double? lat, double? lng}) recapCoordsFor(ServerAccount target, double? lat, double? lng) {
+  if (!target.recapCapable) return (lat: null, lng: null);
+  return (lat: lat, lng: lng);
+}
+
 /// Inline compose bottom sheet matching the design. Shown as a modal from the feed's
 /// compose button; public so the sheet's own behavior can be exercised on its own.
 class ComposeSheet extends ConsumerStatefulWidget {
@@ -954,11 +965,7 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
           for (final t in _tagged)
             if (t.idIn(g.id) case final id?) id
         ];
-        // lat/lng only ever go to a server that has advertised the recap capability - this
-        // server rejects unknown JSON fields, so sending them to a server that predates the
-        // feature would fail the whole post, not just skip the coordinates.
-        final lat = g.recapCapable ? _lat : null;
-        final lng = g.recapCapable ? _lng : null;
+        final coords = recapCoordsFor(g, _lat, _lng);
         if (_clip != null) {
           final mediaId = await api.uploadImage(_clipEncodedPath ?? _clip!.path);
           final poster = _clipPoster;
@@ -976,8 +983,8 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
               location: _location,
               peopleIds: peopleIds,
               crossPostId: crossPostId,
-              lat: lat,
-              lng: lng);
+              lat: coords.lat,
+              lng: coords.lng);
         } else if (_images.isNotEmpty) {
           final ids = <int>[];
           for (final x in _images) {
@@ -990,8 +997,8 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
               location: _location,
               peopleIds: peopleIds,
               crossPostId: crossPostId,
-              lat: lat,
-              lng: lng);
+              lat: coords.lat,
+              lng: coords.lng);
         } else {
           await api.createPost(
               kind: 'text',

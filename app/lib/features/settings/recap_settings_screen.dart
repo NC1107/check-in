@@ -36,6 +36,10 @@ class _RecapSettingsScreenState extends ConsumerState<RecapSettingsScreen> {
   late int _weekday;
   late int _hour;
   bool _saving = false;
+  // Covers the whole generate flow, including the confirm-replace round trip - not just
+  // the network call - so a double tap can't launch two on-demand requests while the first
+  // is still in flight and the confirm dialog for it hasn't even shown yet.
+  bool _generating = false;
 
   @override
   void initState() {
@@ -143,7 +147,12 @@ class _RecapSettingsScreenState extends ConsumerState<RecapSettingsScreen> {
       builder: (_) => const _GenerateRecapSheet(),
     );
     if (result == null || !mounted) return;
-    await _submitGenerate(result, replace: false);
+    setState(() => _generating = true);
+    try {
+      await _submitGenerate(result, replace: false);
+    } finally {
+      if (mounted) setState(() => _generating = false);
+    }
   }
 
   Future<void> _submitGenerate(_GenerateChoice choice, {required bool replace}) async {
@@ -267,10 +276,16 @@ class _RecapSettingsScreenState extends ConsumerState<RecapSettingsScreen> {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: FilledButton.icon(
-              onPressed: _generateNow,
+              onPressed: _generating ? null : _generateNow,
               style: FilledButton.styleFrom(backgroundColor: context.accent),
-              icon: const Icon(Icons.auto_awesome_outlined),
-              label: const Text('Generate a recap now'),
+              icon: _generating
+                  ? SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: context.onAccent),
+                    )
+                  : const Icon(Icons.auto_awesome_outlined),
+              label: Text(_generating ? 'Generating…' : 'Generate a recap now'),
             ),
           ),
           const Padding(
