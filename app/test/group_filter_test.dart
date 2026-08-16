@@ -31,13 +31,17 @@ void main() {
       ProviderScope(
         overrides: [
           multiSessionProvider.overrideWith(() => controller),
-          // Mirror production: the feed only carries posts from currently-shown groups.
+          // Mirror production: the feed only carries posts from currently-shown groups, and
+          // goes through the same merge (cross-post copies collapsed, newest first).
           feedProvider.overrideWith((ref) async {
             final shown = {for (final g in ref.watch(multiSessionProvider).shownGroups) g.id};
-            return FeedResult(posts: [
-              for (final p in posts)
-                if (shown.contains(p.groupId)) p
-            ]);
+            return FeedResult(
+                posts: mergeFeeds([
+              [
+                for (final p in posts)
+                  if (shown.contains(p.groupId)) p
+              ]
+            ]));
           }),
           locationsProvider.overrideWith((ref, groupId) async => locations),
           groupMembersProvider.overrideWith((ref, groupId) async => members[groupId] ?? []),
@@ -202,6 +206,73 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('hi'), findsNWidgets(2)); // Nick's alpha + beta posts
     expect(find.text('Ada'), findsNothing); // Ada's post filtered out
+  });
+
+  testWidgets('a cross-post tagged in every group is found by the merged People pill',
+      (tester) async {
+    Post copy(int id, String groupId, int authorId, int taggedId, DateTime at) => Post(
+          id: id,
+          authorId: authorId,
+          authorName: 'Nick',
+          kind: 'text',
+          body: 'at the crag',
+          createdAt: at,
+          likeCount: 0,
+          commentCount: 0,
+          likedByViewer: false,
+          groupId: groupId,
+          crossPostId: 'x',
+          people: [(id: taggedId, name: 'Ada')],
+        );
+    // The same check-in shared to both groups, tagging the same human under each server's
+    // own id for her (2 on alpha, 12 on beta) - what compose now sends.
+    await pump(
+      tester,
+      const MultiSession(groups: [alpha, beta], restored: true),
+      posts: [
+        copy(17, 'beta.invalid', 7, 12, DateTime(2026, 7, 2, 11)),
+        copy(42, 'alpha.invalid', 1, 2, DateTime(2026, 7, 2, 10)),
+        Post(
+          id: 1,
+          authorId: 1,
+          authorName: 'Nick',
+          kind: 'text',
+          body: 'solo post',
+          createdAt: DateTime(2026, 7, 1),
+          likeCount: 0,
+          commentCount: 0,
+          likedByViewer: false,
+          groupId: 'alpha.invalid',
+        ),
+      ],
+      members: {
+        'alpha.invalid': [
+          User(id: 1, name: 'Nick', phone: '+15550001111', isAdmin: true),
+          User(id: 2, name: 'Ada', phone: '+15550002222', isAdmin: false),
+        ],
+        'beta.invalid': [
+          User(id: 7, name: 'Nick', phone: '+15550001111', isAdmin: false),
+          User(id: 12, name: 'Ada', phone: '+15550002222', isAdmin: false),
+        ],
+      },
+    );
+    // The copies collapse into one card.
+    expect(find.text('at the crag'), findsOneWidget);
+
+    await openFilter(tester);
+    final sheet = find.byType(BottomSheet);
+    // Ada is tagged under two different ids, but she is one person, so one pill.
+    expect(find.descendant(of: sheet, matching: find.text('Ada')), findsOneWidget);
+
+    await tester.tap(find.descendant(of: sheet, matching: find.text('Ada')));
+    await tester.pump();
+    await tester.tap(find.text('Show results'));
+    await tester.pumpAndSettle();
+
+    // "posts they're in" resolves the tag against the copy's own group, so the cross-post
+    // stays and the untagged post goes.
+    expect(find.text('at the crag'), findsOneWidget);
+    expect(find.text('solo post'), findsNothing);
   });
 
   testWidgets('the All pill toggles: all on <-> all off', (tester) async {
