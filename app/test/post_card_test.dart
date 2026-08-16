@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 
 import 'package:checkin/api/models.dart';
 import 'package:checkin/features/feed/post_card.dart';
@@ -33,6 +34,12 @@ void main() {
     groupId: 'alpha.invalid',
   );
 
+  // A recap post's cover reports real visibility through the `visibility_detector` package
+  // (see recap_card.dart's _RecapCoverPageState). Zero here means its callbacks fire off a
+  // post-frame callback instead of a real Timer - the package's own documented "useful for
+  // automated tests" mode.
+  setUpAll(() => VisibilityDetectorController.instance.updateInterval = Duration.zero);
+
   Future<void> pumpCard(WidgetTester tester, {Color? groupColor}) async {
     final controller =
         MultiSessionController.seeded(MultiSession(groups: [account], restored: true));
@@ -57,6 +64,15 @@ void main() {
       ),
     ));
     await tester.pump();
+    // A recap post's cover keeps a debounce Timer (and, once visible, ambient
+    // AnimationControllers - see recap_card.dart's _RecapCoverPageState and friends) alive
+    // for as long as it stays mounted. Neither test below cares about that animation, so
+    // this drains it once the test is done: flutter_test's own end-of-test checks (no
+    // pending Timer, no still-ticking animation) would otherwise trip on it.
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(milliseconds: 300));
+    });
   }
 
   /// A recap post shaped closely enough to the real wire format for the header/overflow-menu

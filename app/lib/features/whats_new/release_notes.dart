@@ -19,6 +19,13 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.14',
+    highlights: [
+      "Recap covers drift through the period's own photos while everyone who checked in floats on top.",
+      'Tap any photo in a recap to see it full screen, and jump from there to the original check-in.',
+    ],
+  ),
+  ReleaseNote(
     version: '1.13',
     highlights: [
       'Recaps open on the people who checked in that period - a cluster of your faces, sized by who posted most.',

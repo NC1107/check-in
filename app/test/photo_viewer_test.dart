@@ -4,12 +4,29 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart';
 
+import 'package:checkin/api/api_client.dart';
 import 'package:checkin/api/models.dart';
+import 'package:checkin/features/post/post_detail_screen.dart';
 import 'package:checkin/state/app_state.dart';
 import 'package:checkin/widgets/media_frame.dart';
 import 'package:checkin/widgets/photo_viewer.dart';
 
 import 'support/fake_video_platform.dart';
+
+/// An ApiClient whose post/comment reads are stubbed, the same way
+/// comment_gif_render_test.dart drives PostDetailScreen without a network - only the calls
+/// the screen actually makes are overridden.
+class _FakeApi extends ApiClient {
+  _FakeApi({required this.post}) : super(baseUrl: '');
+
+  final Post post;
+
+  @override
+  Future<Post> getPost(int id) async => post;
+
+  @override
+  Future<List<Comment>> comments(int postId) async => const [];
+}
 
 /// A multi-image check-in's full-screen viewer must let the viewer swipe between every
 /// photo on the post, not just the one they tapped into - that was the reported bug. A
@@ -126,6 +143,86 @@ void main() {
     // ...and the poster (a MediaFrame) is shown underneath until a frame decodes, which it
     // never will here - so it stays put rather than flashing black.
     expect(find.byType(MediaFrame), findsOneWidget);
+  });
+
+  // The "Go to post" button (round 5): a viewer opened for a recap Wall card - the only
+  // caller that has anywhere else to send someone - carries the post it belongs to and
+  // offers a way there. Every other caller (a post's own carousel, a profile photo) passes
+  // no postId and gets no button, since they have nothing new to navigate to.
+  group('the "Go to post" button', () {
+    final post = Post(
+      id: 42,
+      authorId: 2,
+      authorName: 'Ada',
+      kind: 'image',
+      body: 'movie night',
+      createdAt: DateTime(2026, 1, 1),
+      likeCount: 0,
+      commentCount: 0,
+      likedByViewer: false,
+      groupId: 'alpha.invalid',
+    );
+
+    // Opened the same way [pump] above opens the viewer - through .open()'s push over a base
+    // route - rather than as the Navigator's only route: [PhotoViewerScreen._openPost] pops
+    // before it pushes, and popping a Navigator's sole route is a no-op, which would leave
+    // this test unable to tell "closed" from "never closed" apart.
+    Future<void> pumpWithPostId(WidgetTester tester, {int? postId}) async {
+      final controller =
+          MultiSessionController.seeded(MultiSession(groups: [account], restored: true));
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          multiSessionProvider.overrideWith(() => controller),
+          contentApiProvider('alpha.invalid').overrideWithValue(_FakeApi(post: post)),
+        ],
+        child: MaterialApp(
+          home: Builder(builder: (context) {
+            return Scaffold(
+              body: Center(
+                child: TextButton(
+                  onPressed: () => PhotoViewerScreen.open(
+                    context,
+                    media: const [PostMedia(id: 7, mime: 'image/jpeg', width: 800, height: 600)],
+                    groupId: 'alpha.invalid',
+                    postId: postId,
+                  ),
+                  child: const Text('open'),
+                ),
+              ),
+            );
+          }),
+        ),
+      ));
+      await tester.tap(find.text('open'));
+      await settle(tester);
+    }
+
+    testWidgets('is absent when the viewer carries no postId (a post\'s own carousel)',
+        (tester) async {
+      await pumpWithPostId(tester);
+      expect(find.text('Go to post'), findsNothing);
+    });
+
+    testWidgets('is shown when the viewer carries a postId (a recap Wall card)', (tester) async {
+      await pumpWithPostId(tester, postId: 42);
+      expect(find.text('Go to post'), findsOneWidget);
+    });
+
+    testWidgets('tapping it closes the viewer and pushes the post it named', (tester) async {
+      await pumpWithPostId(tester, postId: 42);
+
+      await tester.tap(find.text('Go to post'));
+      await settle(tester);
+
+      expect(find.byType(PhotoViewerScreen), findsNothing,
+          reason: 'the viewer must close, not stay open underneath the post');
+      expect(find.byType(PostDetailScreen), findsOneWidget);
+      final screen = tester.widget<PostDetailScreen>(find.byType(PostDetailScreen));
+      expect(screen.postId, 42);
+      expect(screen.groupId, 'alpha.invalid');
+      // The stubbed post actually loaded on the pushed screen, not just an empty shell.
+      expect(find.text('movie night'), findsOneWidget);
+    });
   });
 
   // Tapping an autoplaying feed clip must not send it back to its first frame. The feed

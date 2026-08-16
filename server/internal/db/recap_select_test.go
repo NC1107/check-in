@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -358,5 +359,60 @@ func TestRecapPeopleCarriesPhotoID(t *testing.T) {
 	people := recapPeople(candidates)
 	if people[0].PhotoID == nil || *people[0].PhotoID != 77 {
 		t.Errorf("people[0].PhotoID = %v, want 77", people[0].PhotoID)
+	}
+}
+
+// TestCandidateToCardClip pins the video/* branch of candidateToCard: a candidate whose
+// attachment is a clip becomes a "clip" card (not "photo"), and its DurationMs/HasPoster -
+// the fields the app's Wall tile and cover montage need to show a play badge, a duration
+// pill, and pick the poster-only render path rather than a raw AuthImage decode of the
+// mp4 - survive the mapping. The video/photo branch itself (candidateToCard's if) has no
+// other direct test; every other recap_select_test.go case exercises it implicitly through
+// an empty Mime, which trivially takes the "photo" branch.
+func TestCandidateToCardClip(t *testing.T) {
+	c := recapCandidate{
+		PostID: 1, AuthorID: 2, AuthorName: "Ada",
+		MediaID: mid(500), Mime: "video/mp4", Width: 1080, Height: 1920,
+		DurationMs: 8400, HasPoster: true,
+		LikeCount: 3, CommentCount: 1,
+	}
+	card := candidateToCard(c, 1, true)
+
+	if card.Kind != "clip" {
+		t.Fatalf(`Kind = %q, want "clip" - a video/* mime must not fall through to "photo"`, card.Kind)
+	}
+	if card.MediaID == nil || *card.MediaID != 500 {
+		t.Errorf("MediaID = %v, want 500", card.MediaID)
+	}
+	if card.Mime != "video/mp4" {
+		t.Errorf("Mime = %q, want %q", card.Mime, "video/mp4")
+	}
+	if card.DurationMs != 8400 {
+		t.Errorf("DurationMs = %d, want 8400 - dropped between the candidate and the card", card.DurationMs)
+	}
+	if !card.HasPoster {
+		t.Error("HasPoster = false, want true - dropped between the candidate and the card")
+	}
+
+	// Round-tripped through JSON the same way the API actually serves it, checked against
+	// the exact keys the client's RecapCard.fromJson reads (app/lib/api/models.dart) - a
+	// struct-tag typo here would silently drop the field client-side with no compile error
+	// on either end, which is exactly what would make the duration pill quietly never render.
+	raw, err := json.Marshal(card)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if decoded["kind"] != "clip" {
+		t.Errorf(`JSON "kind" = %v, want "clip"`, decoded["kind"])
+	}
+	if decoded["durationMs"] != float64(8400) {
+		t.Errorf(`JSON "durationMs" = %v, want 8400`, decoded["durationMs"])
+	}
+	if decoded["hasPoster"] != true {
+		t.Errorf(`JSON "hasPoster" = %v, want true`, decoded["hasPoster"])
 	}
 }
