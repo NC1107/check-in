@@ -314,6 +314,20 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
         if (prev != next) _registerServices();
       },
     );
+    // The authoritative fix for a capability drop mid-drag (a shown-group change, or a
+    // capability update landing while a finger is down on the handle): force the surface
+    // shut whenever nothing capable is shown anymore and it isn't already closed, no matter
+    // which widget's build/dispose runs when. This owns the controller, so it holds
+    // regardless - MemoriesHandle also settles a drag of its own as a second line of
+    // defense (see its dispose() and build()'s incapable branch), but this is what must
+    // never miss: an open (or mid-transition) surface for a capability that just
+    // disappeared has nothing left to show and no reachable close button on some layouts.
+    ref.listen<bool>(
+      multiSessionProvider.select((s) => s.memoriesCapableShownGroups.isNotEmpty),
+      (prev, next) {
+        if (!next && _memoriesController.value != 0) _closeMemories();
+      },
+    );
     final account = ref.watch(currentAccountProvider);
     final me = account?.user;
 

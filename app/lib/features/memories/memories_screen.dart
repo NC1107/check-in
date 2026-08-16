@@ -165,6 +165,11 @@ class MemoriesHandle extends ConsumerStatefulWidget {
 class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
   late final _drag = MemoriesDragDriver(widget.controller);
 
+  // Cached from the last build, so dispose() (which cannot safely call MediaQuery.of -
+  // the context is on its way out) still knows whether to animate or snap when it settles
+  // a stranded drag. See dispose()'s own comment.
+  bool _reduceMotion = false;
+
   void _open(bool reduceMotion) {
     HapticFeedback.selectionClick();
     widget.controller.animateTo(1,
@@ -173,16 +178,39 @@ class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
   }
 
   @override
+  void dispose() {
+    // Belt and braces alongside _HomeShellState's own capability-drop guard (the
+    // authoritative fix - see its doc comment): if this whole widget is ever removed from
+    // the tree while a drag was in progress, rather than merely rebuilt to
+    // SizedBox.shrink() (see build()'s own settle for that far more common case),
+    // DragGestureRecognizer.dispose() does not fire onCancel, so nothing else would ever
+    // settle the controller. A no-op when no drag was in progress - see
+    // MemoriesDragDriver.cancel.
+    _drag.cancel(_reduceMotion);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final capable =
         ref.watch(multiSessionProvider.select((s) => s.memoriesCapableShownGroups.isNotEmpty));
+    final reduceMotion = MediaQuery.of(context).disableAnimations;
+    _reduceMotion = reduceMotion;
     // An overlay, not a Row child (see the class doc comment) - shrinking to nothing here
     // costs no layout, only removes the gesture surface and lets taps fall through to
     // whatever the handle was sitting on top of.
-    if (!capable) return const SizedBox.shrink();
+    if (!capable) {
+      // Capability can drop mid-drag - a shown-group change, or a capability update
+      // landing while a finger is down - and the GestureDetector subtree below is about to
+      // be torn out from under that drag without ever getting an onCancel (see dispose()'s
+      // comment: the same gap, just reached by a rebuild here rather than the whole widget
+      // going away). Settle it first, so the controller never gets stranded between 0 and
+      // 1 with nothing left mounted to finish the gesture.
+      _drag.cancel(reduceMotion);
+      return const SizedBox.shrink();
+    }
 
     final width = MediaQuery.sizeOf(context).width;
-    final reduceMotion = MediaQuery.of(context).disableAnimations;
     return Semantics(
       button: true,
       label: 'Memories',
