@@ -24,6 +24,8 @@ class PhotoViewerScreen extends StatefulWidget {
     this.initialIndex = 0,
     this.groupId,
     this.initialClipPositions = const {},
+    this.adoptedControllers = const {},
+    this.onReleaseAdopted,
   });
 
   /// Every attachment reachable from this viewer (e.g. all of a post's media). A
@@ -44,6 +46,18 @@ class PhotoViewerScreen extends StatefulWidget {
   /// `FeedAutoplayScope.continuation`, which is what fills this in.
   final Map<int, Duration> initialClipPositions;
 
+  /// Live players lent by the feed, by media id - in practice the single clip that was
+  /// autoplaying when it was tapped. An adopted player is already initialised, already
+  /// playing, already where the feed had got to, so its page shows the picture on its first
+  /// frame: no init, no seek, no play glyph in between. Every other clip here builds its own
+  /// player from [initialClipPositions] as before. See `FeedAutoplayScope.lend`.
+  final Map<int, VideoPlayerController> adoptedControllers;
+
+  /// Hands an adopted player back when the viewer is done with it. Not disposing it here is
+  /// the contract: the feed re-attaches it to the tile it came from, or disposes it itself
+  /// if that tile has gone.
+  final void Function(int mediaId, VideoPlayerController controller)? onReleaseAdopted;
+
   /// Pushes the viewer over everything (above the bottom nav). The backdrop is painted by
   /// the viewer itself so it can fade as the photo is dragged away, so the route barrier
   /// stays transparent.
@@ -53,6 +67,8 @@ class PhotoViewerScreen extends StatefulWidget {
     int initialIndex = 0,
     String? groupId,
     Map<int, Duration> initialClipPositions = const {},
+    Map<int, VideoPlayerController> adoptedControllers = const {},
+    void Function(int mediaId, VideoPlayerController controller)? onReleaseAdopted,
   }) {
     return Navigator.of(context, rootNavigator: true).push(
       PageRouteBuilder(
@@ -64,6 +80,8 @@ class PhotoViewerScreen extends StatefulWidget {
           initialIndex: initialIndex,
           groupId: groupId,
           initialClipPositions: initialClipPositions,
+          adoptedControllers: adoptedControllers,
+          onReleaseAdopted: onReleaseAdopted,
         ),
         transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
       ),
@@ -98,11 +116,32 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTicker
     _reset = AnimationController(vsync: this, duration: const Duration(milliseconds: 200));
   }
 
+  /// Held here rather than in the page that draws it, because a [PageView] destroys a page
+  /// as soon as it is swiped off screen. A lent player has to outlive that - swiping to the
+  /// next photo and back must find the same player, not hand it home and build a new one -
+  /// so the viewer keeps it for as long as it is open and gives it back once, on the way out.
+  late final Map<int, VideoPlayerController> _adopted = {...widget.adoptedControllers};
+
   @override
   void dispose() {
+    _releaseAdopted();
     _pageCtrl.dispose();
     _reset.dispose();
     super.dispose();
+  }
+
+  void _releaseAdopted() {
+    final release = widget.onReleaseAdopted;
+    for (final entry in _adopted.entries) {
+      if (release == null) {
+        // Nothing to hand it back to (only reachable if a caller lends without saying where
+        // to return it). Better a stopped player than a decoder nobody owns.
+        unawaited(entry.value.dispose());
+      } else {
+        release(entry.key, entry.value);
+      }
+    }
+    _adopted.clear();
   }
 
   void _onDragStart(DragStartDetails _) => _reset.stop();
@@ -159,15 +198,17 @@ class _PhotoViewerScreenState extends State<PhotoViewerScreen> with SingleTicker
                     }),
                     itemBuilder: (_, i) {
                       final m = widget.media[i];
-                      // A clip plays here; a photo pinch-zooms. The video page owns exactly
-                      // one controller and only while it is the visible page (active), so
-                      // paging away tears it down - the strict lifecycle the plan calls for.
+                      // A clip plays here; a photo pinch-zooms. A page it built its own
+                      // player for keeps it only while it is the visible page, so paging
+                      // away tears it down; a lent player is only paused, because it is the
+                      // feed's and goes home intact.
                       if (m.isVideo) {
                         return _VideoPage(
                           media: m,
                           groupId: widget.groupId,
                           active: i == _page,
                           startAt: widget.initialClipPositions[m.id],
+                          adopted: _adopted[m.id],
                         );
                       }
                       return _ZoomablePhoto(
@@ -304,27 +345,42 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> {
   }
 }
 
-/// One clip inside the viewer's [PageView]: plays the stored MP4 (the main file, not the
-/// poster variant) over its own poster, which stays visible until the first frame decodes so
-/// there is no black flash. A clip tapped mid-autoplay resumes from [startAt] rather than
-/// restarting the bit the viewer has already seen. Tap toggles play/pause; the corner
-/// button carries the same sticky mute the feed tiles use ([clipsMutedProvider]), so sound
-/// is one choice across the app rather than one per player.
+/// One clip inside the viewer's [PageView].
 ///
-/// The lifecycle is the whole point. There is exactly one controller and only while this is
-/// the active page: it is created when the page becomes active and torn down the moment it
-/// stops being active (a swipe) or the viewer closes, and paused when the app backgrounds.
-/// That keeps the app off the ListView-controller scar and inside Android's small pool of
-/// hardware video decoders.
+/// The clip tapped in the feed arrives as an [adopted] player: already running, already at
+/// the frame the feed was showing, so the picture is there on this page's first build.
+/// Anything else - the other clips on a multi-media post, or a viewer opened from a post
+/// detail where no feed was playing - builds its own player over its poster, which stays
+/// visible until the first frame decodes so there is no black flash, and resumes from
+/// [startAt] if a position was carried across.
+///
+/// Tap toggles play/pause; the corner button carries the same sticky mute the feed tiles use
+/// ([clipsMutedProvider]), so sound is one choice across the app rather than one per player.
+///
+/// The lifecycle is the whole point. A player this page built lives only while this is the
+/// active page: created when the page becomes active, torn down the moment it stops being
+/// active (a swipe) or the viewer closes. An adopted one is never created or disposed here,
+/// only paused - it belongs to the feed, and the viewer returns it. Either way the app stays
+/// off the ListView-controller scar and inside Android's small pool of hardware decoders.
 class _VideoPage extends ConsumerStatefulWidget {
-  const _VideoPage({required this.media, required this.active, this.groupId, this.startAt});
+  const _VideoPage({
+    required this.media,
+    required this.active,
+    this.groupId,
+    this.startAt,
+    this.adopted,
+  });
 
   final PostMedia media;
   final String? groupId;
   final bool active;
 
   /// Where the feed had got to in this clip when it was tapped, if it was playing there.
+  /// Ignored when there is an [adopted] player, which is already there.
   final Duration? startAt;
+
+  /// The feed's live player for this clip, lent for as long as the viewer is open.
+  final VideoPlayerController? adopted;
 
   @override
   ConsumerState<_VideoPage> createState() => _VideoPageState();
@@ -367,6 +423,16 @@ class _VideoPageState extends ConsumerState<_VideoPage> with WidgetsBindingObser
 
   void _create() {
     if (_controller != null) return;
+    final adopted = widget.adopted;
+    if (adopted != null) {
+      // Nothing to bring up: it is initialised, looping, at the right volume and at the
+      // frame the feed was on. Touching any of that is what the round-4 hand-off did, and
+      // the pause while it happened is the bug.
+      _controller = adopted;
+      _initialized = true;
+      if (widget.active && !adopted.value.isPlaying) unawaited(adopted.play());
+      return;
+    }
     // Point at the clip itself (imageUrl with no variant), with the same bearer header the
     // image loader uses. Playback is device-only; on an unsupported host (a widget test)
     // initialize rejects and the poster simply stays put.
@@ -409,7 +475,10 @@ class _VideoPageState extends ConsumerState<_VideoPage> with WidgetsBindingObser
     _controller = null;
     _initialized = false;
     controller?.pause();
-    controller?.dispose();
+    // A lent player is only ever paused here. It is the feed's, the viewer hands it back
+    // whole when it closes, and disposing it would leave the feed with a dead controller.
+    if (controller == null || identical(controller, widget.adopted)) return;
+    controller.dispose();
   }
 
   void _togglePlay() {

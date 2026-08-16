@@ -16,6 +16,44 @@ final feedVideoFactoryProvider = Provider<FeedVideoFactory>(
   (ref) => (url, headers) => VideoPlayerController.networkUrl(url, httpHeaders: headers),
 );
 
+/// The tile that currently holds the feed's one player, seen from the manager.
+///
+/// Implemented by the feed clip's state. The manager holds at most one of these at a time,
+/// and only between the tile's player coming up and it going away again.
+abstract interface class FeedClipPlayer {
+  /// How far into the clip the player has got.
+  Duration get position;
+
+  /// Hands the live controller over, leaving the tile on its poster. The tile keeps neither
+  /// a claim to drive it nor the job of disposing it until it comes back. Null when the
+  /// player has already gone.
+  VideoPlayerController? detach();
+
+  /// Takes a lent controller back. False when this tile can no longer use it - it has left
+  /// the list, or been recycled onto another clip - in which case the manager disposes it.
+  bool reattach(VideoPlayerController controller);
+}
+
+/// A feed tile's live player, on loan to the full-screen viewer.
+///
+/// Lending the running controller rather than building a second one for the same clip is
+/// the point: a second controller means a fresh network init and a seek, which the user
+/// sees as a play glyph and a stall at exactly the moment they expected the clip to carry
+/// on. The feed-wide "one player" invariant survives because the player moved, not
+/// multiplied.
+class LentClip {
+  const LentClip({required this.mediaId, required this.controller, required this.release});
+
+  final int mediaId;
+
+  /// Initialised, playing, at the position the feed had reached, at the shared volume.
+  final VideoPlayerController controller;
+
+  /// Gives the player back once the viewer is done with it: the feed re-attaches it to the
+  /// tile it came from, or disposes it if that tile has gone.
+  final void Function(int mediaId, VideoPlayerController controller) release;
+}
+
 /// Decides which feed clip - at most one, ever - may hold a video player.
 ///
 /// Feed clips autoplay the way Reels does: the clip you are looking at plays and loops,
@@ -47,10 +85,15 @@ class FeedAutoplayController extends ChangeNotifier {
   Timer? _settle;
   bool _enabled = true;
 
-  // Where the clip holding the slot has got to. A getter rather than a value, because the
-  // position moves between the tile offering it and the tap that reads it; one record
-  // rather than a map, because there is only ever one player.
-  ({Object slot, int mediaId, String? groupId, ValueGetter<Duration> position})? _playing;
+  // The tile holding the player, reached through an interface rather than copied values,
+  // because playback moves on between the tile offering itself and a tap reading it. One
+  // record rather than a map, because there is only ever one player.
+  ({Object slot, int mediaId, String? groupId, FeedClipPlayer player})? _playing;
+
+  // The player that left for the full-screen viewer. Kept apart from _playing because no
+  // tile is driving it: it must survive the tile releasing its slot (a route over the feed
+  // does exactly that) and it must come back here to be disposed.
+  ({Object slot, int mediaId, VideoPlayerController controller, FeedClipPlayer player})? _lent;
 
   /// The slot allowed to play right now, or null when nothing should be playing.
   Object? get activeSlot => _active;
@@ -69,6 +112,9 @@ class FeedAutoplayController extends ChangeNotifier {
 
   /// A tile is gone: scrolled out of the list, recycled, or the feed is being torn down. Its
   /// player goes with it, so the slot is free again immediately.
+  ///
+  /// A lent player is deliberately not touched here. It belongs to the viewer until it is
+  /// released, and that release is what decides between re-attaching and disposing it.
   void forget(Object slot) {
     _visible.remove(slot);
     if (_active == slot) _active = null;
@@ -76,15 +122,16 @@ class FeedAutoplayController extends ChangeNotifier {
     _schedule(Duration.zero);
   }
 
-  /// Offers [slot]'s live playback position for as long as it holds the player, so a tap can
-  /// open the full-screen viewer where the feed had got to rather than back at zero.
+  /// Offers [slot]'s live player for as long as it holds one, so a tap can open the
+  /// full-screen viewer on the clip as the feed already has it - the position it reached,
+  /// and the running player itself.
   void publish(
     Object slot, {
     required int mediaId,
-    required ValueGetter<Duration> position,
+    required FeedClipPlayer player,
     String? groupId,
   }) {
-    _playing = (slot: slot, mediaId: mediaId, groupId: groupId, position: position);
+    _playing = (slot: slot, mediaId: mediaId, groupId: groupId, player: player);
   }
 
   /// [slot]'s player is gone, and its position with it.
@@ -92,18 +139,65 @@ class FeedAutoplayController extends ChangeNotifier {
     if (_playing?.slot == slot) _playing = null;
   }
 
+  /// Whether a player is out with the full-screen viewer. It is still the feed's one player;
+  /// it is simply somewhere else, which is why no tile may build another for it.
+  bool get isLending => _lent != null;
+
   /// How far into [mediaId] the feed is right now, or null when that is not the clip
   /// playing. Scoped by group as well: a cross-post puts one media id under two groups, and
   /// only the tile the user is actually watching knows a position.
   Duration? positionOf({required int mediaId, String? groupId}) {
     final playing = _playing;
     if (playing == null || playing.mediaId != mediaId || playing.groupId != groupId) return null;
-    return playing.position();
+    return playing.player.position;
+  }
+
+  /// Hands the running player for [mediaId] to the full-screen viewer, or null when this
+  /// feed has no live player for that clip (a poster, another tile's clip, a photo).
+  ///
+  /// The tile drops back to its poster and stops being the player's owner; nothing is
+  /// created and nothing is disposed, so what the viewer shows is the frame the feed was on.
+  LentClip? lend({required int mediaId, String? groupId}) {
+    final playing = _playing;
+    if (playing == null || playing.mediaId != mediaId || playing.groupId != groupId) return null;
+    final controller = playing.player.detach();
+    if (controller == null) return null;
+    _playing = null;
+    _lent = (
+      slot: playing.slot,
+      mediaId: mediaId,
+      controller: controller,
+      player: playing.player,
+    );
+    return LentClip(mediaId: mediaId, controller: controller, release: reclaim);
+  }
+
+  /// Takes a lent player back from the viewer.
+  ///
+  /// Deferred a frame because the viewer releases from its dispose, which runs inside the
+  /// frame's build: re-attaching marks the feed tile dirty, and that is not allowed from
+  /// there. The tile is still showing the poster this player left it on, so the wait costs
+  /// a still frame rather than a gap.
+  void reclaim(int mediaId, VideoPlayerController controller) {
+    WidgetsBinding.instance.addPostFrameCallback((_) => _restore(controller));
+  }
+
+  void _restore(VideoPlayerController controller) {
+    final lent = _lent;
+    final mine = lent != null && identical(lent.controller, controller);
+    if (mine) _lent = null;
+    // Nobody left to take it: the tile scrolled away, was recycled onto another clip, or the
+    // whole feed went. Ownership came back here, so this is the last chance to hand the
+    // decoder back.
+    if (mine && lent.player.reattach(controller)) return;
+    unawaited(controller.pause());
+    unawaited(controller.dispose());
   }
 
   /// Turns autoplay off while the feed is not what the user is looking at: another tab, or a
-  /// route pushed over it (the full-screen viewer runs its own player, with sound). Off
-  /// releases the active slot at once; on lets the last reported visibility pick a new one.
+  /// route pushed over it (the full-screen viewer takes playback on, usually with this very
+  /// player). Off releases the active slot at once; on lets the last reported visibility
+  /// pick a new one.
   void setEnabled(bool value) {
     if (_enabled == value) return;
     _enabled = value;
@@ -138,6 +232,8 @@ class FeedAutoplayController extends ChangeNotifier {
     return best;
   }
 
+  // A lent player is not disposed here: the viewer is still drawing it. The release it
+  // already holds runs through _restore, finds no tile left, and disposes it there.
   @override
   void dispose() {
     _settle?.cancel();
@@ -175,6 +271,17 @@ class FeedAutoplayScope extends StatefulWidget {
         as _FeedAutoplayHandle?;
     final at = handle?.controller.positionOf(mediaId: mediaId, groupId: groupId);
     return at == null || at == Duration.zero ? const {} : {mediaId: at};
+  }
+
+  /// Hands the live player for [mediaId] to the full-screen viewer, or null when the feed
+  /// has none for it - which is also what happens outside a feed, where the viewer builds
+  /// its own player as it always has.
+  ///
+  /// Read without subscribing, because this answers a tap rather than a build.
+  static LentClip? lend(BuildContext context, {required int mediaId, String? groupId}) {
+    final handle = context.getElementForInheritedWidgetOfExactType<_FeedAutoplayHandle>()?.widget
+        as _FeedAutoplayHandle?;
+    return handle?.controller.lend(mediaId: mediaId, groupId: groupId);
   }
 
   @override
