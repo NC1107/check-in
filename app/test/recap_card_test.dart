@@ -3,6 +3,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:video_player/video_player.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 
 import 'package:checkin/api/api_client.dart';
@@ -10,6 +11,8 @@ import 'package:checkin/api/models.dart';
 import 'package:checkin/features/feed/recap_card.dart';
 import 'package:checkin/features/post/post_detail_screen.dart';
 import 'package:checkin/state/app_state.dart';
+import 'package:checkin/widgets/clip_poster.dart';
+import 'package:checkin/widgets/feed_clip.dart';
 import 'package:checkin/widgets/photo_viewer.dart';
 import 'package:checkin/widgets/user_avatar.dart';
 
@@ -138,6 +141,26 @@ void main() {
         authorId: authorId,
         authorName: authorName,
         body: body,
+      );
+
+  RecapCard clipCard({
+    required int authorId,
+    required String authorName,
+    int rank = 1,
+    bool hasPoster = true,
+    int durationMs = 8000,
+  }) =>
+      RecapCard(
+        kind: 'clip',
+        rank: rank,
+        guaranteed: true,
+        postId: authorId,
+        authorId: authorId,
+        authorName: authorName,
+        mediaId: 900 + authorId,
+        mime: 'video/mp4',
+        durationMs: durationMs,
+        hasPoster: hasPoster,
       );
 
   RecapAward award(
@@ -660,6 +683,204 @@ void main() {
       expect(screen.postId, 5);
       expect(screen.groupId, 'alpha.invalid');
       expect(find.text('movie night'), findsOneWidget);
+    });
+  });
+
+  // The server does support video clips on the Wall (kind: "clip" for a video/* mime, with
+  // durationMs/hasPoster carried through - see recap_select.go's candidateToCard), and both
+  // the tile and the round-5 cover montage render a clip's media through the same MediaFrame
+  // every photo goes through. Before this group, not one fixture in this file ever used a
+  // clip card - the video path was correct but entirely unprotected: swapping MediaFrame for
+  // AuthImage in either place would make an mp4 silently fail to decode, and nothing here
+  // would have failed.
+  group('Wall clip cards', () {
+    // Matches the fake API's post below, so PostDetailScreen loads real, recognisable
+    // content instead of an error state.
+    final post = Post(
+      id: 5,
+      authorId: 1,
+      authorName: 'Ada',
+      kind: 'video',
+      body: 'movie night',
+      createdAt: DateTime(2026, 1, 1),
+      likeCount: 0,
+      commentCount: 0,
+      likedByViewer: false,
+      groupId: 'alpha.invalid',
+    );
+    final apiOverride = contentApiProvider('alpha.invalid').overrideWithValue(_FakeApi(post: post));
+
+    testWidgets(
+        'a clip tile renders through ClipPoster: play badge, duration pill, no video player',
+        (tester) async {
+      final recap = RecapPayload(
+        periodLabel: 'Aug 10-16',
+        cadence: 'weekly',
+        groupName: 'Ridgeway Family',
+        groupColor: 'coral',
+        stats: stats(),
+        panels: [
+          RecapCollagePanel(title: 'The Wall', cards: [clipCard(authorId: 5, authorName: 'Ada')]),
+        ],
+      );
+      await pumpDeck(tester, recap);
+      await swipeToPageWithMedia(tester, find.byType(PageView), 1);
+
+      expect(tester.takeException(), isNull);
+      // The Wall is deliberately poster-only - the feed's single-live-player rule
+      // (feed_autoplay.dart) is exactly why nothing here may ever build a real decoder.
+      expect(find.byType(ClipPoster), findsOneWidget);
+      expect(find.byType(VideoPlayer), findsNothing);
+      expect(find.byType(FeedClip), findsNothing);
+      expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+      expect(find.text('0:08'), findsOneWidget); // clipCard's default durationMs is 8000
+    });
+
+    testWidgets('a poster-less clip degrades cleanly in the tile - no crash, no blank hole',
+        (tester) async {
+      final recap = RecapPayload(
+        periodLabel: 'Aug 10-16',
+        cadence: 'weekly',
+        groupName: 'Ridgeway Family',
+        groupColor: 'coral',
+        stats: stats(),
+        panels: [
+          RecapCollagePanel(title: 'The Wall', cards: [
+            clipCard(authorId: 5, authorName: 'Ada', hasPoster: false),
+          ]),
+        ],
+      );
+      await pumpDeck(tester, recap);
+      await swipeToPage(tester, find.byType(PageView), 1);
+
+      expect(tester.takeException(), isNull);
+      // ClipPoster's own no-poster fallback (a flat backdrop under the badge) rather than a
+      // broken-image icon or a blank hole where the tile should be.
+      expect(find.byType(ClipPoster), findsOneWidget);
+      expect(find.byIcon(Icons.play_arrow_rounded), findsOneWidget);
+      expect(find.byIcon(Icons.broken_image_outlined), findsNothing);
+      expect(find.byIcon(Icons.image_not_supported_outlined), findsNothing);
+    });
+
+    testWidgets('a clip card in the cover montage renders through ClipPoster, not a raw mp4 decode',
+        (tester) async {
+      final recap = RecapPayload(
+        periodLabel: 'Aug 10-16',
+        cadence: 'weekly',
+        groupName: 'Ridgeway Family',
+        groupColor: 'coral',
+        stats: stats(),
+        panels: [
+          RecapCollagePanel(title: 'The Wall', cards: [clipCard(authorId: 5, authorName: 'Ada')]),
+        ],
+      );
+      await pumpDeck(tester, recap); // page 0 is the cover - no swipe needed
+
+      expect(tester.takeException(), isNull);
+      // The exact assertion that catches a MediaFrame -> AuthImage swap in the montage: a
+      // raw AuthImage pointed straight at an mp4's own bytes would never decode, and
+      // ClipPoster - the poster-only path MediaFrame actually resolves a clip to - simply
+      // would not be there.
+      expect(find.byType(ClipPoster), findsOneWidget);
+      expect(find.byType(VideoPlayer), findsNothing);
+    });
+
+    testWidgets('a poster-less clip in the cover montage degrades cleanly too', (tester) async {
+      final recap = RecapPayload(
+        periodLabel: 'Aug 10-16',
+        cadence: 'weekly',
+        groupName: 'Ridgeway Family',
+        groupColor: 'coral',
+        stats: stats(),
+        panels: [
+          RecapCollagePanel(title: 'The Wall', cards: [
+            clipCard(authorId: 5, authorName: 'Ada', hasPoster: false),
+          ]),
+        ],
+      );
+      await pumpDeck(tester, recap);
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(ClipPoster), findsOneWidget);
+    });
+
+    testWidgets(
+        'tapping a clip card opens the viewer with the clip\'s own media, and "Go to post" '
+        'still carries the right postId', (tester) async {
+      final recap = RecapPayload(
+        periodLabel: 'Aug 10-16',
+        cadence: 'weekly',
+        groupName: 'Ridgeway Family',
+        groupColor: 'coral',
+        stats: stats(),
+        panels: [
+          RecapCollagePanel(title: 'The Wall', cards: [clipCard(authorId: 5, authorName: 'Ada')]),
+        ],
+      );
+      await pumpDeck(tester, recap, overrides: [apiOverride]);
+      await swipeToPageWithMedia(tester, find.byType(PageView), 1);
+
+      await tester.tap(find.byType(ClipRRect).first);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(find.byType(PhotoViewerScreen), findsOneWidget);
+      final viewer = tester.widget<PhotoViewerScreen>(find.byType(PhotoViewerScreen));
+      expect(viewer.media, hasLength(1));
+      expect(viewer.media.single.isVideo, isTrue,
+          reason: 'a clip card must open the viewer on its own clip, not fall through to '
+              'the photo/quote path');
+      expect(viewer.postId, 5);
+
+      await tester.tap(find.text('Go to post'));
+      // A bounded pump loop, not a single fixed duration - see the identical photo-card
+      // test above for why.
+      for (var i = 0; i < 8; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      expect(find.byType(PhotoViewerScreen), findsNothing);
+      expect(find.byType(PostDetailScreen), findsOneWidget);
+      expect(tester.widget<PostDetailScreen>(find.byType(PostDetailScreen)).postId, 5);
+    });
+
+    testWidgets('a mixed Wall (photos, clips, a quote) paginates and stays reachable',
+        (tester) async {
+      final cards = [
+        photoCard(authorId: 1, authorName: 'Ada', rank: 1),
+        clipCard(authorId: 2, authorName: 'Ben', rank: 2),
+        quoteCard(authorId: 3, authorName: 'Cy', body: 'Rainy Tuesday.', rank: 3),
+        clipCard(authorId: 4, authorName: 'Dee', rank: 4, hasPoster: false),
+        photoCard(authorId: 5, authorName: 'Eve', rank: 5),
+      ];
+      final recap = RecapPayload(
+        periodLabel: 'Aug 10-16',
+        cadence: 'weekly',
+        groupName: 'Ridgeway Family',
+        groupColor: 'coral',
+        stats: stats(),
+        panels: [RecapCollagePanel(title: 'The Wall', cards: cards)],
+      );
+      await pumpDeck(tester, recap);
+
+      // 5 cards at 4/page -> page 1 gets Ada/Ben/Cy/Dee (a photo, a clip, a quote, and
+      // another clip), page 2 gets Eve alone - 3 pages total with the cover. Unlike the
+      // existing all-quote-card pagination tests, this actually carries clips (and a photo)
+      // through the chunker, so chunking isn't inadvertently photo-only.
+      final pageView = tester.widget<PageView>(find.byType(PageView));
+      expect((pageView.childrenDelegate as SliverChildBuilderDelegate).estimatedChildCount, 3);
+
+      await swipeToPageWithMedia(tester, find.byType(PageView), 1);
+      expect(tester.takeException(), isNull);
+      expect(find.text('Ada'), findsOneWidget);
+      expect(find.text('Ben'), findsOneWidget);
+      expect(find.text('Cy'), findsOneWidget);
+      expect(find.text('Rainy Tuesday.'), findsOneWidget);
+      expect(find.text('Dee'), findsOneWidget);
+
+      await swipeToPageWithMedia(tester, find.byType(PageView), 1);
+      expect(tester.takeException(), isNull);
+      expect(find.text('Eve'), findsOneWidget);
     });
   });
 
