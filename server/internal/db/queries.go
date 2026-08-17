@@ -713,9 +713,13 @@ func (d *DB) SetMediaPoster(ctx context.Context, mediaID, ownerID int64, posterP
 }
 
 // GetVisibleMedia returns a media item only if the viewer is allowed to see it: they
-// uploaded it, it's attached to a post (the feed is shared within the group), or it's
+// uploaded it, it's attached to a post or comment whose author is active and not blocked
+// by the viewer (the feed's own visibility rule - see Feed/GetPost/ListComments), or it's
 // someone's profile photo. This prevents enumerating arbitrary media ids (e.g. another
-// member's not-yet-posted upload or media from a deleted post). Returns ErrNotFound
+// member's not-yet-posted upload or media from a deleted post) and, just as importantly,
+// stops the two mechanisms the app offers for controlling exposure to a person - blocking
+// and an admin revoke - from being bypassable by fetching /api/media/{id} directly, since
+// media ids are sequential and this route has no other access check. Returns ErrNotFound
 // otherwise, so existence isn't confirmed.
 func (d *DB) GetVisibleMedia(ctx context.Context, id, viewerID int64) (Media, error) {
 	var m Media
@@ -724,8 +728,23 @@ func (d *DB) GetVisibleMedia(ctx context.Context, id, viewerID int64) (Media, er
 		FROM media m
 		WHERE m.id = $1 AND (
 			m.owner_id = $2
-			OR EXISTS (SELECT 1 FROM posts p WHERE p.media_id = m.id)
-			OR EXISTS (SELECT 1 FROM post_media pm WHERE pm.media_id = m.id)
+			OR EXISTS (
+				SELECT 1 FROM posts p JOIN users pu ON pu.id = p.author_id
+				WHERE p.media_id = m.id AND pu.status = 'active'
+				  AND pu.id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $2)
+			)
+			OR EXISTS (
+				SELECT 1 FROM post_media pm
+				JOIN posts p ON p.id = pm.post_id
+				JOIN users pu ON pu.id = p.author_id
+				WHERE pm.media_id = m.id AND pu.status = 'active'
+				  AND pu.id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $2)
+			)
+			OR EXISTS (
+				SELECT 1 FROM comments c JOIN users cu ON cu.id = c.user_id
+				WHERE c.media_id = m.id AND cu.status = 'active'
+				  AND cu.id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $2)
+			)
 			OR EXISTS (SELECT 1 FROM users u WHERE u.profile_media_id = m.id)
 		)`, id, viewerID,
 	).Scan(&m.ID, &m.OwnerID, &m.Path, &m.Mime, &m.Width, &m.Height, &m.DurationMs, &m.PosterPath, &m.CreatedAt)

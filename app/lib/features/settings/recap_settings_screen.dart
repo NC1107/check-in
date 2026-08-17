@@ -368,6 +368,10 @@ class _GenerateRecapSheetState extends State<_GenerateRecapSheet> {
 
   @override
   Widget build(BuildContext context) {
+    // The Generate button is pinned outside the scroll area (same technique
+    // terms_screen.dart uses for its "I agree" button): at a large text scale the "Bestow
+    // titles" toggle's two-line subtitle can outgrow a short screen, and it should scroll
+    // rather than push the button off screen.
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
@@ -375,55 +379,65 @@ class _GenerateRecapSheetState extends State<_GenerateRecapSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SizedBox(height: 10),
-            Container(
-              width: 40,
-              height: 4,
-              margin: const EdgeInsets.only(bottom: 14),
-              alignment: Alignment.center,
-              decoration: BoxDecoration(color: kBorder, borderRadius: BorderRadius.circular(2)),
-            ),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 20),
-              child: Text('Generate a recap',
-                  style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 17)),
-            ),
-            const SizedBox(height: 14),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Wrap(
-                spacing: 8,
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
                 children: [
-                  ChoiceChip(
-                    label: const Text('This week'),
-                    selected: _preset == 'week',
-                    onSelected: (_) => setState(() => _preset = 'week'),
+                  const SizedBox(height: 10),
+                  Container(
+                    width: 40,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 14),
+                    alignment: Alignment.center,
+                    decoration:
+                        BoxDecoration(color: kBorder, borderRadius: BorderRadius.circular(2)),
                   ),
-                  ChoiceChip(
-                    label: const Text('This month'),
-                    selected: _preset == 'month',
-                    onSelected: (_) => setState(() => _preset = 'month'),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 20),
+                    child: Text('Generate a recap',
+                        style: TextStyle(
+                            color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 17)),
                   ),
-                  ChoiceChip(
-                    label: const Text('Custom range'),
-                    selected: _preset == 'custom',
-                    onSelected: (_) => _pickCustom(),
+                  const SizedBox(height: 14),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Wrap(
+                      spacing: 8,
+                      children: [
+                        ChoiceChip(
+                          label: const Text('This week'),
+                          selected: _preset == 'week',
+                          onSelected: (_) => setState(() => _preset = 'week'),
+                        ),
+                        ChoiceChip(
+                          label: const Text('This month'),
+                          selected: _preset == 'month',
+                          onSelected: (_) => setState(() => _preset = 'month'),
+                        ),
+                        ChoiceChip(
+                          label: const Text('Custom range'),
+                          selected: _preset == 'custom',
+                          onSelected: (_) => _pickCustom(),
+                        ),
+                      ],
+                    ),
                   ),
+                  if (widget.titlesCapable) ...[
+                    const SizedBox(height: 4),
+                    CheckboxListTile(
+                      value: _bestowTitles,
+                      onChanged: (v) => setState(() => _bestowTitles = v ?? false),
+                      activeColor: context.accent,
+                      title: const Text('Bestow titles', style: TextStyle(color: kFgPrimary)),
+                      subtitle: const Text(
+                          'Also updates each qualifying member\'s profile title for this period.',
+                          style: TextStyle(color: kFgMuted, fontSize: 12)),
+                    ),
+                  ],
                 ],
               ),
             ),
-            if (widget.titlesCapable) ...[
-              const SizedBox(height: 4),
-              CheckboxListTile(
-                value: _bestowTitles,
-                onChanged: (v) => setState(() => _bestowTitles = v ?? false),
-                activeColor: context.accent,
-                title: const Text('Bestow titles', style: TextStyle(color: kFgPrimary)),
-                subtitle: const Text(
-                    'Also updates each qualifying member\'s profile title for this period.',
-                    style: TextStyle(color: kFgMuted, fontSize: 12)),
-              ),
-            ],
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 14, 20, 20),
               child: SizedBox(

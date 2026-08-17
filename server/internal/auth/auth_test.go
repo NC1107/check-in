@@ -34,6 +34,21 @@ func TestTokenRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPhoneMatchKey(t *testing.T) {
+	a := PhoneMatchKey("14155550148")
+	b := PhoneMatchKey("14155550148")
+	c := PhoneMatchKey("14155550149")
+	if a != b {
+		t.Error("the same phone must always produce the same key")
+	}
+	if a == c {
+		t.Error("different phones must produce different keys")
+	}
+	if a == "14155550148" {
+		t.Error("the key must not just be the phone number itself")
+	}
+}
+
 func TestNormalizePhone(t *testing.T) {
 	// With a US default country code, the same number matches no matter how it's written.
 	cases := map[string]string{

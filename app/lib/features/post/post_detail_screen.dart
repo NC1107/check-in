@@ -15,6 +15,7 @@ import '../../widgets/gif_picker.dart';
 import '../../widgets/likers_sheet.dart';
 import '../../widgets/photo_viewer.dart';
 import '../../widgets/post_image_carousel.dart';
+import '../../widgets/report_sheet.dart';
 import '../../widgets/tagged_people_line.dart';
 import '../../widgets/user_avatar.dart';
 import '../profile/profile_screen.dart';
@@ -119,6 +120,27 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   }
 
   void _cancelReply() => setState(() => _replyTo = null);
+
+  /// Reports [c] to its own group's host. Mirrors how a post is reported (post_card.dart):
+  /// same reason sheet, same "reviewed within 24 hours" copy, same snack feedback.
+  Future<void> _reportComment(Comment c) async {
+    final gid = c.groupId ?? widget.groupId;
+    final reason = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: kBgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (_) => const ReportSheet(subject: 'comment'),
+    );
+    if (reason == null || !mounted) return;
+    try {
+      await ref.read(contentApiProvider(gid)).reportComment(c.id, reason);
+      if (mounted) _snack('Report sent. The host will review it.');
+    } catch (_) {
+      if (mounted) _snack('Could not send report. Try again.');
+    }
+  }
 
   /// The display name of the comment [c] is replying to, resolved from the loaded thread
   /// (same id, and same group for a merged cross-post thread). Null if it can't be found.
@@ -692,6 +714,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   Widget _commentRow(Comment c) {
     // A merged comment opens the commenter's profile on its own group's server.
     final gid = c.groupId ?? widget.groupId;
+    final me = ref.read(contentAccountProvider(gid))?.user;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
       child: Row(
@@ -770,11 +793,26 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   ),
                 ],
                 const SizedBox(height: 4),
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => _startReply(c),
-                  child: const Text('Reply',
-                      style: TextStyle(color: kFgMuted, fontSize: 12, fontWeight: FontWeight.w600)),
+                Row(
+                  children: [
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _startReply(c),
+                      child: const Text('Reply',
+                          style: TextStyle(
+                              color: kFgMuted, fontSize: 12, fontWeight: FontWeight.w600)),
+                    ),
+                    if (me != null && me.id != c.authorId) ...[
+                      const SizedBox(width: 14),
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => _reportComment(c),
+                        child: const Text('Report',
+                            style: TextStyle(
+                                color: kFgMuted, fontSize: 12, fontWeight: FontWeight.w600)),
+                      ),
+                    ],
+                  ],
                 ),
               ],
             ),

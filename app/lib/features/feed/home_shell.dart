@@ -854,7 +854,7 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
       ),
-      builder: (_) => _TrimSheet(path: path, durationMs: durationMs),
+      builder: (_) => TrimSheet(path: path, durationMs: durationMs),
     );
   }
 
@@ -1874,17 +1874,21 @@ class _TagPeopleSheetState extends State<_TagPeopleSheet> {
 /// can never let the window exceed the cap or run off the clip; a middle drag goes through
 /// [shiftTrimWindow], which keeps the span. Returns (startMs, endMs) on Trim, or null on
 /// cancel.
-class _TrimSheet extends StatefulWidget {
-  const _TrimSheet({required this.path, required this.durationMs});
+/// The full-height sheet that trims an over-length clip down to the [kMaxClipMs] cap. Not
+/// underscore-prefixed - unlike most of this file's private widgets - so a layout test can
+/// pump it directly at a given [path]/[durationMs] without wiring the picker and
+/// video_compress plugin channels the real flow goes through first.
+class TrimSheet extends StatefulWidget {
+  const TrimSheet({super.key, required this.path, required this.durationMs});
 
   final String path;
   final int durationMs;
 
   @override
-  State<_TrimSheet> createState() => _TrimSheetState();
+  State<TrimSheet> createState() => _TrimSheetState();
 }
 
-class _TrimSheetState extends State<_TrimSheet> {
+class _TrimSheetState extends State<TrimSheet> {
   static const _frames = 8;
   late int _startMs;
   late int _endMs;
@@ -2019,6 +2023,11 @@ class _TrimSheetState extends State<_TrimSheet> {
     final selectedMs = _endMs - _startMs;
     // isScrollControlled makes the sheet full-height, so its own top reaches under the status
     // bar; pad by the status-bar inset so the header always clears the clock/notch.
+    //
+    // The header (with the primary Trim action) is pinned outside the scroll area, same
+    // technique terms_screen.dart uses for its "I agree" button: on a short screen or at a
+    // large text scale the preview/filmstrip/hint below it can outgrow the sheet, and they
+    // scroll rather than pushing Trim off screen.
     return Padding(
       padding: EdgeInsets.only(top: MediaQuery.paddingOf(context).top),
       child: SafeArea(
@@ -2026,7 +2035,6 @@ class _TrimSheetState extends State<_TrimSheet> {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
                 width: 38,
@@ -2062,15 +2070,23 @@ class _TrimSheetState extends State<_TrimSheet> {
                 ],
               ),
               const SizedBox(height: 14),
-              _previewPane(context),
-              const SizedBox(height: 14),
-              SizedBox(height: 56, child: _filmstrip()),
-              const SizedBox(height: 8),
-              const Text(
-                'Drag the ends to pick 1 to 10 seconds, or the middle to slide the window. '
-                'Tap play to preview.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: _fgMuted, fontSize: 12),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      _previewPane(context),
+                      const SizedBox(height: 14),
+                      SizedBox(height: 56, child: _filmstrip()),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Drag the ends to pick 1 to 10 seconds, or the middle to slide the '
+                        'window. Tap play to preview.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: _fgMuted, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ],
           ),

@@ -577,6 +577,9 @@ class ApiClient {
   Future<void> reportPost(int postId, String reason) =>
       _dio.post('/api/posts/$postId/report', data: {'reason': reason});
 
+  Future<void> reportComment(int commentId, String reason) =>
+      _dio.post('/api/comments/$commentId/report', data: {'reason': reason});
+
   Future<List<ContentReport>> adminListReports() async {
     final r = await _dio.get('/api/admin/reports');
     return ((r.data as Map<String, dynamic>)['reports'] as List? ?? [])

@@ -1,10 +1,12 @@
 import '../api/models.dart';
 
 /// Joins the same human across groups by phone number - the identity axiom every server
-/// already enforces locally (allowlist, login, uniqueness). Servers store phones
-/// pre-normalized, so exact string comparison is safe; a number that doesn't match simply
-/// stays split (a mismatch can only split, never wrongly join). Accounts themselves stay
-/// sovereign per server - this is a presentation-layer join only.
+/// already enforces locally (allowlist, login, uniqueness). A peer view carries [User.phoneKey]
+/// (a one-way hash) rather than the number itself, so the server never has to hand back
+/// another member's real phone for this join to work - see [User.phoneKey]'s doc comment.
+/// The key is deterministic, so exact string comparison is still safe; a number that doesn't
+/// match simply stays split (a mismatch can only split, never wrongly join). Accounts
+/// themselves stay sovereign per server - this is a presentation-layer join only.
 class PersonDirectory {
   PersonDirectory._(this._phoneByGroupUser, this._groupsByPhone);
 
@@ -12,10 +14,11 @@ class PersonDirectory {
       : _phoneByGroupUser = const {},
         _groupsByPhone = const {};
 
-  /// '$groupId~$userId' -> normalized phone.
+  /// '$groupId~$userId' -> phone identity key ([User.phoneKey], falling back to the raw
+  /// [User.phone] against an older server that doesn't send it yet).
   final Map<String, String> _phoneByGroupUser;
 
-  /// normalized phone -> ids of groups where an account with that phone exists.
+  /// phone identity key -> ids of groups where an account with that phone exists.
   final Map<String, Set<String>> _groupsByPhone;
 
   /// Builds the join from each group's member list. Groups whose list couldn't be
@@ -25,9 +28,10 @@ class PersonDirectory {
     final groupsByPhone = <String, Set<String>>{};
     membersByGroup.forEach((groupId, members) {
       for (final u in members) {
-        if (u.phone.isEmpty) continue;
-        phoneByGroupUser['$groupId~${u.id}'] = u.phone;
-        (groupsByPhone[u.phone] ??= {}).add(groupId);
+        final key = u.phoneKey.isNotEmpty ? u.phoneKey : u.phone;
+        if (key.isEmpty) continue;
+        phoneByGroupUser['$groupId~${u.id}'] = key;
+        (groupsByPhone[key] ??= {}).add(groupId);
       }
     });
     return PersonDirectory._(phoneByGroupUser, groupsByPhone);

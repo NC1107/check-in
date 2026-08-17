@@ -46,7 +46,27 @@ func New(cfg config.Config, database *db.DB, store *storage.Store, notifier push
 // Router builds the chi router with all routes and middleware.
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.RealIP)
+	// Reads the caller's real IP from the position in the X-Forwarded-For chain that only
+	// s.cfg.TrustedProxyHops trusted reverse proxies (Caddy, by default exactly one - see
+	// TrustedProxyHops' doc comment) could have written, and nothing earlier in the chain a
+	// caller could forge. rateLimitAuth reads it via middleware.GetClientIP.
+	//
+	// This replaces chi's own middleware.RealIP, which trusted X-Real-IP/X-Forwarded-For
+	// outright regardless of whether anything in front of this process actually sets them -
+	// chi deprecated it for exactly that reason (GHSA-3fxj-6jh8-hvhx). A caller could hand
+	// every request a fresh X-Real-IP and mint a brand new, always-empty rate-limit bucket
+	// every time; a production check against /api/auth/check-phone confirmed 60 rapid
+	// requests all succeeded this way. See rateLimitAuth's doc comment for the rest.
+	//
+	// config.Load always sets TrustedProxyHops >= 1, but a Config built by hand (as the test
+	// harness does) leaves it at its zero value, and ClientIPFromXFFTrustedProxies panics
+	// below 1 - so this defends that path too rather than trusting every caller of New to
+	// remember the minimum.
+	trustedHops := s.cfg.TrustedProxyHops
+	if trustedHops < 1 {
+		trustedHops = 1
+	}
+	r.Use(middleware.ClientIPFromXFFTrustedProxies(trustedHops))
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
 	r.Use(secureHeaders)
@@ -133,7 +153,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/birthdays/upcoming", s.handleUpcomingBirthdays)
 
 		r.With(s.rateLimitUser(s.content.media)).Post("/api/media", s.handleUploadMedia)
-		r.Get("/api/media/{id}", s.handleServeMedia)
+		r.With(s.rateLimitUser(s.content.mediaRead)).Get("/api/media/{id}", s.handleServeMedia)
 		r.With(s.rateLimitUser(s.content.media)).Post("/api/media/{id}/poster", s.handleSetMediaPoster)
 
 		r.With(s.rateLimitUser(s.content.gifs)).Get("/api/gifs/search", s.handleGifSearch)

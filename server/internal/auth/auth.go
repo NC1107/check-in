@@ -80,6 +80,30 @@ func HashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// phoneMatchKeyPrefix namespaces PhoneMatchKey's hash so it doesn't collide with a generic
+// sha256(phone) computed for some unrelated purpose. It is not a secret - the source is
+// public - so it raises no real barrier on its own; see PhoneMatchKey's doc comment.
+const phoneMatchKeyPrefix = "checkin-phone-match:"
+
+// PhoneMatchKey derives a stable, non-secret identity key for an already-normalized phone
+// number: the hex SHA-256 of it. It exists for the one legitimate reason a peer's phone
+// number reaches the wire at all - the app's multi-group client-side join, which merges the
+// same human's accounts across the several groups a device is signed into by comparing
+// whether two accounts share a number (app/lib/state/person_directory.dart). Two peer views
+// agreeing on PhoneKey still means "same phone", so that join keeps working, without handing
+// back the number itself - which in this invite-only app doubles as the invite credential
+// (see docs/self-hosting/security.md) and must not be bulk-readable by an ordinary member.
+//
+// This is the same tradeoff phone-number contact discovery makes elsewhere (Signal,
+// WhatsApp): it stops a trivial bulk read, but a phone number is a small enough keyspace
+// that a determined attacker who knows the algorithm - it's open source - could still brute
+// force one back out of its hash offline. It raises the bar; it is not a strong guarantee,
+// and callers must not treat a PhoneKey as safe to hand to just anyone regardless.
+func PhoneMatchKey(phone string) string {
+	sum := sha256.Sum256([]byte(phoneMatchKeyPrefix + phone))
+	return hex.EncodeToString(sum[:])
+}
+
 // resetCodeAlphabet has 32 unambiguous characters (no 0/O, 1/I/L) so a recovery code is
 // easy to read aloud and type. 32 divides 256 evenly, so the byte→char map is unbiased.
 const resetCodeAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
