@@ -18,6 +18,7 @@ class _FakeTimelineApi extends ApiClient {
   _FakeTimelineApi({
     List<TimelineMonth>? months,
     Map<String, List<Post>>? monthPosts,
+    this.hasMoreMonths = const {},
     this.failTimeline = false,
   })  : _months = months ?? const [],
         _monthPosts = monthPosts ?? const {},
@@ -25,6 +26,11 @@ class _FakeTimelineApi extends ApiClient {
 
   final List<TimelineMonth> _months;
   final Map<String, List<Post>> _monthPosts;
+
+  /// Keyed like _monthPosts ('$year-$month') - months whose fake response should report
+  /// hasMore: true, mirroring a server that capped the page.
+  final Set<String> hasMoreMonths;
+
   final bool failTimeline;
 
   @override
@@ -34,8 +40,9 @@ class _FakeTimelineApi extends ApiClient {
   }
 
   @override
-  Future<List<Post>> timelineMonth(int year, int month) async {
-    return _monthPosts['$year-$month'] ?? const [];
+  Future<({List<Post> posts, bool hasMore})> timelineMonth(int year, int month) async {
+    final key = '$year-$month';
+    return (posts: _monthPosts[key] ?? const [], hasMore: hasMoreMonths.contains(key));
   }
 
   @override
@@ -330,8 +337,37 @@ void main() {
       expect(find.byType(SliverGrid), findsOneWidget);
       // 200 photo tiles is well beyond one screen's worth; only the grid's mere existence
       // and the header's own numbers need proving here - lazy-built children off-screen are
-      // already covered by _EventDetailView's own identical SliverGrid usage.
+      // already covered by _EventDetailView's own identical SliverGrid usage. hasMore is
+      // false (the fake's default), so the header reads a plain "200 check-ins" - the exact
+      // fetched count, no truncation marker.
       expect(find.text('200 check-ins · 2 people'), findsOneWidget);
+    });
+
+    testWidgets('a truncated month never claims more check-ins than the grid actually holds',
+        (tester) async {
+      // The list route's own aggregate says 205 - a real, honest number for the whole
+      // month - but the detail route only ever returns (and this fake mirrors) the capped
+      // 200-post page with hasMore: true. The header must key off the 200 actually
+      // fetched, not the 205 from the list, and must mark the month as truncated rather
+      // than silently presenting 200 as the whole story.
+      final aug = month(year: 2026, month: 8, postCount: 205, posterCount: 3);
+      final posts = [for (var i = 1; i <= 200; i++) photoPost(i, mediaId: 1000 + i)];
+      final api = _FakeTimelineApi(
+        months: [aug],
+        monthPosts: {'2026-8': posts},
+        hasMoreMonths: {'2026-8'},
+      );
+      await pumpOpenSurface(tester,
+          serverAccount: account('a.invalid', timelineCapable: true), api: api);
+
+      await tester.tap(find.text('Your months'));
+      await settle(tester);
+      await tester.tap(find.text('August 2026'));
+      await settle(tester);
+
+      expect(find.text('200+ check-ins · 3 people'), findsOneWidget);
+      expect(find.text('205 check-ins · 3 people'), findsNothing,
+          reason: 'must never surface the list route\'s unbounded aggregate over a capped page');
     });
   });
 }

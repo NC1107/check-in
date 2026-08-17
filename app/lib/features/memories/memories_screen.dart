@@ -1908,6 +1908,12 @@ class _MonthDetailView extends ConsumerStatefulWidget {
 
 class _MonthDetailViewState extends ConsumerState<_MonthDetailView> {
   List<Post>? _posts;
+
+  /// Whether the server capped this month's posts (see ApiClient.timelineMonth) - the
+  /// header's own check-in count is built from _posts.length plus this flag, never from
+  /// widget.month.postCount: that field is an unbounded aggregate from the month LIST route
+  /// and can legitimately exceed what this screen actually fetched and can show.
+  bool _hasMore = false;
   bool _loading = true;
   bool _failed = false;
 
@@ -1927,12 +1933,13 @@ class _MonthDetailViewState extends ConsumerState<_MonthDetailView> {
       return;
     }
     try {
-      final posts = await ref
+      final result = await ref
           .read(apiForGroupProvider(groupId))
           .timelineMonth(widget.month.year, widget.month.month);
       if (!mounted) return;
       setState(() {
-        _posts = [for (final p in posts) p.withGroup(groupId)];
+        _posts = [for (final p in result.posts) p.withGroup(groupId)];
+        _hasMore = result.hasMore;
         _loading = false;
       });
     } catch (_) {
@@ -2003,6 +2010,13 @@ class _MonthDetailViewState extends ConsumerState<_MonthDetailView> {
 
   Widget _header(BuildContext context) {
     final month = widget.month;
+    // Sized off what was actually fetched (see _load's own doc comment on _hasMore), so
+    // this line can never claim more check-ins than the grid below it actually holds. A
+    // "+" marks a month the server capped, rather than silently rounding it down to a
+    // plain (and then quietly wrong) number.
+    final shown = _posts?.length ?? 0;
+    final countLabel = _hasMore ? '$shown+' : '$shown';
+    final checkinNoun = (!_hasMore && shown == 1) ? 'check-in' : 'check-ins';
     return Padding(
       padding: const EdgeInsets.fromLTRB(18, 4, 18, 12),
       child: Column(
@@ -2014,7 +2028,7 @@ class _MonthDetailViewState extends ConsumerState<_MonthDetailView> {
               style: const TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
           const SizedBox(height: 4),
           Text(
-            '${month.postCount} ${month.postCount == 1 ? 'check-in' : 'check-ins'} · '
+            '$countLabel $checkinNoun · '
             '${month.posterCount} ${month.posterCount == 1 ? 'person' : 'people'}',
             style: const TextStyle(color: _fgMuted, fontSize: 13),
           ),

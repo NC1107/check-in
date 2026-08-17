@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"testing"
@@ -36,6 +37,22 @@ func withLocation(loc string) func(map[string]any) {
 	return func(body map[string]any) { body["location"] = loc }
 }
 
+// seedTimelinePosts inserts n plain text check-ins directly into the database, each dated
+// an hour apart starting at start - bypassing both handleCreatePost's per-member rate
+// limiter (burst 10, refill 30/min: a loop of real HTTP creates would hit it long before
+// reaching the hundreds needed to exercise the timeline month cap) and the image-upload
+// cost a photo-bearing fixture would otherwise add for a test that only cares about count.
+func seedTimelinePosts(t *testing.T, h *harness, authorID int64, start time.Time, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		if _, err := h.db.Pool.Exec(context.Background(),
+			`INSERT INTO posts (author_id, kind, body, created_at) VALUES ($1, 'text', 'check-in', $2)`,
+			authorID, start.Add(time.Duration(i)*time.Hour)); err != nil {
+			t.Fatalf("seed timeline post %d: %v", i, err)
+		}
+	}
+}
+
 type timelineResp struct {
 	Months []db.TimelineMonth `json:"months"`
 }
@@ -48,7 +65,8 @@ func (h *harness) timeline(token string) timelineResp {
 }
 
 type timelineMonthResp struct {
-	Posts []db.Post `json:"posts"`
+	Posts   []db.Post `json:"posts"`
+	HasMore bool      `json:"hasMore"`
 }
 
 func (h *harness) timelineMonth(token string, year, month int) *response {
@@ -226,6 +244,43 @@ func TestTimelineMonthReturnsFeedShapedPosts(t *testing.T) {
 	}
 	if env.Posts[0].AuthorName != admin.Name {
 		t.Errorf("authorName = %q, want %q", env.Posts[0].AuthorName, admin.Name)
+	}
+}
+
+// TestTimelineMonthHasMoreAtTheCap pins the fix for the silent-truncation bug: a month
+// exactly at maxTimelineMonthPosts reports hasMore: false (nothing was actually cut), while
+// one post over the cap reports hasMore: true and still returns only the capped page - the
+// client's own header must key off this (and off len(posts)), never off the unbounded
+// TimelineMonth.PostCount from the list route, which can legitimately exceed the cap.
+func TestTimelineMonthHasMoreAtTheCap(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+
+	const cap = 200 // mirrors db.maxTimelineMonthPosts; not exported, so pinned literally here
+	monthStart := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	seedTimelinePosts(t, h, admin.ID, monthStart, cap)
+
+	var atCap timelineMonthResp
+	h.timelineMonth(admin.Token, 2026, 8).expect(http.StatusOK).decode(&atCap)
+	if len(atCap.Posts) != cap {
+		t.Fatalf("posts = %d, want exactly %d", len(atCap.Posts), cap)
+	}
+	if atCap.HasMore {
+		t.Errorf("hasMore = true at exactly %d posts, want false - nothing was truncated", cap)
+	}
+
+	// One more post, still comfortably inside August (the 200 above already span more than
+	// 8 days from midnight Aug 1), tips it over the cap.
+	seedTimelinePosts(t, h, admin.ID, monthStart.Add(cap*time.Hour), 1)
+
+	var overCap timelineMonthResp
+	h.timelineMonth(admin.Token, 2026, 8).expect(http.StatusOK).decode(&overCap)
+	if len(overCap.Posts) != cap {
+		t.Fatalf("posts = %d, want the page still capped at %d even though %d exist",
+			len(overCap.Posts), cap, cap+1)
+	}
+	if !overCap.HasMore {
+		t.Errorf("hasMore = false at %d posts (one over the cap), want true", cap+1)
 	}
 }
 

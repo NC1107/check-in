@@ -48,6 +48,11 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 // feed (see db.TimelineMonthPosts). {year}/{month} are validated before ever reaching the
 // database (see validTimelineMonth) - a non-numeric, zero, negative, or wildly out-of-range
 // value 400s cleanly rather than triggering a nonsensical or unbounded scan.
+//
+// hasMore reports whether the month actually had more eligible posts than
+// db.TimelineMonthPosts returns - the client must use it (and posts' own length) rather
+// than trusting GET /api/memories/timeline's own PostCount for this month, which is an
+// unbounded aggregate that can legitimately exceed the capped page returned here.
 func (s *Server) handleTimelineMonth(w http.ResponseWriter, r *http.Request) {
 	viewer := userFrom(r)
 	year, err := strconv.Atoi(chi.URLParam(r, "year"))
@@ -64,10 +69,10 @@ func (s *Server) handleTimelineMonth(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "year/month out of range")
 		return
 	}
-	posts, err := s.db.TimelineMonthPosts(r.Context(), viewer.ID, year, month)
+	posts, hasMore, err := s.db.TimelineMonthPosts(r.Context(), viewer.ID, year, month)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"posts": posts})
+	writeJSON(w, http.StatusOK, map[string]any{"posts": posts, "hasMore": hasMore})
 }

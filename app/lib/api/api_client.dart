@@ -320,12 +320,17 @@ class ApiClient {
   }
 
   /// timelineMonth fetches one calendar month's posts, serialized exactly like the feed
-  /// (see the server's handleTimelineMonth) - newest first, capped server-side.
-  Future<List<Post>> timelineMonth(int year, int month) async {
+  /// (see the server's handleTimelineMonth) - newest first, capped server-side. hasMore is
+  /// true when the month actually held more posts than the cap; a caller must derive any
+  /// "how many check-ins" display from posts.length (and hasMore), never from a separately
+  /// fetched TimelineMonth.postCount, which is an unbounded aggregate that can legitimately
+  /// exceed what this returns.
+  Future<({List<Post> posts, bool hasMore})> timelineMonth(int year, int month) async {
     final r = await _dio.get('/api/memories/timeline/$year/$month');
-    return ((r.data as Map<String, dynamic>)['posts'] as List)
-        .map((e) => Post.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final data = r.data as Map<String, dynamic>;
+    final posts =
+        (data['posts'] as List).map((e) => Post.fromJson(e as Map<String, dynamic>)).toList();
+    return (posts: posts, hasMore: data['hasMore'] as bool? ?? false);
   }
 
   /// lat/lng are only ever sent by the caller when the target server's server-info

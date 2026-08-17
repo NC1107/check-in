@@ -11,7 +11,8 @@ import (
 // returns for one month, newest first. Sized well above what a single month of an active
 // friend group produces (a check-in a day per member, times a dozen members, is still
 // under 400/month) while keeping the query and the response bounded regardless of how much
-// history a group has piled into one calendar month.
+// history a group has piled into one calendar month. See TimelineMonthPosts for how a month
+// that actually exceeds this is reported rather than silently truncated.
 const maxTimelineMonthPosts = 200
 
 // timelineCoverCap is how many cover photos each month in the list carries - a strip, not
@@ -240,7 +241,16 @@ func buildTimelineMonth(k timelineKey, run []timelinePostRow) TimelineMonth {
 // TimelineMonthPosts returns one calendar month's eligible posts, newest first, serialized
 // exactly like a feed post (reuses the same column list and shared SELECT fragments as
 // Feed/GetPost/RandomMemory in queries.go) - the client's Post model needs no special case
-// for where these came from. Capped at maxTimelineMonthPosts.
+// for where these came from.
+//
+// Capped at maxTimelineMonthPosts; hasMore reports whether the month actually had more than
+// that (the caller MUST surface this rather than silently presenting a truncated grid as the
+// whole month - see the api package's handleTimelineMonth and the client's month-detail
+// header, which sizes its own "N check-ins" off exactly what was returned, never off
+// TimelineMonth.PostCount, precisely because that unbounded aggregate can legitimately
+// exceed this cap). hasMore is computed for free by asking for one row more than the cap and
+// noticing whether it came back - no second COUNT(*) round trip, and exact rather than an
+// approximation that could be wrong right at the boundary.
 //
 // year/month are trusted to already be a valid calendar month - the api package's
 // validTimelineMonth rejects anything else (non-numeric, month outside 1-12, an absurd
@@ -253,10 +263,10 @@ func buildTimelineMonth(k timelineKey, run []timelinePostRow) TimelineMonth {
 // "compute local, then subtract the offset" trick recapDuePeriod (recap.go) uses for its own
 // period boundaries - then compared as an absolute instant (timestamptz vs. timestamptz), so
 // it is correct regardless of the database session's own time zone setting.
-func (d *DB) TimelineMonthPosts(ctx context.Context, viewerID int64, year, month int) ([]Post, error) {
+func (d *DB) TimelineMonthPosts(ctx context.Context, viewerID int64, year, month int) (posts []Post, hasMore bool, err error) {
 	settings, err := d.GetRecapSettings(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	offset := time.Duration(settings.Offset) * time.Minute
 
@@ -280,20 +290,19 @@ func (d *DB) TimelineMonthPosts(ctx context.Context, viewerID int64, year, month
 		  AND p.created_at >= $2 AND p.created_at < $3
 		ORDER BY p.created_at DESC, p.id DESC
 		LIMIT $4`,
-		viewerID, start, end, maxTimelineMonthPosts,
+		viewerID, start, end, maxTimelineMonthPosts+1,
 	)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer rows.Close()
 
-	var posts []Post
 	for rows.Next() {
 		var p Post
 		var preview, media, people, recap []byte
 		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
 			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people, &recap); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if len(preview) > 0 {
 			_ = json.Unmarshal(preview, &p.CommentsPreview)
@@ -305,5 +314,13 @@ func (d *DB) TimelineMonthPosts(ctx context.Context, viewerID int64, year, month
 		p.applyRecap(recap)
 		posts = append(posts, p)
 	}
-	return posts, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+
+	if len(posts) > maxTimelineMonthPosts {
+		posts = posts[:maxTimelineMonthPosts]
+		hasMore = true
+	}
+	return posts, hasMore, nil
 }
