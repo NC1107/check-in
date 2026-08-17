@@ -16,20 +16,12 @@ import '../../widgets/feed_autoplay.dart';
 import '../../widgets/likers_sheet.dart';
 import '../../widgets/photo_viewer.dart';
 import '../../widgets/post_image_carousel.dart';
+import '../../widgets/report_sheet.dart';
 import '../../widgets/tagged_people_line.dart';
 import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
 import '../profile/profile_screen.dart';
 import 'recap_card.dart';
-
-// Report reasons shown in the bottom sheet.
-const _reportReasons = [
-  'Inappropriate or offensive content',
-  'Harassment or bullying',
-  'Spam',
-  'False information',
-  'Other',
-];
 
 // Theme tokens (centralized in theme/tokens.dart).
 const _bgSurface = kBgSurface;
@@ -49,52 +41,6 @@ String _relativeTime(DateTime dt) {
 
 /// The exact local date + time, for the long-press tooltip on a relative timestamp.
 String fullLocalTime(DateTime dt) => DateFormat('MMM d, y · h:mm a').format(dt.toLocal());
-
-/// Bottom sheet letting the user pick a reason before submitting a report. Pops the
-/// selected reason string, or null when dismissed.
-class _ReportSheet extends StatelessWidget {
-  const _ReportSheet();
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const SizedBox(height: 10),
-        Container(
-          width: 40,
-          height: 4,
-          decoration: BoxDecoration(color: _border, borderRadius: BorderRadius.circular(2)),
-        ),
-        const Padding(
-          padding: EdgeInsets.fromLTRB(20, 18, 20, 6),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text('Report this check-in',
-                style: TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 17)),
-          ),
-        ),
-        const Padding(
-          padding: EdgeInsets.fromLTRB(20, 0, 20, 12),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text('The host will review your report within 24 hours.',
-                style: TextStyle(color: _fgMuted, fontSize: 13)),
-          ),
-        ),
-        const Divider(color: _border, height: 1),
-        ..._reportReasons.map(
-          (r) => ListTile(
-            title: Text(r, style: const TextStyle(color: _fgPrimary, fontSize: 15)),
-            // No chevron: tapping a reason submits the report, it doesn't drill in.
-            onTap: () => Navigator.of(context).pop(r),
-          ),
-        ),
-        SizedBox(height: MediaQuery.of(context).padding.bottom + 12),
-      ],
-    );
-  }
-}
 
 /// PostCard renders one post in the feed with the design-system dark card style.
 ///
@@ -168,7 +114,7 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
-      builder: (_) => const _ReportSheet(),
+      builder: (_) => const ReportSheet(subject: 'check-in'),
     );
     if (reason == null || !mounted) return;
     try {

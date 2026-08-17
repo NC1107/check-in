@@ -1092,18 +1092,30 @@ class _MemoriesHubHome extends ConsumerWidget {
           onTap: hub.openForgottenPhotos,
         ),
     ];
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 18),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (var i = 0; i < entries.length; i++) ...[
-              if (i > 0) const SizedBox(height: 12),
-              entries[i],
-            ],
-          ],
+    // A capable group can offer all four entries, and each subtitle wraps at a large text
+    // scale - on a short screen that can outgrow the space Expanded gives this root (see
+    // the parent's build). ConstrainedBox pins a minHeight of the full available height so
+    // Center still centers short content exactly as before; SingleChildScrollView only
+    // starts scrolling once the entries actually need more room than that.
+    return LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (var i = 0; i < entries.length; i++) ...[
+                    if (i > 0) const SizedBox(height: 12),
+                    entries[i],
+                  ],
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );
