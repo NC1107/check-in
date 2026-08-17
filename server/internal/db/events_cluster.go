@@ -1,0 +1,391 @@
+package db
+
+import (
+	"sort"
+	"time"
+)
+
+// EventKind names one of the two shapes "You Were There" detects.
+type EventKind string
+
+const (
+	EventKindTrip      EventKind = "trip"
+	EventKindGathering EventKind = "gathering"
+)
+
+// Event is one detected cluster of check-ins: a trip (posts at a place that isn't home
+// turf for at least two participants) or a gathering (a concentrated same-day spike at a
+// home-turf place). See detectEvents for how the two are told apart.
+type Event struct {
+	Kind         EventKind          `json:"kind"`
+	Place        string             `json:"place"`
+	StartDate    time.Time          `json:"startDate"`
+	EndDate      time.Time          `json:"endDate"`
+	Participants []EventParticipant `json:"participants"`
+	PostIDs      []int64            `json:"postIds"`
+	PhotoCount   int                `json:"photoCount"`
+
+	// CoverMediaID is the most-liked photo in the cluster (the post with the highest like
+	// count among posts that carry at least one image), or nil when nothing in the cluster
+	// has a photo at all (an all-text or all-clip event, which the client renders with a
+	// placeholder rather than a cover).
+	CoverMediaID *int64 `json:"coverMediaId,omitempty"`
+}
+
+// EventParticipant is one member who shows up in an Event, ordered in the roster by how
+// much of the cluster is theirs (see buildEvent) - the same "who showed up" lens
+// recapPeople uses for the recap cover's own roster.
+type EventParticipant struct {
+	UserID  int64  `json:"id"`
+	Name    string `json:"name"`
+	PhotoID *int64 `json:"photoId,omitempty"`
+
+	// Posts is this participant's post count within the event - the ranking weight above,
+	// never itself serialized.
+	Posts int `json:"-"`
+}
+
+// eventPostRow is one eligible, location-bearing post considered for event detection -
+// already filtered to the same eligibility the feed and RandomMemory use (active author,
+// not blocked by the viewer, kind <> 'recap') by EventsForViewer's query; see this
+// package's queries.go and memories.go for that precedent. A plain Go struct, not a query
+// result, precisely so detectEvents and everything it calls can be exercised as a pure
+// function over hand-built rows with no database in the loop.
+type eventPostRow struct {
+	PostID        int64
+	AuthorID      int64
+	AuthorName    string
+	AuthorPhotoID *int64
+	Location      string
+	CreatedAt     time.Time
+	LikeCount     int
+	PhotoCount    int    // image attachments on this post
+	CoverMediaID  *int64 // this post's own first image attachment, if any
+}
+
+// homeBaseLookback is how far back a member's posting history counts toward their home
+// base - a moving window, not their whole lifetime, so someone who relocated reads as
+// home in their new city within a couple of months rather than being permanently
+// classified as "away" from where they actually live now.
+const homeBaseLookback6Months = -6 // months, passed to time.AddDate
+
+// tripWindow is how large a gap between a location's consecutive active days a trip run
+// tolerates before splitting into a separate event - large enough that a week in one city
+// merges into one event (each day only 24h from the last), small enough that two
+// unrelated visits to the same place months apart stay two events, not one.
+const tripWindow = 3 * 24 * time.Hour
+
+// gatheringMinPosts and gatheringMinAuthors are the (higher-than-a-trip's) bar a single
+// day at a home-turf place has to clear to read as a real get-together rather than a
+// hometown's ordinary background posting - see detectGatherings' own doc comment for why
+// this needs to be stricter than a trip's bar at all.
+const (
+	gatheringMinPosts   = 3
+	gatheringMinAuthors = 2
+)
+
+// tripMinAwayAuthors is how many participants have to be somewhere that ISN'T their own
+// home base for a cluster to read as a trip - see buildTripIfQualifies's own doc comment
+// for why this is checked against the AWAY subset specifically, not the cluster's full
+// author count.
+const tripMinAwayAuthors = 2
+
+// dayOf floors t to its UTC calendar date (midnight) - the unit every window/bucket
+// calculation in this file groups and compares by. UTC, not the group's or a viewer's
+// local time zone: check-ins in one group come from members who may be in different time
+// zones, and there is no single "local day" that would be correct for all of them: UTC is
+// at least the same answer for everyone, which is what "same day" needs to mean for a
+// shared event.
+func dayOf(t time.Time) time.Time {
+	u := t.UTC()
+	return time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// homeBaseMinDays is the fewest DISTINCT calendar days an author has to have posted from
+// one place within the trailing window before that place counts as evidence of home turf
+// at all - not just the most-visited place among however little history exists. Without a
+// floor like this, detectEvents is circular for anyone with no OTHER location history: the
+// very cluster of posts being evaluated for tripMinAwayAuthors is also, trivially, that
+// author's only (and therefore "modal") location, so it would silently count as their own
+// home base and the cluster could never qualify as a trip - which is exactly backwards for
+// someone's first-ever trip together, the single most common case this feature exists for.
+// Three days is enough to separate "somewhere I show up repeatedly" from "the two or three
+// check-ins I just posted from the place I'm evaluating."
+const homeBaseMinDays = 3
+
+// computeHomeBases returns each author's modal (most DISTINCT DAYS posted from) location
+// among their own rows from the trailing homeBaseLookback6Months, keyed by author id -
+// but only once a location clears homeBaseMinDays; see its own doc comment for why. An
+// author with no location clearing that bar (including one with no rows in the window at
+// all) has no entry - detectTrips treats a missing home base as "away everywhere", the
+// conservative (never wrongly calls somewhere home turf) choice for anyone without enough
+// history to say otherwise.
+//
+// Ties (two-plus places with the same distinct-day count) break toward the
+// lexicographically smallest location string - simple, deterministic, and independent of
+// Go's unspecified map iteration order, which is what actually matters here: any
+// consistent tiebreak is defensible, but the result has to be the same every time this
+// runs over the same rows.
+func computeHomeBases(rows []eventPostRow, now time.Time) map[int64]string {
+	cutoff := now.AddDate(0, homeBaseLookback6Months, 0)
+	// authorID -> location -> the set of distinct days posted there.
+	days := make(map[int64]map[string]map[time.Time]bool)
+	for _, r := range rows {
+		if r.CreatedAt.Before(cutoff) {
+			continue
+		}
+		byLoc := days[r.AuthorID]
+		if byLoc == nil {
+			byLoc = make(map[string]map[time.Time]bool)
+			days[r.AuthorID] = byLoc
+		}
+		daySet := byLoc[r.Location]
+		if daySet == nil {
+			daySet = make(map[time.Time]bool)
+			byLoc[r.Location] = daySet
+		}
+		daySet[dayOf(r.CreatedAt)] = true
+	}
+	homeBase := make(map[int64]string, len(days))
+	for author, byLoc := range days {
+		var best string
+		var bestCount int
+		for loc, daySet := range byLoc {
+			n := len(daySet)
+			if n < homeBaseMinDays {
+				continue
+			}
+			if n > bestCount || (n == bestCount && loc < best) {
+				best, bestCount = loc, n
+			}
+		}
+		if bestCount > 0 {
+			homeBase[author] = best
+		}
+	}
+	return homeBase
+}
+
+// detectEvents is the whole "You Were There" detection pipeline over a group's eligible,
+// location-bearing posts: compute home bases, cluster trips (consuming the posts they
+// claim), cluster gatherings from whatever is left, then rank everything newest-first with
+// trips ahead of gatherings on a tied date. A pure function of rows and the current time -
+// no database, no HTTP - so every rule above is directly unit-testable; EventsForViewer is
+// the thin DB-fetching wrapper that calls this.
+func detectEvents(rows []eventPostRow, now time.Time) []Event {
+	homeBase := computeHomeBases(rows, now)
+	trips, consumed := detectTrips(rows, homeBase)
+	gatherings := detectGatherings(rows, consumed)
+
+	events := make([]Event, 0, len(trips)+len(gatherings))
+	events = append(events, trips...)
+	events = append(events, gatherings...)
+	sort.Slice(events, func(i, j int) bool { return eventOutranks(events[i], events[j]) })
+	return events
+}
+
+// detectTrips clusters rows by location, merges each location's consecutive active days
+// into runs (splitting wherever the gap between one active day and the next exceeds
+// tripWindow), and keeps a run only when it qualifies as a trip (see
+// buildTripIfQualifies). Returns the qualifying events and the set of post ids they
+// claim, so detectGatherings never reconsiders the same posts as a second, different kind
+// of event.
+func detectTrips(rows []eventPostRow, homeBase map[int64]string) (events []Event, consumed map[int64]bool) {
+	consumed = make(map[int64]bool)
+
+	byLocation := make(map[string][]eventPostRow)
+	for _, r := range rows {
+		byLocation[r.Location] = append(byLocation[r.Location], r)
+	}
+	locations := make([]string, 0, len(byLocation))
+	for loc := range byLocation {
+		locations = append(locations, loc)
+	}
+	sort.Strings(locations) // deterministic iteration; map order is not
+
+	for _, loc := range locations {
+		locRows := byLocation[loc]
+		sort.Slice(locRows, func(i, j int) bool { return locRows[i].CreatedAt.Before(locRows[j].CreatedAt) })
+
+		var run []eventPostRow
+		var lastDay time.Time
+		flush := func() {
+			if len(run) == 0 {
+				return
+			}
+			if ev, ok := buildTripIfQualifies(loc, run, homeBase); ok {
+				events = append(events, ev)
+				for _, r := range run {
+					consumed[r.PostID] = true
+				}
+			}
+			run = nil
+		}
+		for _, r := range locRows {
+			day := dayOf(r.CreatedAt)
+			if len(run) > 0 && day.Sub(lastDay) > tripWindow {
+				flush()
+			}
+			run = append(run, r)
+			lastDay = day
+		}
+		flush()
+	}
+	return events, consumed
+}
+
+// buildTripIfQualifies decides whether one location's date-merged run of posts is a trip:
+// at least tripMinAwayAuthors distinct authors whose OWN home base isn't this location (an
+// author with no home base at all counts as away too - see computeHomeBases). Checking the
+// away subset specifically, rather than the run's full author count, is what lets a trip
+// still qualify when a local host who lives right there shows up in a few of the photos:
+// the group traveled even if not every single person in the photos did.
+func buildTripIfQualifies(loc string, run []eventPostRow, homeBase map[int64]string) (Event, bool) {
+	away := make(map[int64]bool)
+	for _, r := range run {
+		if hb, ok := homeBase[r.AuthorID]; !ok || hb != loc {
+			away[r.AuthorID] = true
+		}
+	}
+	if len(away) < tripMinAwayAuthors {
+		return Event{}, false
+	}
+	return buildEvent(EventKindTrip, loc, run), true
+}
+
+// detectGatherings buckets whatever posts a trip run didn't already claim by (location,
+// calendar day) and keeps a bucket only when it clears gatheringMinPosts/
+// gatheringMinAuthors. This bar is deliberately higher than a trip's (which only needs 2
+// away authors, no minimum post count beyond that): a group's hometown accumulates
+// constant background posting from members just living their lives there, and without a
+// stronger signal than "two people happened to post from the same city on the same day"
+// nearly every day would falsely read as a gathering. Requiring three-plus posts on the
+// SAME day, not date-window-merged the way a trip is, is what keeps this reading as "an
+// actual get-together happened" rather than "a week of routine local check-ins."
+func detectGatherings(rows []eventPostRow, consumed map[int64]bool) []Event {
+	type bucketKey struct {
+		loc string
+		day time.Time
+	}
+	buckets := make(map[bucketKey][]eventPostRow)
+	for _, r := range rows {
+		if consumed[r.PostID] {
+			continue
+		}
+		k := bucketKey{loc: r.Location, day: dayOf(r.CreatedAt)}
+		buckets[k] = append(buckets[k], r)
+	}
+
+	keys := make([]bucketKey, 0, len(buckets))
+	for k := range buckets {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if !keys[i].day.Equal(keys[j].day) {
+			return keys[i].day.Before(keys[j].day)
+		}
+		return keys[i].loc < keys[j].loc
+	})
+
+	var events []Event
+	for _, k := range keys {
+		run := buckets[k]
+		authors := make(map[int64]bool, len(run))
+		for _, r := range run {
+			authors[r.AuthorID] = true
+		}
+		if len(run) >= gatheringMinPosts && len(authors) >= gatheringMinAuthors {
+			events = append(events, buildEvent(EventKindGathering, k.loc, run))
+		}
+	}
+	return events
+}
+
+// buildEvent turns a qualifying run of posts at one place into the Event the client
+// renders: post ids and date range in chronological order, every distinct author rolled
+// up into a roster ordered by contribution (the same post-count-desc, user-id-asc
+// convention recapPeople uses for the recap cover's own roster - see its doc comment for
+// why post count, not likes, is the right lens for "who showed up"), and a cover picked as
+// the most-liked photo in the run (ties broken toward the earlier post id, for a
+// deterministic pick when two posts tie on likes).
+func buildEvent(kind EventKind, loc string, run []eventPostRow) Event {
+	sorted := make([]eventPostRow, len(run))
+	copy(sorted, run)
+	sort.Slice(sorted, func(i, j int) bool {
+		if !sorted[i].CreatedAt.Equal(sorted[j].CreatedAt) {
+			return sorted[i].CreatedAt.Before(sorted[j].CreatedAt)
+		}
+		return sorted[i].PostID < sorted[j].PostID
+	})
+
+	postIDs := make([]int64, len(sorted))
+	photoCount := 0
+	var coverMediaID *int64
+	var coverPost eventPostRow
+	haveCover := false
+
+	participants := make(map[int64]*EventParticipant, len(sorted))
+	var order []int64
+
+	for i, r := range sorted {
+		postIDs[i] = r.PostID
+		photoCount += r.PhotoCount
+		if r.CoverMediaID != nil {
+			if !haveCover || r.LikeCount > coverPost.LikeCount ||
+				(r.LikeCount == coverPost.LikeCount && r.PostID < coverPost.PostID) {
+				coverMediaID = r.CoverMediaID
+				coverPost = r
+				haveCover = true
+			}
+		}
+		p, ok := participants[r.AuthorID]
+		if !ok {
+			p = &EventParticipant{UserID: r.AuthorID, Name: r.AuthorName, PhotoID: r.AuthorPhotoID}
+			participants[r.AuthorID] = p
+			order = append(order, r.AuthorID)
+		}
+		p.Posts++
+	}
+
+	people := make([]EventParticipant, len(order))
+	for i, id := range order {
+		people[i] = *participants[id]
+	}
+	sort.Slice(people, func(i, j int) bool {
+		if people[i].Posts != people[j].Posts {
+			return people[i].Posts > people[j].Posts
+		}
+		return people[i].UserID < people[j].UserID
+	})
+
+	return Event{
+		Kind:         kind,
+		Place:        loc,
+		StartDate:    dayOf(sorted[0].CreatedAt),
+		EndDate:      dayOf(sorted[len(sorted)-1].CreatedAt),
+		Participants: people,
+		PostIDs:      postIDs,
+		PhotoCount:   photoCount,
+		CoverMediaID: coverMediaID,
+	}
+}
+
+// eventOutranks reports whether a ranks strictly ahead of b in the events list: newest
+// end date first (per the endpoint's contract), trips ahead of gatherings when the end
+// date ties, then start date, place, and finally the run's earliest post id - full
+// determinism, so the order never depends on map/slice iteration order upstream.
+func eventOutranks(a, b Event) bool {
+	if !a.EndDate.Equal(b.EndDate) {
+		return a.EndDate.After(b.EndDate)
+	}
+	if a.Kind != b.Kind {
+		return a.Kind == EventKindTrip
+	}
+	if !a.StartDate.Equal(b.StartDate) {
+		return a.StartDate.After(b.StartDate)
+	}
+	if a.Place != b.Place {
+		return a.Place < b.Place
+	}
+	return a.PostIDs[0] < b.PostIDs[0]
+}
