@@ -1129,18 +1129,43 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
   bool _failed = false;
   bool _unsupported = false;
 
+  /// Bumped by every call to [_fetch]; a call captures its own value and only ever applies
+  /// its result if it's still the current one when the response lands. Without this, a
+  /// group switch mid-request couldn't tell "this response belongs to the group now
+  /// selected" from "this response belongs to a group that's since been abandoned" - a late
+  /// arrival from the abandoned request would still call setState and paint its content
+  /// under a header pill that by then names a different group entirely.
+  int _fetchSeq = 0;
+
   @override
   void didUpdateWidget(_MemoriesBody old) {
     super.didUpdateWidget(old);
-    // The idle "tap to begin" welcome screen stays idle through a group switch - it is a
+    if (old.groupId == widget.groupId) return;
+    // Nothing has ever been fetched for this screen, so there is nothing on screen that
+    // could disagree with the pill - stays idle, exactly like a fresh mount. It is a
     // deliberate one-tap action, not something that should fire a request just because the
-    // selector moved. Once a result (or an unsupported/error/empty state) is actually on
-    // screen, though, switching groups must replace it rather than leave stale data from
-    // the old group up - that's "changing the selection refetches the current view".
-    if (old.groupId != widget.groupId && _fetched) _fetch();
+    // selector moved.
+    if (!_loading && !_fetched) return;
+    // A fetch already started for the OLD group - in flight, or already landed. Reset to
+    // the same pre-fetch state a fresh mount starts from, THEN fetch again: the screen goes
+    // straight from "old group's content" to idle-while-loading and never sits on the old
+    // group's card, error, or unsupported message under the newly selected group's pill -
+    // not even for a single frame. Bumping _fetchSeq inside _fetch() below also means a
+    // still-in-flight response from the old group is discarded on arrival rather than
+    // painting over whatever this triggers next. See memories_test.dart's "switch during
+    // the first fetch" regression test.
+    setState(() {
+      _memory = null;
+      _loading = false;
+      _fetched = false;
+      _failed = false;
+      _unsupported = false;
+    });
+    _fetch();
   }
 
   Future<void> _fetch() async {
+    final seq = ++_fetchSeq;
     final groupId = widget.groupId;
     // Reads the current group's ServerAccount up front and reuses it after the await below
     // rather than re-resolving it once the response lands: the selection can change while
@@ -1173,14 +1198,14 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
     });
     try {
       final post = await ref.read(apiForGroupProvider(account.id)).randomMemory();
-      if (!mounted) return;
+      if (!mounted || seq != _fetchSeq) return;
       setState(() {
         _memory = post?.withGroup(account.id);
         _loading = false;
         _fetched = true;
       });
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || seq != _fetchSeq) return;
       setState(() {
         _loading = false;
         _fetched = true;

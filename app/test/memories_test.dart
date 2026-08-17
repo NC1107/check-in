@@ -706,8 +706,10 @@ void main() {
     });
 
     testWidgets(
-        'a mid-flight fetch keeps the group it was actually fetched from, even if the shown '
-        'selection changes before it resolves', (tester) async {
+        'a mid-flight fetch is abandoned when the resolved group changes before it resolves - '
+        'the newly resolved group\'s own fetch is what ends up shown, and the abandoned '
+        'response is stamped with (but never surfaces under) the group it truly came from',
+        (tester) async {
       final completer = Completer<Post?>();
       final groupA = account('a.invalid', memoriesCapable: true);
       final groupB = account('b.invalid', memoriesCapable: true);
@@ -722,9 +724,7 @@ void main() {
           multiSessionProvider.overrideWith(() => session),
           apiForGroupProvider.overrideWith((ref, id) => id == 'a.invalid'
               ? _DelayedMemoriesApi(completer)
-              // B's api must never be read: nothing in this test ever shows B while the
-              // fetch is in flight.
-              : _FakeMemoriesApi([memory(999, body: 'should never be seen')])),
+              : _FakeMemoriesApi([memory(556, body: 'memory from B')])),
         ],
         child: MaterialApp(home: _MemoriesHost(key: key)),
       ));
@@ -737,24 +737,33 @@ void main() {
       await tester.tap(find.text('Random check-in')); // the action button
       await tester.pump(); // starts the fetch against A; leaves it pending on completer
 
-      // The active selection changes mid-flight: A is hidden and B is shown instead - the
+      // The resolved group changes mid-flight: A is hidden and B is shown instead - the
       // exact shape of bug that once double-attached a gif to the wrong cross-post target.
+      // Here that resolution flows from the feed's own shown-group filter rather than the
+      // header selector, but _MemoriesBody reacts to any groupId change the same way.
       await session.setHiddenGroups(const {'a.invalid'});
-      await tester.pump();
+      await tester.pumpAndSettle();
 
+      expect(find.text('memory from B'), findsOneWidget,
+          reason: 'once the resolved group changes, the view must refetch and show that '
+              "group's own result rather than sit on a stale one from the group it left "
+              'behind');
+
+      // A's abandoned request finally lands - it must never be allowed to paint over B's
+      // already-showing, correctly-resolved result.
       completer.complete(memory(555, body: 'memory from A'));
       await tester.pumpAndSettle();
 
-      expect(find.text('memory from A'), findsOneWidget,
-          reason: 'the fetch must resolve against the group it was sent to, not whatever is '
-              'shown by the time the response lands');
+      expect(find.text('memory from A'), findsNothing,
+          reason: 'a late response from a group that is no longer resolved must never paint, '
+              'or the header pill and the content on screen would disagree');
 
       await tester.tap(find.bySemanticsLabel('Open this memory'));
       await tester.pumpAndSettle();
 
       final detail = tester.widget<PostDetailScreen>(find.byType(PostDetailScreen));
-      expect(detail.postId, 555);
-      expect(detail.groupId, 'a.invalid');
+      expect(detail.postId, 556);
+      expect(detail.groupId, 'b.invalid');
     });
 
     testWidgets(
@@ -791,6 +800,48 @@ void main() {
       expect(detail.postId, 202,
           reason: 'the refetched result must carry the newly selected group\'s id');
       expect(detail.groupId, 'b.invalid');
+    });
+
+    testWidgets(
+        'switching the selector during the very first fetch (before it has ever resolved) '
+        'still refetches, and the abandoned group\'s late response can never paint',
+        (tester) async {
+      // The gap the previous fix missed: the very first fetch never sets _fetched until it
+      // resolves, so a guard keyed on _fetched alone sees nothing to react to here - this
+      // is exactly "switch while _loading && !_fetched with the selector visible".
+      final completerA = Completer<Post?>();
+      final groupA = account('a.invalid', memoriesCapable: true);
+      final groupB = account('b.invalid', memoriesCapable: true);
+      await pumpHost(tester,
+          groups: [groupA, groupB],
+          api: (id) => id == 'a.invalid'
+              ? _DelayedMemoriesApi(completerA)
+              : _FakeMemoriesApi([memory(302, body: 'from B')]));
+
+      await tester.tap(find.bySemanticsLabel('Memories'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Random check-in')); // hub entry
+      await tester.pumpAndSettle();
+      await tester
+          .tap(find.text('Random check-in')); // action button - starts the first fetch, against A
+      await tester.pump(); // leaves it pending on completerA; _fetched is still false here
+
+      await tester.tap(find.text('b.invalid')); // the selector pill
+      await tester.pumpAndSettle();
+
+      expect(find.text('from B'), findsOneWidget,
+          reason: 'switching mid-fetch must still refetch from the newly selected group, even '
+              'though the abandoned fetch never resolved');
+
+      // A's abandoned request finally lands - it must never be allowed to paint, even though
+      // it's the only future left to settle.
+      completerA.complete(memory(101, body: 'from A'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('from A'), findsNothing,
+          reason: 'a late response from a group the user has since switched away from must '
+              'never paint, or the pill and the content on screen would disagree');
+      expect(find.text('from B'), findsOneWidget);
     });
 
     testWidgets('renders the renamed hub entry and button, never the old strings', (tester) async {
