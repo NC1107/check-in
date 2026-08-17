@@ -20,6 +20,7 @@ class ServerInfo {
     this.memoriesCapable = false,
     this.eventsCapable = false,
     this.timelineCapable = false,
+    this.forgottenCapable = false,
   });
 
   final String name;
@@ -85,6 +86,12 @@ class ServerInfo {
   /// load anything. Independent of the other two.
   final bool timelineCapable;
 
+  /// Whether this server has GET /api/memories/forgotten - the "Forgotten photos" hub entry.
+  /// Same story as [memoriesCapable], [eventsCapable] and [timelineCapable]: a server
+  /// predating it has no such route at all, so the client hides that hub entry rather than
+  /// opening a view that can never load anything. Independent of the other three.
+  final bool forgottenCapable;
+
   factory ServerInfo.fromJson(Map<String, dynamic> j) => ServerInfo(
         name: j['name'] as String? ?? 'Check-In',
         initialized: j['initialized'] as bool? ?? false,
@@ -102,6 +109,7 @@ class ServerInfo {
         memoriesCapable: j['memories'] as bool? ?? false,
         eventsCapable: j['events'] as bool? ?? false,
         timelineCapable: j['timeline'] as bool? ?? false,
+        forgottenCapable: j['forgotten'] as bool? ?? false,
       );
 }
 

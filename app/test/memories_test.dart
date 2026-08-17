@@ -703,6 +703,12 @@ void main() {
       expect(find.text('Nothing to look back on yet.'), findsOneWidget);
       // Never a bare, permanent spinner - see feature spec's empty-state requirement.
       expect(find.byType(CircularProgressIndicator), findsNothing);
+      // The empty state must show this view's own feature icon (the same one the idle and
+      // unsupported states use), matching this file's own convention (see
+      // _EventsListView._emptyState/Icons.map_outlined and
+      // _TimelineListView._emptyState/Icons.calendar_month_outlined) - not some other glyph
+      // hardcoded independently of widget.icon.
+      expect(find.byIcon(Icons.auto_awesome_outlined), findsOneWidget);
     });
 
     testWidgets(
