@@ -133,7 +133,7 @@ func (s *Server) Router() http.Handler {
 		r.Get("/api/birthdays/upcoming", s.handleUpcomingBirthdays)
 
 		r.With(s.rateLimitUser(s.content.media)).Post("/api/media", s.handleUploadMedia)
-		r.Get("/api/media/{id}", s.handleServeMedia)
+		r.With(s.rateLimitUser(s.content.mediaRead)).Get("/api/media/{id}", s.handleServeMedia)
 		r.With(s.rateLimitUser(s.content.media)).Post("/api/media/{id}/poster", s.handleSetMediaPoster)
 
 		r.With(s.rateLimitUser(s.content.gifs)).Get("/api/gifs/search", s.handleGifSearch)

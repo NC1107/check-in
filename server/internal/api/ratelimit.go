@@ -81,6 +81,7 @@ type contentLimits struct {
 	comments  *rateLimiter
 	likes     *rateLimiter
 	media     *rateLimiter
+	mediaRead *rateLimiter
 	gifs      *rateLimiter
 	memories  *rateLimiter
 	events    *rateLimiter
@@ -104,6 +105,13 @@ func newContentLimits() contentLimits {
 		// the most generous of the four.
 		likes: newRateLimiter(60, 30),
 		media: newRateLimiter(30, mediaBurst),
+		// GET /api/media/{id} - serving the actual file. This is a read, not a create, so it
+		// gets its own far more generous bucket: a single feed page can paint dozens of
+		// images (up to 100 posts x 10 attachments, plus an avatar per post) in the seconds
+		// it takes to scroll, and that has to clear cleanly. The burst is sized for that; the
+		// steady rate still bounds a script walking sequential media ids at wire speed, which
+		// is what this limiter exists for (see GetVisibleMedia's doc comment).
+		mediaRead: newRateLimiter(600, 300),
 		// Search-as-you-type protection: the client debounces too, but a burst has to clear
 		// a few quick keystrokes before the debounce catches up.
 		gifs: newRateLimiter(30, 15),
