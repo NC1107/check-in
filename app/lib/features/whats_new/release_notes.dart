@@ -23,7 +23,7 @@ const releaseNotes = <ReleaseNote>[
   // story of the update they are actually installing, and it is deliberately word for word
   // the same text as the App Store "What's New" so the two never tell different stories.
   ReleaseNote(
-    version: '1.20',
+    version: '1.19.1',
     highlights: [
       'Video clips. Record or pick a video, trim it down to ten seconds, and post it like a photo. Clips play as you scroll, with sound following your ring/silent switch, and tapping one opens it full screen right where it left off.',
       "GIFs. There's a GIF button now when you write a check-in or a comment.",
