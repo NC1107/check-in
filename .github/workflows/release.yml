@@ -126,12 +126,44 @@ jobs:
             exit 1
           fi
           echo "release notes present for $want"
+      # Tagged with plain git rather than a third-party action: the action this replaces
+      # started failing with "Not Found" the moment GitHub force-migrated it off Node 20,
+      # which stopped a release that was otherwise green. The bump rules below are the same
+      # conventional-commit rules the notes gate above predicts with, so the gate can never
+      # disagree with what actually gets tagged.
       - name: Bump version and tag
         id: tag
-        uses: mathieudutour/github-tag-action@v6.2
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          default_bump: patch
+        run: |
+          last=$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)
+          log=$(git log --format='%s%n%b' "$last"..HEAD)
+          major=$(echo "$last" | sed 's/^v//' | cut -d. -f1)
+          minor=$(echo "$last" | sed 's/^v//' | cut -d. -f2)
+          patch=$(echo "$last" | sed 's/^v//' | cut -d. -f3)
+          if echo "$log" | grep -qE '^BREAKING CHANGE|^[a-z]+(\([^)]*\))?!:'; then
+            major=$((major+1)); minor=0; patch=0
+          elif echo "$log" | grep -qE '^feat(\([^)]*\))?:'; then
+            minor=$((minor+1)); patch=0
+          else
+            patch=$((patch+1))
+          fi
+          version="$major.$minor.$patch"
+          tag="v$version"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "::error::$tag already exists. A release for it either succeeded or was tagged by hand."
+            exit 1
+          fi
+          {
+            echo "new_version=$version"
+            echo "new_tag=$tag"
+            echo "changelog<<RELEASE_CHANGELOG"
+            git log --format='- %s' "$last"..HEAD
+            echo "RELEASE_CHANGELOG"
+          } >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$tag"
+          git push origin "$tag"
+          echo "tagged $tag (previous $last)"
       - name: Detect store secrets
         id: secrets
         env:
