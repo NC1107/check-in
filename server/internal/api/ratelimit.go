@@ -83,6 +83,7 @@ type contentLimits struct {
 	media    *rateLimiter
 	gifs     *rateLimiter
 	memories *rateLimiter
+	events   *rateLimiter
 }
 
 // mediaBurst is the media allowance, and 20 is a requirement rather than a preference: a
@@ -108,6 +109,10 @@ func newContentLimits() contentLimits {
 		// burst is sized to clear someone genuinely mashing it for a minute rather than the
 		// occasional double-tap.
 		memories: newRateLimiter(30, 15),
+		// Opening the Memories hub's "You were there" entry, or switching groups while it's
+		// open, is a handful of reads per visit, not a script - a modest burst clears normal
+		// browsing without inviting anyone to hammer the clustering query.
+		events: newRateLimiter(20, 10),
 	}
 }
 

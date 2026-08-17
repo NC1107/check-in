@@ -1,22 +1,27 @@
+import 'dart:async';
 import 'dart:math';
+import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../../api/api_client.dart';
 import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
 import '../../widgets/auth_image.dart';
+import '../../widgets/photo_viewer.dart';
 import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
 
 // Theme tokens (centralized in theme/tokens.dart).
 const _bgMain = kBgMain;
 const _bgSurface = kBgSurface;
+const _bgSurfaceHover = kBgSurfaceHover;
 const _border = kBorder;
 const _fgPrimary = kFgPrimary;
 const _fgSecondary = kFgSecondary;
@@ -43,6 +48,148 @@ const kMemoriesFlickVelocity = 500.0;
 /// centered) - that kept the notch centered but still measurably shifted the Feed and You
 /// icons inward, which is exactly the kind of shift this "invisible" feature must not cause.
 const kMemoriesHandleWidth = 44.0;
+
+/// The pill's opacity at rest: barely there, per the founder's "sortve hidden" brief - dim
+/// enough to read as a seam in the bar rather than a control, until the periodic pulse (or,
+/// under reduced motion, [kMemoriesPillReducedMotionOpacity]) says otherwise.
+const kMemoriesPillRestOpacity = 0.12;
+
+/// The pill's opacity at the peak of its periodic pulse - close to the old always-on grey
+/// pill's own alpha, so the hint reads as a genuine affordance for the second or so it holds.
+const kMemoriesPillPeakOpacity = 0.55;
+
+/// The pill's constant opacity under [MediaQuery.disableAnimations]: nothing ever animates
+/// there, so a reduced-motion viewer needs a steady, findable affordance rather than living
+/// with the rest opacity's near-invisibility as the only state they'd ever see.
+const kMemoriesPillReducedMotionOpacity = 0.34;
+
+/// How often the pill pulses to remind an idle viewer it's there.
+const kMemoriesPillPulseInterval = Duration(seconds: 30);
+const kMemoriesPillPulseRise = Duration(milliseconds: 220);
+const kMemoriesPillPulseHold = Duration(milliseconds: 560);
+const kMemoriesPillPulseFall = Duration(milliseconds: 220);
+
+/// One full pulse sweep: rise, then hold, then fall - see
+/// [MemoriesPillPulseController._controller]'s own doc comment for why this is driven as one
+/// continuous [AnimationController] sweep rather than three separately-scheduled steps.
+/// `final`, not `const`: [Duration.+] isn't a const-evaluable operator.
+final kMemoriesPillPulseTotalDuration =
+    kMemoriesPillPulseRise + kMemoriesPillPulseHold + kMemoriesPillPulseFall;
+
+/// The 4x26 grab handle's ambient pulse: drives [opacity] from [kMemoriesPillRestOpacity] up
+/// to [kMemoriesPillPeakOpacity] and back for about a second, roughly every
+/// [kMemoriesPillPulseInterval] - the founder's "mostly hidden, but says hello every 30s"
+/// brief. A tiny state machine, not a widget, precisely so its scheduling rules (see
+/// [setActive]) are unit-testable without pumping a widget tree - the same reasoning
+/// [MemoriesDragDriver] documents for the drag.
+///
+/// Owns the [AnimationController] its caller constructs (vsync'd to the handle's own State)
+/// but never the decision to animate at all: [setActive] is the single gate every condition
+/// the founder's brief lists (Feed tab active, surface closed, app resumed, motion allowed)
+/// goes through, so "must never run in the background" only has to be enforced in one place -
+/// see MemoriesHandle's build() and lifecycle callbacks, the only callers.
+///
+/// One pulse is a single continuous [AnimationController.forward] sweep from 0 to 1 across
+/// [_pulseDuration] (rise+hold+fall), not three separately-awaited animate/delay steps
+/// chained together - deliberately: a `Future.delayed` created as a *side effect* of an
+/// earlier animation's completion (mid-callback, not at the top of a fresh event) can land in
+/// a timing noman's-land under flutter_test's own step-driven fake clock, where a
+/// `tester.pump(duration)` that lands exactly on its target time doesn't reliably fire it
+/// within that same call. A single sweep has one Ticker, started once, with [opacity] derived
+/// purely from where in that sweep [_controller]'s own value currently sits - the same
+/// well-trodden `tester.pump(duration)` mechanics every other AnimationController in this file
+/// already relies on, no timer/future boundary for the fake clock to trip over.
+class MemoriesPillPulseController {
+  MemoriesPillPulseController(this._controller) {
+    // Owned outright, regardless of whatever the caller constructed it with - forward(from:)
+    // needs a duration to animate over, and pinning it here means a caller can never
+    // accidentally desync it from the rise/hold/fall constants above by constructing the
+    // controller with a different (or no) duration of its own.
+    _controller.duration = kMemoriesPillPulseTotalDuration;
+    _controller.addStatusListener(_onStatus);
+  }
+
+  /// Where the rise-to-hold and hold-to-fall handoffs fall within the sweep (as 0..1
+  /// fractions of [kMemoriesPillPulseTotalDuration]) - [opacity] uses these to work out which
+  /// phase [_controller]'s current value is in.
+  static final double _riseEnd =
+      kMemoriesPillPulseRise.inMicroseconds / kMemoriesPillPulseTotalDuration.inMicroseconds;
+  static final double _holdEnd = (kMemoriesPillPulseRise + kMemoriesPillPulseHold).inMicroseconds /
+      kMemoriesPillPulseTotalDuration.inMicroseconds;
+
+  final AnimationController _controller;
+  Timer? _timer;
+  bool _active = false;
+  bool _disposed = false;
+
+  /// The pill's opacity right now: [kMemoriesPillRestOpacity] at rest (the sweep's start and
+  /// end alike), ramping up to [kMemoriesPillPeakOpacity] across the rise fraction, holding
+  /// there, then ramping back down across the fall fraction. Meant to be read inside an
+  /// [AnimatedBuilder] listening to the wrapped controller.
+  double get opacity {
+    final t = _controller.value;
+    double peaked; // 0 = at rest, 1 = fully peaked
+    if (t <= _riseEnd) {
+      peaked = _riseEnd <= 0 ? 1 : t / _riseEnd;
+    } else if (t <= _holdEnd) {
+      peaked = 1;
+    } else {
+      final fallSpan = 1 - _holdEnd;
+      peaked = fallSpan <= 0 ? 0 : 1 - (t - _holdEnd) / fallSpan;
+    }
+    return lerpDouble(kMemoriesPillRestOpacity, kMemoriesPillPeakOpacity, peaked)!;
+  }
+
+  /// Whether a pulse is currently scheduled to fire. Exposed only for tests to assert the
+  /// timer really was cancelled (not just that nothing threw) - see memories_test.dart's
+  /// pulse controller group.
+  @visibleForTesting
+  bool get hasPendingTimer => _timer != null;
+
+  /// The single gate on whether the pulse may run at all. A caller passes the AND of every
+  /// condition that must hold; toggling it off (a tab switch, the surface opening, the app
+  /// backgrounding, reduced motion) cuts an in-flight pulse off immediately rather than
+  /// letting it finish its cycle - the whole point of a gate that "must stop" is that nothing
+  /// keeps animating a moment after it should not be.
+  void setActive(bool active) {
+    if (_disposed || active == _active) return;
+    _active = active;
+    if (active) {
+      _schedule();
+    } else {
+      _timer?.cancel();
+      _timer = null;
+      if (_controller.value != 0 || _controller.isAnimating) _controller.value = 0;
+    }
+  }
+
+  void _schedule() {
+    _timer?.cancel();
+    _timer = Timer(kMemoriesPillPulseInterval, _fire);
+  }
+
+  void _fire() {
+    if (!_active || _disposed) return;
+    _controller.forward(from: 0);
+  }
+
+  /// Reschedules the next pulse once a sweep runs all the way to its end - the single place
+  /// that decides "settling back to rest reschedules", so a caller never has to chain off the
+  /// forward() call itself (see the class doc comment for why that chaining was the bug).
+  void _onStatus(AnimationStatus status) {
+    if (status == AnimationStatus.completed && _active && !_disposed) _schedule();
+  }
+
+  /// Stops the timer and any in-flight animation cleanly. Idempotent.
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _timer?.cancel();
+    _timer = null;
+    _controller.removeStatusListener(_onStatus);
+    _controller.stop();
+  }
+}
 
 /// Decides whether an in-progress interactive drag of the Memories surface should settle
 /// open (1.0) or closed (0.0) once the finger lifts. [position] is the drag's current
@@ -122,6 +269,71 @@ class MemoriesDragDriver {
   }
 }
 
+/// Which top-level screen the hub is showing - see [MemoriesHubController].
+enum HubScreen { hub, randomMemory, eventsList }
+
+/// The Memories surface's own tiny internal navigation stack: hub -> ("Give me a memory"
+/// or "You were there") -> (an events list entry may drill into one event's own detail).
+/// Not a real [Navigator] - the stack here is never more than 2 deep and entirely known in
+/// advance, so a plain [ChangeNotifier] holding "which screen" plus "which event, if any"
+/// is simpler than standing up nested routing for it, while still giving MemoriesSurface's
+/// own PopScope (see its doc comment) a single place to ask "is there anywhere left to step
+/// back to before closing the whole surface".
+class MemoriesHubController extends ChangeNotifier {
+  HubScreen _screen = HubScreen.hub;
+  Event? _selectedEvent;
+
+  HubScreen get screen => _screen;
+
+  /// The event whose detail is showing, drilled into from the events list - null whenever
+  /// the list itself (or any other screen) is what's showing.
+  Event? get selectedEvent => _selectedEvent;
+
+  void openRandomMemory() {
+    _screen = HubScreen.randomMemory;
+    notifyListeners();
+  }
+
+  void openEventsList() {
+    _screen = HubScreen.eventsList;
+    _selectedEvent = null;
+    notifyListeners();
+  }
+
+  void openEventDetail(Event event) {
+    _selectedEvent = event;
+    notifyListeners();
+  }
+
+  /// Steps back exactly one level (event detail -> events list -> hub, or
+  /// randomMemory -> hub) and returns true, or does nothing and returns false when already
+  /// at the hub with nothing left to pop internally - the signal callers (Android back, the
+  /// header's own back chevron) use to know whether they should instead close the whole
+  /// surface.
+  bool back() {
+    if (_selectedEvent != null) {
+      _selectedEvent = null;
+      notifyListeners();
+      return true;
+    }
+    if (_screen != HubScreen.hub) {
+      _screen = HubScreen.hub;
+      notifyListeners();
+      return true;
+    }
+    return false;
+  }
+
+  /// Jumps straight back to the hub root - called whenever the surface itself closes, so
+  /// reopening it later never shows a stale sub-screen from last time.
+  void reset() {
+    if (_screen == HubScreen.hub && _selectedEvent == null) return;
+    _screen = HubScreen.hub;
+    _selectedEvent = null;
+    notifyListeners();
+  }
+}
+
 /// The memory's age the way a person would say it: "3 years ago" once the gap crosses a
 /// year, "last October" for anything further back but still within the last year, otherwise
 /// a weeks-ago count. The server never returns a post younger than its 14-day recency floor,
@@ -154,21 +366,57 @@ String memoryAgeLabel(DateTime createdAt, {DateTime? now}) {
 /// never discovers the drag both go through this) and on an interactive rightward drag past
 /// [kMemoriesOpenThreshold] or a rightward flick.
 class MemoriesHandle extends ConsumerStatefulWidget {
-  const MemoriesHandle({super.key, required this.controller});
+  const MemoriesHandle({super.key, required this.controller, required this.feedActive});
 
   final AnimationController controller;
+
+  /// Whether the Feed tab is the one currently showing. home_shell.dart keeps the bottom bar
+  /// (and so this handle) mounted on the You tab too, but the ambient pulse (see
+  /// [MemoriesPillPulseController]) only ever runs here - pulsing on a tab the gesture's own
+  /// screen isn't behind would draw an eye that has already left.
+  final bool feedActive;
 
   @override
   ConsumerState<MemoriesHandle> createState() => _MemoriesHandleState();
 }
 
-class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
+class _MemoriesHandleState extends ConsumerState<MemoriesHandle>
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   late final _drag = MemoriesDragDriver(widget.controller);
+  late final _pulseController = AnimationController(vsync: this);
+  late final _pulse = MemoriesPillPulseController(_pulseController);
 
-  // Cached from the last build, so dispose() (which cannot safely call MediaQuery.of -
-  // the context is on its way out) still knows whether to animate or snap when it settles
-  // a stranded drag. See dispose()'s own comment.
+  // Cached from the last build/lifecycle event, so callbacks that fire outside build (the
+  // shared controller's own listener, an app-lifecycle change) can recompute the pulse's
+  // one gating condition (see _recomputePulse) without a BuildContext of their own, and so
+  // dispose() (which cannot safely call MediaQuery.of - the context is on its way out) still
+  // knows whether to animate or snap when it settles a stranded drag. See dispose()'s own
+  // comment.
   bool _reduceMotion = false;
+  bool _capable = false;
+  bool _appResumed = true;
+
+  // Whether the shared Memories surface is anywhere above fully closed - mirrors
+  // _HomeShellState's own _memoriesOpen and _MemoriesSurfaceState's _open, read off the same
+  // controller. The pulse must not run while the surface covers the screen (see
+  // _recomputePulse).
+  late bool _surfaceOpen = widget.controller.value > 0;
+
+  void _onControllerChanged() {
+    final open = widget.controller.value > 0;
+    if (open == _surfaceOpen) return;
+    _surfaceOpen = open;
+    _recomputePulse();
+  }
+
+  /// The pulse's single gate: every condition the founder's brief lists, ANDed together and
+  /// handed to [MemoriesPillPulseController.setActive]. Called from build() with the latest
+  /// values, and from every callback that can change one of them outside a build (the
+  /// controller listener, app-lifecycle changes) using the cached fields above.
+  void _recomputePulse() {
+    _pulse
+        .setActive(_capable && widget.feedActive && !_surfaceOpen && _appResumed && !_reduceMotion);
+  }
 
   void _open(bool reduceMotion) {
     HapticFeedback.selectionClick();
@@ -178,7 +426,34 @@ class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    widget.controller.addListener(_onControllerChanged);
+  }
+
+  @override
+  void didUpdateWidget(MemoriesHandle old) {
+    super.didUpdateWidget(old);
+    if (old.feedActive != widget.feedActive) _recomputePulse();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Never let the pulse keep ticking, or a timer keep waking the device, once the app is
+    // backgrounded - a timer firing every 30s in the background is a battery bug, not a hint.
+    final resumed = state == AppLifecycleState.resumed;
+    if (resumed == _appResumed) return;
+    _appResumed = resumed;
+    _recomputePulse();
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    widget.controller.removeListener(_onControllerChanged);
+    _pulse.dispose();
+    _pulseController.dispose();
     // Belt and braces alongside _HomeShellState's own capability-drop guard (the
     // authoritative fix - see its doc comment): if this whole widget is ever removed from
     // the tree while a drag was in progress, rather than merely rebuilt to
@@ -196,6 +471,8 @@ class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
         ref.watch(multiSessionProvider.select((s) => s.memoriesCapableShownGroups.isNotEmpty));
     final reduceMotion = MediaQuery.of(context).disableAnimations;
     _reduceMotion = reduceMotion;
+    _capable = capable;
+    _recomputePulse();
     // An overlay, not a Row child (see the class doc comment) - shrinking to nothing here
     // costs no layout, only removes the gesture surface and lets taps fall through to
     // whatever the handle was sitting on top of.
@@ -211,6 +488,7 @@ class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
     }
 
     final width = MediaQuery.sizeOf(context).width;
+    final accent = context.accent;
     return Semantics(
       button: true,
       label: 'Memories',
@@ -221,18 +499,70 @@ class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
         onHorizontalDragUpdate: (d) => _drag.update(d, width, reduceMotion),
         onHorizontalDragEnd: (d) => _drag.end(d, reduceMotion),
         onHorizontalDragCancel: () => _drag.cancel(reduceMotion),
-        child: SizedBox(
-          width: kMemoriesHandleWidth,
-          height: 64,
-          // The visible pill stays exactly 4x26, centered in the wider tap target - only the
-          // grabbable area grows, never the look.
-          child: Center(
-            child: Container(
-              width: 4,
-              height: 26,
-              decoration: BoxDecoration(
-                color: _fgMuted.withValues(alpha: 0.55),
-                borderRadius: BorderRadius.circular(9999),
+        // SafeArea-then-fixed-64-box mirrors BottomAppBar's own build exactly (see Flutter's
+        // BottomAppBar, and home_shell.dart's Positioned doc comment right above where this
+        // handle is placed) - it's what makes this box land at the same origin as the bar's
+        // own content box on every device, regardless of its bottom safe inset, rather than
+        // being centered against the bar's taller, safe-area-inflated total height.
+        //
+        // Getting the box right isn't enough on its own, though: a plain Center inside it
+        // would still land the pill on the box's own geometric middle, which sits BELOW
+        // where the Feed/You icon glyphs actually are - their Column packs icon+gap+label
+        // together and centers that whole block, so the icon (the block's top part) ends up
+        // above the block's own center once a label is added underneath. Repeating the exact
+        // same icon-slot + gap + label-sized shape below (see _NavItem, and
+        // kBottomNavIconSize/kBottomNavIconLabelGap/kBottomNavLabelStyle's shared doc
+        // comment) reproduces that same displacement for the pill: Column's
+        // mainAxisAlignment.center puts a first child's own center at
+        // `boxCenter - (gap + labelHeight) / 2` regardless of that child's own height, so the
+        // pill (26pt) lands exactly where a 23pt icon glyph would, without this having to
+        // know or hardcode that offset as a magic pixel value.
+        child: SafeArea(
+          child: SizedBox(
+            width: kMemoriesHandleWidth,
+            height: 64,
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  AnimatedBuilder(
+                    animation: _pulseController,
+                    builder: (context, _) {
+                      final opacity =
+                          reduceMotion ? kMemoriesPillReducedMotionOpacity : _pulse.opacity;
+                      // The visible pill stays exactly 4x26, centered in the wider tap
+                      // target - only the grabbable area grows, never the look.
+                      return Container(
+                        key: const Key('memoriesPill'),
+                        width: 4,
+                        height: 26,
+                        decoration: BoxDecoration(
+                          color: accent.withValues(alpha: opacity),
+                          borderRadius: BorderRadius.circular(9999),
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: kBottomNavIconLabelGap),
+                  // Invisible - reserves exactly the label's own single-line height so this
+                  // Column's shape matches _NavItem's and the pill above lands on the icons'
+                  // own line. Never painted, never announced, and never findable by real
+                  // copy: a plain "Memories" here would collide with find.text('Memories')
+                  // elsewhere (the surface's own header title). maxLines: 1 matters in a way
+                  // it doesn't for _NavItem's real "Feed"/"You" labels: those fit their Row's
+                  // much wider Expanded slot on one line easily, but this handle is only
+                  // kMemoriesHandleWidth (44) wide - without pinning this placeholder to one
+                  // line it wraps across several, inflating the reserved height and
+                  // overflowing the 64-tall box.
+                  const Opacity(
+                    opacity: 0,
+                    child: ExcludeSemantics(
+                      child: Text('MemoriesHandleLabelSpacer',
+                          maxLines: 1, style: kBottomNavLabelStyle),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -269,6 +599,12 @@ class _MemoriesSurfaceState extends State<MemoriesSurface> {
   // next drag or animation.
   late bool _open = widget.controller.value > 0;
 
+  // Owned here, not by the content widgets several layers down, because PopScope (right
+  // below) is what Android back reaches first and it needs to be able to ask "is there
+  // anywhere left to step back to internally" before deciding whether to close the whole
+  // surface - see MemoriesHubController's own doc comment.
+  final _hub = MemoriesHubController();
+
   @override
   void initState() {
     super.initState();
@@ -278,12 +614,17 @@ class _MemoriesSurfaceState extends State<MemoriesSurface> {
   @override
   void dispose() {
     widget.controller.removeListener(_onValueChanged);
+    _hub.dispose();
     super.dispose();
   }
 
   void _onValueChanged() {
     final open = widget.controller.value > 0;
     if (open != _open) setState(() => _open = open);
+    // Jump back to the hub root the instant the surface starts closing - not only once it
+    // finishes - so a swipe-to-close that's cancelled partway through never leaves the
+    // surface sitting at 0 with a stale sub-screen still showing underneath.
+    if (!open) _hub.reset();
   }
 
   @override
@@ -292,7 +633,12 @@ class _MemoriesSurfaceState extends State<MemoriesSurface> {
     return PopScope(
       canPop: !_open,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) widget.onClose();
+        if (didPop) return;
+        // Step back one level within the hub first (event detail -> list -> hub, or
+        // randomMemory -> hub) if there's anywhere left to go; only once the hub is
+        // already at its root does back close the whole surface.
+        if (_hub.back()) return;
+        widget.onClose();
       },
       child: AnimatedBuilder(
         animation: widget.controller,
@@ -305,17 +651,20 @@ class _MemoriesSurfaceState extends State<MemoriesSurface> {
             child: Transform.translate(offset: Offset(-width * (1 - value), 0), child: child),
           );
         },
-        child: _MemoriesSurfaceContent(controller: widget.controller, onClose: widget.onClose),
+        child: _MemoriesSurfaceContent(
+            controller: widget.controller, onClose: widget.onClose, hub: _hub),
       ),
     );
   }
 }
 
 class _MemoriesSurfaceContent extends StatefulWidget {
-  const _MemoriesSurfaceContent({required this.controller, required this.onClose});
+  const _MemoriesSurfaceContent(
+      {required this.controller, required this.onClose, required this.hub});
 
   final AnimationController controller;
   final VoidCallback onClose;
+  final MemoriesHubController hub;
 
   @override
   State<_MemoriesSurfaceContent> createState() => _MemoriesSurfaceContentState();
@@ -323,6 +672,25 @@ class _MemoriesSurfaceContent extends StatefulWidget {
 
 class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
   late final _drag = MemoriesDragDriver(widget.controller);
+
+  // Keyed per screen (and per selected event) so AnimatedSwitcher below treats each as a
+  // distinct child and actually animates the swap, instead of diffing into the same
+  // widget type and skipping the transition.
+  Widget _body() {
+    final selected = widget.hub.selectedEvent;
+    if (selected != null) {
+      return _EventDetailView(
+          key: ValueKey('event-${selected.postIds.join(',')}'), hub: widget.hub, event: selected);
+    }
+    switch (widget.hub.screen) {
+      case HubScreen.hub:
+        return _MemoriesHubHome(key: const ValueKey('hub'), hub: widget.hub);
+      case HubScreen.randomMemory:
+        return const _MemoriesBody(key: ValueKey('random'));
+      case HubScreen.eventsList:
+        return _EventsListView(key: const ValueKey('events'), hub: widget.hub);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -340,30 +708,77 @@ class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
         ),
         child: SafeArea(
           bottom: false,
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(18, 10, 10, 6),
-                child: Row(
-                  children: [
-                    const Expanded(
-                      child: Text('Memories',
-                          style: TextStyle(
-                              color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
+          child: ListenableBuilder(
+            listenable: widget.hub,
+            builder: (context, _) {
+              // A back chevron replaces nothing and sits alongside the close X - the two
+              // are independent affordances (step back one level vs. leave entirely), not
+              // a swap of one for the other. Absent at the hub root, where there's nowhere
+              // left to step back to.
+              final atRoot = widget.hub.screen == HubScreen.hub && widget.hub.selectedEvent == null;
+              return Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(6, 10, 10, 6),
+                    child: Row(
+                      children: [
+                        if (!atRoot)
+                          Semantics(
+                            button: true,
+                            label: 'Back',
+                            child: IconButton(
+                              onPressed: widget.hub.back,
+                              icon: const Icon(Icons.arrow_back, color: _fgSecondary),
+                            ),
+                          )
+                        else
+                          const SizedBox(width: 12),
+                        const Expanded(
+                          // Excluded from semantics: this is decorative chrome, and its
+                          // own implicit "Memories" text label would otherwise merge up
+                          // into the surface's own horizontal-drag GestureDetector (which
+                          // contributes a scrollLeft/scrollRight semantics node of its
+                          // own) - colliding with the handle's OWN explicit
+                          // Semantics(label: 'Memories') button and making
+                          // find.bySemanticsLabel('Memories') ambiguous.
+                          child: ExcludeSemantics(
+                            child: Text('Memories',
+                                style: TextStyle(
+                                    color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
+                          ),
+                        ),
+                        Semantics(
+                          button: true,
+                          label: 'Close',
+                          child: IconButton(
+                            onPressed: widget.onClose,
+                            icon: const Icon(Icons.close, color: _fgSecondary),
+                          ),
+                        ),
+                      ],
                     ),
-                    Semantics(
-                      button: true,
-                      label: 'Close',
-                      child: IconButton(
-                        onPressed: widget.onClose,
-                        icon: const Icon(Icons.close, color: _fgSecondary),
+                  ),
+                  Expanded(
+                    // A lightweight fade + slide so stepping between hub/list/detail feels
+                    // like the rest of the app's pushes, without dragging in a full
+                    // Navigator (the surface already has its own back-stack in
+                    // MemoriesHubController).
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      transitionBuilder: (child, animation) => FadeTransition(
+                        opacity: animation,
+                        child: SlideTransition(
+                          position: Tween<Offset>(begin: const Offset(0.04, 0), end: Offset.zero)
+                              .animate(animation),
+                          child: child,
+                        ),
                       ),
+                      child: _body(),
                     ),
-                  ],
-                ),
-              ),
-              const Expanded(child: _MemoriesBody()),
-            ],
+                  ),
+                ],
+              );
+            },
           ),
         ),
       ),
@@ -371,11 +786,110 @@ class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
   }
 }
 
-/// The surface's own content: the "Give me a memory" action and whatever it fetches.
-/// Deliberately the only thing in v1 - see the muted "more coming" line for the future
-/// entries (Map, Timeline, You Were There) this makes room for without building them.
+/// The hub root: "Give me a memory" and "You were there", each gated on its own server
+/// capability - a group whose server has one but not the other only ever offers that one.
+class _MemoriesHubHome extends ConsumerWidget {
+  const _MemoriesHubHome({super.key, required this.hub});
+
+  final MemoriesHubController hub;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final memoriesOn =
+        ref.watch(multiSessionProvider.select((s) => s.memoriesCapableShownGroups.isNotEmpty));
+    final eventsOn =
+        ref.watch(multiSessionProvider.select((s) => s.eventsCapableShownGroups.isNotEmpty));
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (memoriesOn)
+              _HubEntry(
+                icon: Icons.auto_awesome_outlined,
+                title: 'Give me a memory',
+                subtitle: "Look back at something from your group's history.",
+                onTap: hub.openRandomMemory,
+              ),
+            if (memoriesOn && eventsOn) const SizedBox(height: 12),
+            if (eventsOn)
+              _HubEntry(
+                icon: Icons.map_outlined,
+                title: 'You were there',
+                subtitle: 'Trips and get-togethers your group shared.',
+                onTap: hub.openEventsList,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One hub entry: an icon, a title, a one-line subtitle, and a chevron - the app's
+/// existing card idiom (14 corner radius, surface fill, a border) rather than a new shape
+/// invented for this screen.
+class _HubEntry extends StatelessWidget {
+  const _HubEntry({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: title,
+      child: GestureDetector(
+        onTap: onTap,
+        child: ExcludeSemantics(
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: _bgSurface,
+              border: Border.all(color: _border),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, size: 26, color: context.accent),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title,
+                          style: const TextStyle(
+                              color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 15)),
+                      const SizedBox(height: 3),
+                      Text(subtitle, style: const TextStyle(color: _fgMuted, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right, color: _fgMuted),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The "Give me a memory" screen: the existing single-random-post action and whatever it
+/// fetches. Pushed onto the hub rather than shown at its root - see
+/// [MemoriesHubController].
 class _MemoriesBody extends ConsumerStatefulWidget {
-  const _MemoriesBody();
+  const _MemoriesBody({super.key});
 
   @override
   ConsumerState<_MemoriesBody> createState() => _MemoriesBodyState();
@@ -457,9 +971,6 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
             const SizedBox(height: 20),
             PrimaryButton(
                 label: 'Give me a memory', enabled: !_loading, busy: _loading, onTap: _fetch),
-            const SizedBox(height: 14),
-            const Text('More ways to look back - coming soon.',
-                style: TextStyle(color: _fgMuted, fontSize: 12)),
           ],
         ),
       ),
@@ -615,6 +1126,454 @@ class _MemoryCard extends StatelessWidget {
                 ],
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// "Aug 10" for a single day, "Aug 10 - Aug 16" (or "Aug 10 - Sep 2, 2027" across a year
+/// boundary) for a range - the compact date line an event card and its detail screen both
+/// show under the place name.
+String eventDateRangeLabel(Event event, {DateTime? now}) {
+  final start = event.startDate.toLocal();
+  final end = event.endDate.toLocal();
+  if (start.year == end.year && start.month == end.month && start.day == end.day) {
+    return DateFormat.yMMMd().format(start);
+  }
+  if (start.year == end.year) {
+    return '${DateFormat.MMMd().format(start)} - ${DateFormat.yMMMd().format(end)}';
+  }
+  return '${DateFormat.yMMMd().format(start)} - ${DateFormat.yMMMd().format(end)}';
+}
+
+/// The events list: every detected trip/gathering for one (uniformly-picked, same
+/// reasoning as _MemoriesBodyState's own memory pick) events-capable group in view,
+/// newest first exactly as the server already ranks them.
+class _EventsListView extends ConsumerStatefulWidget {
+  const _EventsListView({super.key, required this.hub});
+
+  final MemoriesHubController hub;
+
+  @override
+  ConsumerState<_EventsListView> createState() => _EventsListViewState();
+}
+
+class _EventsListViewState extends ConsumerState<_EventsListView> {
+  List<Event>? _events;
+  bool _loading = true;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  Future<void> _fetch() async {
+    final capable = ref.read(multiSessionProvider).eventsCapableShownGroups;
+    if (capable.isEmpty) {
+      setState(() {
+        _events = const [];
+        _loading = false;
+        _failed = false;
+      });
+      return;
+    }
+    // Picked once per visit, the same way _MemoriesBodyState picks a group for "Give me a
+    // memory" - events are inherently one group's own history, so there is no sensible way
+    // to merge several groups' events into one list the way the feed merges posts.
+    final group = capable[Random().nextInt(capable.length)];
+    setState(() {
+      _loading = true;
+      _failed = false;
+    });
+    try {
+      final events = await ref.read(apiForGroupProvider(group.id)).events();
+      if (!mounted) return;
+      setState(() {
+        _events = [for (final e in events) e.withGroup(group.id)];
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return Center(child: CircularProgressIndicator(color: context.accent));
+    if (_failed) return _errorState(context);
+    final events = _events ?? const [];
+    if (events.isEmpty) return _emptyState(context);
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(18, 4, 18, 24),
+      itemCount: events.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (_, i) => _EventCard(
+        event: events[i],
+        onTap: () => widget.hub.openEventDetail(events[i]),
+      ),
+    );
+  }
+
+  Widget _emptyState(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.map_outlined, size: 40, color: _fgMuted),
+            SizedBox(height: 16),
+            Text('No trips or gatherings yet.',
+                style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            SizedBox(height: 6),
+            Text(
+              "Once your group checks in together from the same place, they'll show up here.",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: _fgMuted, fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _errorState(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cloud_off_outlined, size: 40, color: _fgMuted),
+            const SizedBox(height: 16),
+            const Text("Couldn't load your group's events.",
+                style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 20),
+            PrimaryButton(label: 'Try again', enabled: !_loading, busy: _loading, onTap: _fetch),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One event: a cover photo (or a plain trip/gathering icon when nothing in it has a
+/// photo), the place, the date range, who was there, and a photo count - everything the
+/// founder's brief asked the card to carry. Tapping opens the event's own photos.
+class _EventCard extends StatelessWidget {
+  const _EventCard({required this.event, required this.onTap});
+
+  final Event event;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: '${event.place}, ${event.isTrip ? 'trip' : 'gathering'}',
+      child: GestureDetector(
+        onTap: onTap,
+        // See _MemoryCard's identical guard: without this every descendant Text merges its
+        // own semantics into this node, turning one announced action into a wall of text.
+        child: ExcludeSemantics(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: _bgSurface,
+                border: Border.all(color: _border),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AspectRatio(
+                    aspectRatio: 16 / 9,
+                    child: event.coverMediaId != null
+                        ? AuthImage(mediaId: event.coverMediaId!, groupId: event.groupId)
+                        : ColoredBox(
+                            color: _bgSurfaceHover,
+                            child: Icon(
+                              event.isTrip ? Icons.flight_takeoff_outlined : Icons.groups_outlined,
+                              size: 32,
+                              color: _fgMuted,
+                            ),
+                          ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        PillBadge(
+                          icon:
+                              event.isTrip ? Icons.flight_takeoff_outlined : Icons.groups_outlined,
+                          label: event.isTrip ? 'TRIP' : 'GATHERING',
+                          accent: context.accentPalette,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(event.place,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 15)),
+                        const SizedBox(height: 3),
+                        Text(eventDateRangeLabel(event),
+                            style: const TextStyle(color: _fgMuted, fontSize: 12)),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            _AvatarStack(participants: event.participants, groupId: event.groupId),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(event.participantsLabel,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: _fgSecondary, fontSize: 12)),
+                            ),
+                            const Icon(Icons.photo_outlined, size: 14, color: _fgMuted),
+                            const SizedBox(width: 3),
+                            Text('${event.photoCount}',
+                                style: const TextStyle(color: _fgMuted, fontSize: 12)),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A small overlapping row of participant avatars, capped at [_max] - "4 friends" reads
+/// the exact count via [Event.participantsLabel] right next to it, so the stack itself
+/// only needs to suggest "a few people", not enumerate everyone.
+class _AvatarStack extends StatelessWidget {
+  const _AvatarStack({required this.participants, this.groupId});
+
+  final List<EventParticipant> participants;
+  final String? groupId;
+
+  static const _max = 4;
+  static const _size = 24.0;
+  static const _overlap = 14.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = participants.take(_max).toList();
+    if (shown.isEmpty) return const SizedBox.shrink();
+    return SizedBox(
+      width: _size + (shown.length - 1) * _overlap,
+      height: _size,
+      child: Stack(
+        children: [
+          for (var i = 0; i < shown.length; i++)
+            Positioned(
+              left: i * _overlap,
+              child: Container(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: _bgSurface, width: 2),
+                ),
+                child: UserAvatar(
+                  name: shown[i].name,
+                  size: _size,
+                  mediaId: shown[i].photoId,
+                  colorSeed: shown[i].id,
+                  groupId: groupId,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One event's own photos: fetches the full post for each of [Event.postIds] (the events
+/// endpoint only ever returns ids and a summary - see the server's db.Event) and flattens
+/// every post's images into one grid. A photo's tile remembers which post it came from, so
+/// tapping it opens the same full-screen viewer and "go to post" route a normal feed
+/// carousel does - scoped to that one post's own photos, not the whole event's, exactly
+/// like a feed card's own carousel already behaves (see post_card.dart).
+class _EventDetailView extends ConsumerStatefulWidget {
+  const _EventDetailView({super.key, required this.hub, required this.event});
+
+  final MemoriesHubController hub;
+  final Event event;
+
+  @override
+  ConsumerState<_EventDetailView> createState() => _EventDetailViewState();
+}
+
+class _EventDetailViewState extends ConsumerState<_EventDetailView> {
+  List<Post>? _posts;
+  bool _loading = true;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<Post?> _tryGetPost(ApiClient api, int id) async {
+    try {
+      return await api.getPost(id);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _load() async {
+    final groupId = widget.event.groupId;
+    if (groupId == null) {
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+      return;
+    }
+    final api = ref.read(apiForGroupProvider(groupId));
+    final posts = await Future.wait([
+      for (final id in widget.event.postIds) _tryGetPost(api, id),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _posts = [
+        for (final p in posts)
+          if (p != null) p.withGroup(groupId)
+      ];
+      _loading = false;
+    });
+  }
+
+  /// Every image on every fetched post, in event order, paired with the post it belongs
+  /// to - the flat list the grid renders and each tile's tap target reads its post/media
+  /// from.
+  List<({Post post, PostMedia media})> get _photos => [
+        for (final p in _posts ?? const <Post>[])
+          for (final m in p.imageMedia) (post: p, media: m),
+      ];
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return Center(child: CircularProgressIndicator(color: context.accent));
+    if (_failed) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off_outlined, size: 40, color: _fgMuted),
+              const SizedBox(height: 16),
+              const Text("Couldn't load this event.",
+                  style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 20),
+              PrimaryButton(label: 'Try again', enabled: true, onTap: _load),
+            ],
+          ),
+        ),
+      );
+    }
+    final photos = _photos;
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(child: _header(context)),
+        if (photos.isEmpty)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 40),
+              child: Center(
+                child:
+                    Text('No photos in this one.', style: TextStyle(color: _fgMuted, fontSize: 13)),
+              ),
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+            sliver: SliverGrid(
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
+              ),
+              delegate: SliverChildBuilderDelegate(
+                (context, i) => _PhotoTile(post: photos[i].post, media: photos[i].media),
+                childCount: photos.length,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _header(BuildContext context) {
+    final event = widget.event;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 4, 18, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(event.place,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
+          const SizedBox(height: 4),
+          Text(eventDateRangeLabel(event), style: const TextStyle(color: _fgMuted, fontSize: 13)),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              _AvatarStack(participants: event.participants, groupId: event.groupId),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(event.participantsLabel,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: _fgSecondary, fontSize: 13)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One tile in an event's photo grid - see _EventDetailView's own doc comment for why
+/// tapping it opens the viewer scoped to just this photo's own post.
+class _PhotoTile extends StatelessWidget {
+  const _PhotoTile({required this.post, required this.media});
+
+  final Post post;
+  final PostMedia media;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: 'Open photo',
+      child: GestureDetector(
+        onTap: () =>
+            PhotoViewerScreen.open(context, media: [media], groupId: post.groupId, postId: post.id),
+        child: ExcludeSemantics(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: AuthImage(mediaId: media.id, groupId: post.groupId),
           ),
         ),
       ),

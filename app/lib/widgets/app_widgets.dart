@@ -140,3 +140,39 @@ class PrimaryButton extends StatelessWidget {
     );
   }
 }
+
+/// The app's one small pill-badge idiom: an icon, an all-caps label, on an accent-tinted
+/// background. Originally post_card.dart's own recap badge, pulled out here so every badge
+/// in the app - RECAP, TRIP, GATHERING - shares the exact same metrics rather than each
+/// screen re-deriving its own padding/font size/letter spacing by eye.
+class PillBadge extends StatelessWidget {
+  const PillBadge({super.key, required this.icon, required this.label, required this.accent});
+
+  final IconData icon;
+  final String label;
+  final AccentPalette accent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+        decoration: BoxDecoration(color: accent.light, borderRadius: BorderRadius.circular(9999)),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 12, color: accent.base),
+            const SizedBox(width: 4),
+            Text(label,
+                style: TextStyle(
+                    color: accent.base,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 11,
+                    letterSpacing: 0.6)),
+          ],
+        ),
+      ),
+    );
+  }
+}

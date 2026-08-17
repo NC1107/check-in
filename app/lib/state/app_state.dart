@@ -29,6 +29,7 @@ class ServerAccount {
     this.commentMedia = false,
     this.recapCapable = false,
     this.memoriesCapable = false,
+    this.eventsCapable = false,
   });
 
   /// Stable id derived from the server's host (one subdomain per group). Used to key
@@ -78,6 +79,11 @@ class ServerAccount {
   /// server has no such route and would 404 the request.
   final bool memoriesCapable;
 
+  /// Whether this group's server has GET /api/memories/events (see
+  /// [ServerInfo.eventsCapable]). Gates showing the "You were there" hub entry - an older
+  /// server has no such route and would 404 the request.
+  final bool eventsCapable;
+
   bool get isSignedIn => token != null;
 
   /// What the UI calls this group: the local nickname when set, else the server's name.
@@ -104,6 +110,7 @@ class ServerAccount {
     bool? commentMedia,
     bool? recapCapable,
     bool? memoriesCapable,
+    bool? eventsCapable,
   }) {
     return ServerAccount(
       id: id,
@@ -118,6 +125,7 @@ class ServerAccount {
       commentMedia: commentMedia ?? this.commentMedia,
       recapCapable: recapCapable ?? this.recapCapable,
       memoriesCapable: memoriesCapable ?? this.memoriesCapable,
+      eventsCapable: eventsCapable ?? this.eventsCapable,
     );
   }
 }
@@ -206,6 +214,14 @@ class MultiSession {
           if (g.memoriesCapable) g
       ];
 
+  /// The shown groups whose server advertises the Events capability - what the "You were
+  /// there" hub entry draws from. Independent of [memoriesCapableShownGroups]: a server can
+  /// have one capability without the other.
+  List<ServerAccount> get eventsCapableShownGroups => [
+        for (final g in shownGroups)
+          if (g.eventsCapable) g
+      ];
+
   /// Default cross-post targets for a new check-in: the groups currently in view
   /// ("post where you're looking"), or every signed-in group when the feed selection is
   /// empty. The compose sheet shows the choice prominently, so the default is one tap to
@@ -281,6 +297,7 @@ class MultiSessionController extends Notifier<MultiSession> {
             commentMedia: false,
             recapCapable: false,
             memoriesCapable: false,
+            eventsCapable: false,
           )
         ];
         await prefs.setString(_kGroups, _encodeGroups(entries));
@@ -303,6 +320,7 @@ class MultiSessionController extends Notifier<MultiSession> {
           commentMedia: e.commentMedia,
           recapCapable: e.recapCapable,
           memoriesCapable: e.memoriesCapable,
+          eventsCapable: e.eventsCapable,
           token: token));
     }
     final ids = {for (final g in accounts) g.id};
@@ -354,12 +372,14 @@ class MultiSessionController extends Notifier<MultiSession> {
       final gifChanged = info.gifSearch != g.gifSearch || info.commentMedia != g.commentMedia;
       final recapChanged = info.recapCapable != g.recapCapable;
       final memoriesChanged = info.memoriesCapable != g.memoriesCapable;
+      final eventsChanged = info.eventsCapable != g.eventsCapable;
       if (nameChanged ||
           colorChanged ||
           mediaChanged ||
           gifChanged ||
           recapChanged ||
-          memoriesChanged) {
+          memoriesChanged ||
+          eventsChanged) {
         _update(
             g.id,
             (a) => a.copyWith(
@@ -371,6 +391,7 @@ class MultiSessionController extends Notifier<MultiSession> {
                   commentMedia: info.commentMedia,
                   recapCapable: info.recapCapable,
                   memoriesCapable: info.memoriesCapable,
+                  eventsCapable: info.eventsCapable,
                 ));
         await _persistGroups();
       }
@@ -407,6 +428,7 @@ class MultiSessionController extends Notifier<MultiSession> {
             commentMedia: g.commentMedia,
             recapCapable: g.recapCapable,
             memoriesCapable: g.memoriesCapable,
+            eventsCapable: g.eventsCapable,
           )
       ]),
     );
@@ -542,7 +564,8 @@ class MultiSessionController extends Notifier<MultiSession> {
         bool gifSearch,
         bool commentMedia,
         bool recapCapable,
-        bool memoriesCapable
+        bool memoriesCapable,
+        bool eventsCapable
       })> _decodeGroups(String? raw) {
     if (raw == null || raw.isEmpty) return const [];
     try {
@@ -566,6 +589,7 @@ class MultiSessionController extends Notifier<MultiSession> {
             // Same story: absent means unknown, not capable - the next hydrate refreshes it.
             recapCapable: e['recapCapable'] as bool? ?? false,
             memoriesCapable: e['memoriesCapable'] as bool? ?? false,
+            eventsCapable: e['eventsCapable'] as bool? ?? false,
           )
       ];
     } catch (_) {
@@ -585,7 +609,8 @@ class MultiSessionController extends Notifier<MultiSession> {
                 bool gifSearch,
                 bool commentMedia,
                 bool recapCapable,
-                bool memoriesCapable
+                bool memoriesCapable,
+                bool eventsCapable
               })>
           entries) {
     return jsonEncode([
@@ -601,6 +626,7 @@ class MultiSessionController extends Notifier<MultiSession> {
           'commentMedia': e.commentMedia,
           'recapCapable': e.recapCapable,
           'memoriesCapable': e.memoriesCapable,
+          'eventsCapable': e.eventsCapable,
         }
     ]);
   }
