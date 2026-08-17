@@ -77,14 +77,15 @@ func (r *rateLimiter) allow(key string) bool {
 // server for each, so a per-user-per-server budget is what the deployment can express, and
 // it is also what makes sense: one group's activity should not throttle another's.
 type contentLimits struct {
-	posts    *rateLimiter
-	comments *rateLimiter
-	likes    *rateLimiter
-	media    *rateLimiter
-	gifs     *rateLimiter
-	memories *rateLimiter
-	events   *rateLimiter
-	timeline *rateLimiter
+	posts     *rateLimiter
+	comments  *rateLimiter
+	likes     *rateLimiter
+	media     *rateLimiter
+	gifs      *rateLimiter
+	memories  *rateLimiter
+	events    *rateLimiter
+	timeline  *rateLimiter
+	forgotten *rateLimiter
 }
 
 // mediaBurst is the media allowance, and 20 is a requirement rather than a preference: a
@@ -118,6 +119,10 @@ func newContentLimits() contentLimits {
 		// list itself is the more expensive of the two reads (see db.Timeline's own cost
 		// comment), so this stays as modest as events' own burst rather than media's.
 		timeline: newRateLimiter(20, 10),
+		// Same shape as memories' own limiter: "Forgotten photos" is a single tap with no
+		// debounce ahead of it either, so the burst is sized the same way - generous
+		// enough for someone genuinely mashing "Another" for a minute.
+		forgotten: newRateLimiter(30, 15),
 	}
 }
 

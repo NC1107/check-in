@@ -279,7 +279,7 @@ class MemoriesDragDriver {
 }
 
 /// Which top-level screen the hub is showing - see [MemoriesHubController].
-enum HubScreen { hub, randomMemory, eventsList, timeline }
+enum HubScreen { hub, randomMemory, eventsList, timeline, forgotten }
 
 /// The Memories surface's own tiny internal navigation stack: hub -> ("Give me a memory"
 /// or "You were there") -> (an events list entry may drill into one event's own detail).
@@ -331,6 +331,11 @@ class MemoriesHubController extends ChangeNotifier {
 
   void openRandomMemory() {
     _screen = HubScreen.randomMemory;
+    notifyListeners();
+  }
+
+  void openForgottenPhotos() {
+    _screen = HubScreen.forgotten;
     notifyListeners();
   }
 
@@ -756,15 +761,16 @@ class _MemoriesSurfaceContent extends ConsumerStatefulWidget {
 class _MemoriesSurfaceContentState extends ConsumerState<_MemoriesSurfaceContent> {
   late final _drag = MemoriesDragDriver(widget.controller);
 
-  // Keyed per screen (and per selected event, month, or - for the three group-scoped
+  // Keyed per screen (and per selected event, month, or - for the group-scoped list
   // screens - selected group) so AnimatedSwitcher below treats each as a distinct child
   // and actually animates the swap, instead of diffing into the same widget type and
   // skipping the transition. Embedding the group id in the events/timeline keys is also
   // what makes switching the header's group selector refetch those two: a new key remounts
   // the view outright, which is a plain, correct refetch since both start from a loading
   // state on every visit anyway (see _EventsListViewState/_TimelineListViewState). The
-  // random-memory screen deliberately does NOT remount this way - see _MemoriesBody's own
-  // doc comment for why it instead reacts to a group change via didUpdateWidget.
+  // random-memory and forgotten-photo screens deliberately do NOT remount this way - see
+  // _SinglePostView's own doc comment for why they instead react to a group change via
+  // didUpdateWidget.
   Widget _body(String? selectedGroupId) {
     final selectedEvent = widget.hub.selectedEvent;
     if (selectedEvent != null) {
@@ -784,8 +790,46 @@ class _MemoriesSurfaceContentState extends ConsumerState<_MemoriesSurfaceContent
       case HubScreen.hub:
         return _MemoriesHubHome(key: const ValueKey('hub'), hub: widget.hub);
       case HubScreen.randomMemory:
-        return _MemoriesBody(
-            key: const ValueKey('random'), hub: widget.hub, groupId: selectedGroupId);
+        return _SinglePostView(
+          key: const ValueKey('random'),
+          hub: widget.hub,
+          groupId: selectedGroupId,
+          fetchPost: (api) => api.randomMemory(),
+          capable: (a) => a.memoriesCapable,
+          icon: Icons.auto_awesome_outlined,
+          idleSubtitle: "Look back at something from your group's history.",
+          actionLabel: 'Random check-in',
+          unsupportedTitle: "This group doesn't support Random check-in.",
+          unsupportedBody:
+              'Its server needs an update before this can pull anything up from its history.',
+          emptyTitle: 'Nothing to look back on yet.',
+          emptyBody:
+              'Once your group has a couple of weeks of check-ins, memories will start showing up here.',
+          errorTitle: "Couldn't load a memory.",
+          openLabel: 'Open this memory',
+          onOpen: (context, post) => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => PostDetailScreen(postId: post.id, groupId: post.groupId))),
+        );
+      case HubScreen.forgotten:
+        return _SinglePostView(
+          key: const ValueKey('forgotten'),
+          hub: widget.hub,
+          groupId: selectedGroupId,
+          fetchPost: (api) => api.forgottenPhoto(),
+          capable: (a) => a.forgottenCapable,
+          icon: Icons.hide_image_outlined,
+          idleSubtitle: 'Photos nobody has liked or commented on in months.',
+          actionLabel: 'Forgotten photos',
+          unsupportedTitle: "This group doesn't support Forgotten photos.",
+          unsupportedBody: 'Its server needs an update before old photos can show up here.',
+          emptyTitle: 'Nothing forgotten yet.',
+          emptyBody: "Once your group has a few months of photos nobody's engaged with, "
+              "they'll start showing up here.",
+          errorTitle: "Couldn't load a forgotten photo.",
+          openLabel: 'Open this photo',
+          onOpen: (context, post) => PhotoViewerScreen.open(context,
+              media: post.media, groupId: post.groupId, postId: post.id),
+        );
       case HubScreen.eventsList:
         return _EventsListView(
             key: ValueKey('events-$selectedGroupId'), hub: widget.hub, groupId: selectedGroupId);
@@ -1000,11 +1044,11 @@ class _MemoriesGroupSelector extends StatelessWidget {
   }
 }
 
-/// The hub root: "Random check-in", "Group trips" and "Month by month", each gated on the
-/// SELECTED group's own server capability (see [effectiveMemoriesGroupId]) - a group whose
-/// server has some subset of the three only ever offers those, and switching the header's
-/// group selector changes which subset shows here exactly as it changes what the other two
-/// views fetch.
+/// The hub root: "Random check-in", "Group trips", "Month by month" and "Forgotten photos",
+/// each gated on the SELECTED group's own server capability (see
+/// [effectiveMemoriesGroupId]) - a group whose server has some subset of the four only ever
+/// offers those, and switching the header's group selector changes which subset shows here
+/// exactly as it changes what the other views fetch.
 class _MemoriesHubHome extends ConsumerWidget {
   const _MemoriesHubHome({super.key, required this.hub});
 
@@ -1017,6 +1061,7 @@ class _MemoriesHubHome extends ConsumerWidget {
     final memoriesOn = selected?.memoriesCapable ?? false;
     final eventsOn = selected?.eventsCapable ?? false;
     final timelineOn = selected?.timelineCapable ?? false;
+    final forgottenOn = selected?.forgottenCapable ?? false;
     final entries = [
       if (memoriesOn)
         _HubEntry(
@@ -1038,6 +1083,13 @@ class _MemoriesHubHome extends ConsumerWidget {
           title: 'Month by month',
           subtitle: "The group's life, one month at a time.",
           onTap: hub.openTimeline,
+        ),
+      if (forgottenOn)
+        _HubEntry(
+          icon: Icons.hide_image_outlined,
+          title: 'Forgotten photos',
+          subtitle: 'Photos nobody has liked or commented on in months.',
+          onTap: hub.openForgottenPhotos,
         ),
     ];
     return Center(
@@ -1115,21 +1167,61 @@ class _HubEntry extends StatelessWidget {
   }
 }
 
-/// The "Random check-in" screen: the existing single-random-post action and whatever it
-/// fetches, scoped to [groupId] (see [effectiveMemoriesGroupId]). Pushed onto the hub
-/// rather than shown at its root - see [MemoriesHubController].
-class _MemoriesBody extends ConsumerStatefulWidget {
-  const _MemoriesBody({super.key, required this.hub, required this.groupId});
+/// Shared single-post-at-a-time hub view: fetch one post, show a card, offer "Another" to
+/// fetch a different one. "Random check-in" and "Forgotten photos" are exactly this shape -
+/// differing only in which endpoint they call, which capability flag gates them, their copy,
+/// and what tapping the card opens (see _body's construction of each) - so the fetch/refetch
+/// state machine, including the stale-response and group-switch handling below, is written
+/// once here rather than duplicated per hub entry.
+class _SinglePostView extends ConsumerStatefulWidget {
+  const _SinglePostView({
+    super.key,
+    required this.hub,
+    required this.groupId,
+    required this.fetchPost,
+    required this.capable,
+    required this.icon,
+    required this.idleSubtitle,
+    required this.actionLabel,
+    required this.unsupportedTitle,
+    required this.unsupportedBody,
+    required this.emptyTitle,
+    required this.emptyBody,
+    required this.errorTitle,
+    required this.openLabel,
+    required this.onOpen,
+  });
 
   final MemoriesHubController hub;
   final String? groupId;
 
+  /// Calls this view's own endpoint against the group's ApiClient.
+  final Future<Post?> Function(ApiClient api) fetchPost;
+
+  /// Whether [account] advertises the capability this view needs - the same per-group flag
+  /// [_MemoriesHubHome] already gated this entry's visibility on.
+  final bool Function(ServerAccount account) capable;
+
+  final IconData icon;
+  final String idleSubtitle;
+  final String actionLabel;
+  final String unsupportedTitle;
+  final String unsupportedBody;
+  final String emptyTitle;
+  final String emptyBody;
+  final String errorTitle;
+  final String openLabel;
+
+  /// What tapping the loaded card does - opens PostDetailScreen for a random memory, the
+  /// full-screen photo viewer (with its "go to post" route) for a forgotten photo.
+  final void Function(BuildContext context, Post post) onOpen;
+
   @override
-  ConsumerState<_MemoriesBody> createState() => _MemoriesBodyState();
+  ConsumerState<_SinglePostView> createState() => _SinglePostViewState();
 }
 
-class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
-  Post? _memory;
+class _SinglePostViewState extends ConsumerState<_SinglePostView> {
+  Post? _post;
   bool _loading = false;
   bool _fetched = false;
   bool _failed = false;
@@ -1144,7 +1236,7 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
   int _fetchSeq = 0;
 
   @override
-  void didUpdateWidget(_MemoriesBody old) {
+  void didUpdateWidget(_SinglePostView old) {
     super.didUpdateWidget(old);
     if (old.groupId == widget.groupId) return;
     // Nothing has ever been fetched for this screen, so there is nothing on screen that
@@ -1161,7 +1253,7 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
     // painting over whatever this triggers next. See memories_test.dart's "switch during
     // the first fetch" regression test.
     setState(() {
-      _memory = null;
+      _post = null;
       _loading = false;
       _fetched = false;
       _failed = false;
@@ -1184,16 +1276,16 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
         _fetched = true;
         _failed = false;
         _unsupported = false;
-        _memory = null;
+        _post = null;
       });
       return;
     }
-    if (!account.memoriesCapable) {
+    if (!widget.capable(account)) {
       setState(() {
         _fetched = true;
         _failed = false;
         _unsupported = true;
-        _memory = null;
+        _post = null;
       });
       return;
     }
@@ -1203,10 +1295,10 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
       _unsupported = false;
     });
     try {
-      final post = await ref.read(apiForGroupProvider(account.id)).randomMemory();
+      final post = await widget.fetchPost(ref.read(apiForGroupProvider(account.id)));
       if (!mounted || seq != _fetchSeq) return;
       setState(() {
-        _memory = post?.withGroup(account.id);
+        _post = post?.withGroup(account.id);
         _loading = false;
         _fetched = true;
       });
@@ -1220,19 +1312,12 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
     }
   }
 
-  void _openMemory() {
-    final m = _memory;
-    if (m == null) return;
-    Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => PostDetailScreen(postId: m.id, groupId: m.groupId)));
-  }
-
   @override
   Widget build(BuildContext context) {
     if (!_fetched) return _idle(context);
     if (_failed) return _errorState(context);
     if (_unsupported) return _unsupportedState(context);
-    final m = _memory;
+    final m = _post;
     return m == null ? _emptyState(context) : _loadedState(context, m);
   }
 
@@ -1243,13 +1328,14 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.auto_awesome_outlined, size: 40, color: context.accent),
+            Icon(widget.icon, size: 40, color: context.accent),
             const SizedBox(height: 16),
-            const Text('Look back at something from your group\'s history.',
-                textAlign: TextAlign.center, style: TextStyle(color: _fgSecondary, fontSize: 14)),
+            Text(widget.idleSubtitle,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: _fgSecondary, fontSize: 14)),
             const SizedBox(height: 20),
             PrimaryButton(
-                label: 'Random check-in', enabled: !_loading, busy: _loading, onTap: _fetch),
+                label: widget.actionLabel, enabled: !_loading, busy: _loading, onTap: _fetch),
           ],
         ),
       ),
@@ -1257,21 +1343,22 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
   }
 
   Widget _unsupportedState(BuildContext context) {
-    return const Center(
+    return Center(
       child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: 28),
+        padding: const EdgeInsets.symmetric(horizontal: 28),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.auto_awesome_outlined, size: 40, color: _fgMuted),
-            SizedBox(height: 16),
-            Text("This group doesn't support Random check-in.",
-                style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
-            SizedBox(height: 6),
+            Icon(widget.icon, size: 40, color: _fgMuted),
+            const SizedBox(height: 16),
+            Text(widget.unsupportedTitle,
+                style: const TextStyle(
+                    color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 6),
             Text(
-              'Its server needs an update before this can pull anything up from its history.',
+              widget.unsupportedBody,
               textAlign: TextAlign.center,
-              style: TextStyle(color: _fgMuted, fontSize: 13),
+              style: const TextStyle(color: _fgMuted, fontSize: 13),
             ),
           ],
         ),
@@ -1286,15 +1373,21 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.history_outlined, size: 40, color: _fgMuted),
+            // The feature's own icon, matching this file's own convention for an empty
+            // state (see _EventsListView._emptyState/Icons.map_outlined and
+            // _TimelineListView._emptyState/Icons.calendar_month_outlined, each mirroring
+            // their hub entry) - not a separate glyph the idle and unsupported states
+            // above already got right via widget.icon.
+            Icon(widget.icon, size: 40, color: _fgMuted),
             const SizedBox(height: 16),
-            const Text('Nothing to look back on yet.',
-                style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            Text(widget.emptyTitle,
+                style: const TextStyle(
+                    color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
             const SizedBox(height: 6),
-            const Text(
-              'Once your group has a couple of weeks of check-ins, memories will start showing up here.',
+            Text(
+              widget.emptyBody,
               textAlign: TextAlign.center,
-              style: TextStyle(color: _fgMuted, fontSize: 13),
+              style: const TextStyle(color: _fgMuted, fontSize: 13),
             ),
             const SizedBox(height: 20),
             PrimaryButton(label: 'Check again', enabled: !_loading, busy: _loading, onTap: _fetch),
@@ -1313,8 +1406,9 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
           children: [
             const Icon(Icons.cloud_off_outlined, size: 40, color: _fgMuted),
             const SizedBox(height: 16),
-            const Text("Couldn't load a memory.",
-                style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            Text(widget.errorTitle,
+                style: const TextStyle(
+                    color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
             const SizedBox(height: 20),
             PrimaryButton(label: 'Try again', enabled: !_loading, busy: _loading, onTap: _fetch),
           ],
@@ -1328,7 +1422,7 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
       padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
       child: Column(
         children: [
-          _MemoryCard(post: m, onTap: _openMemory),
+          _MemoryCard(post: m, openLabel: widget.openLabel, onTap: () => widget.onOpen(context, m)),
           const SizedBox(height: 16),
           PrimaryButton(label: 'Another', enabled: !_loading, busy: _loading, onTap: _fetch),
         ],
@@ -1337,15 +1431,21 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
   }
 }
 
-/// One fetched memory: the post's photo (falling back to its clip poster, then to its
-/// caption when it carries no media), author, and how long ago it was - both an absolute
-/// date and the founder's-brief relative phrasing (see [memoryAgeLabel]). Tapping opens the
-/// original post.
+/// One fetched post (a random memory or a forgotten photo): its photo (falling back to its
+/// clip poster, then to its caption when it carries no media), author, and how long ago it
+/// was - both an absolute date and the founder's-brief relative phrasing (see
+/// [memoryAgeLabel]). Tapping opens whatever [onTap] wires up (the original post's detail
+/// screen for a random memory, the full-screen photo viewer for a forgotten photo).
 class _MemoryCard extends StatelessWidget {
-  const _MemoryCard({required this.post, required this.onTap});
+  const _MemoryCard({required this.post, required this.onTap, this.openLabel = 'Open this memory'});
 
   final Post post;
   final VoidCallback onTap;
+
+  /// The tap target's accessibility label - what a screen reader announces, and what a
+  /// widget test taps by (`find.bySemanticsLabel`). Differs by caller because the two
+  /// actions genuinely differ (open the post vs. open the photo viewer), not just by copy.
+  final String openLabel;
 
   @override
   Widget build(BuildContext context) {
@@ -1356,14 +1456,14 @@ class _MemoryCard extends StatelessWidget {
             : null);
     return Semantics(
       button: true,
-      label: 'Open this memory',
+      label: openLabel,
       child: GestureDetector(
         onTap: onTap,
         // Without this, every descendant Text (the caption, the author name, the date) would
         // merge its own semantics up into this node, turning one announced action into a
-        // wall of concatenated text. A screen reader should hear "Open this memory", not the
-        // whole card read back to it - the card's content is already visible, tapping it is
-        // the only thing this node needs to say.
+        // wall of concatenated text. A screen reader should hear openLabel, not the whole
+        // card read back to it - the card's content is already visible, tapping it is the
+        // only thing this node needs to say.
         child: ExcludeSemantics(
           child: ClipRRect(
             borderRadius: BorderRadius.circular(14),

@@ -294,6 +294,17 @@ class ApiClient {
     return post == null ? null : Post.fromJson(post as Map<String, dynamic>);
   }
 
+  /// forgottenPhoto fetches one old, lightly-engaged photo from this group's history for the
+  /// Memories hub's "Forgotten photos" entry, or null when nothing is eligible yet (a clean
+  /// empty result, not a failure - see the server's handleForgottenPhoto). Only ever called
+  /// against a group whose server-info advertised [ServerInfo.forgottenCapable]; an older
+  /// server has no such route.
+  Future<Post?> forgottenPhoto() async {
+    final r = await _dio.get('/api/memories/forgotten');
+    final post = (r.data as Map<String, dynamic>)['post'];
+    return post == null ? null : Post.fromJson(post as Map<String, dynamic>);
+  }
+
   /// events fetches the "Group trips" group events for this group's history, newest
   /// first - a clean empty list, not a failure, for a group with none detected yet (see
   /// the server's handleEvents). Only ever called against a group whose server-info

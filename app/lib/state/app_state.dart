@@ -31,6 +31,7 @@ class ServerAccount {
     this.memoriesCapable = false,
     this.eventsCapable = false,
     this.timelineCapable = false,
+    this.forgottenCapable = false,
   });
 
   /// Stable id derived from the server's host (one subdomain per group). Used to key
@@ -90,6 +91,11 @@ class ServerAccount {
   /// server has no such route and would 404 the request.
   final bool timelineCapable;
 
+  /// Whether this group's server has GET /api/memories/forgotten (see
+  /// [ServerInfo.forgottenCapable]). Gates showing the "Forgotten photos" hub entry - an
+  /// older server has no such route and would 404 the request.
+  final bool forgottenCapable;
+
   bool get isSignedIn => token != null;
 
   /// What the UI calls this group: the local nickname when set, else the server's name.
@@ -118,6 +124,7 @@ class ServerAccount {
     bool? memoriesCapable,
     bool? eventsCapable,
     bool? timelineCapable,
+    bool? forgottenCapable,
   }) {
     return ServerAccount(
       id: id,
@@ -134,6 +141,7 @@ class ServerAccount {
       memoriesCapable: memoriesCapable ?? this.memoriesCapable,
       eventsCapable: eventsCapable ?? this.eventsCapable,
       timelineCapable: timelineCapable ?? this.timelineCapable,
+      forgottenCapable: forgottenCapable ?? this.forgottenCapable,
     );
   }
 }
@@ -238,14 +246,22 @@ class MultiSession {
           if (g.timelineCapable) g
       ];
 
+  /// The shown groups whose server advertises the Forgotten-photos capability - what the
+  /// "Forgotten photos" hub entry draws from. Independent of the other three: a server can
+  /// have any subset of them.
+  List<ServerAccount> get forgottenCapableShownGroups => [
+        for (final g in shownGroups)
+          if (g.forgottenCapable) g
+      ];
+
   /// The shown groups capable of at least one Memories-surface feature (memories, events,
-  /// or timeline) - the option set for the Memories surface's own group selector (see
-  /// memories_screen.dart's header). A group need not have every capability to appear
-  /// here; which of the surface's three views it actually offers is decided per-group
+  /// timeline, or forgotten) - the option set for the Memories surface's own group selector
+  /// (see memories_screen.dart's header). A group need not have every capability to appear
+  /// here; which of the surface's four views it actually offers is decided per-group
   /// once it's the selected one (see effectiveMemoriesGroupId and _MemoriesHubHome).
   List<ServerAccount> get memoriesSurfaceCapableShownGroups => [
         for (final g in shownGroups)
-          if (g.memoriesCapable || g.eventsCapable || g.timelineCapable) g
+          if (g.memoriesCapable || g.eventsCapable || g.timelineCapable || g.forgottenCapable) g
       ];
 
   /// Default cross-post targets for a new check-in: the groups currently in view
@@ -325,6 +341,7 @@ class MultiSessionController extends Notifier<MultiSession> {
             memoriesCapable: false,
             eventsCapable: false,
             timelineCapable: false,
+            forgottenCapable: false,
           )
         ];
         await prefs.setString(_kGroups, _encodeGroups(entries));
@@ -349,6 +366,7 @@ class MultiSessionController extends Notifier<MultiSession> {
           memoriesCapable: e.memoriesCapable,
           eventsCapable: e.eventsCapable,
           timelineCapable: e.timelineCapable,
+          forgottenCapable: e.forgottenCapable,
           token: token));
     }
     final ids = {for (final g in accounts) g.id};
@@ -402,6 +420,7 @@ class MultiSessionController extends Notifier<MultiSession> {
       final memoriesChanged = info.memoriesCapable != g.memoriesCapable;
       final eventsChanged = info.eventsCapable != g.eventsCapable;
       final timelineChanged = info.timelineCapable != g.timelineCapable;
+      final forgottenChanged = info.forgottenCapable != g.forgottenCapable;
       if (nameChanged ||
           colorChanged ||
           mediaChanged ||
@@ -409,7 +428,8 @@ class MultiSessionController extends Notifier<MultiSession> {
           recapChanged ||
           memoriesChanged ||
           eventsChanged ||
-          timelineChanged) {
+          timelineChanged ||
+          forgottenChanged) {
         _update(
             g.id,
             (a) => a.copyWith(
@@ -423,6 +443,7 @@ class MultiSessionController extends Notifier<MultiSession> {
                   memoriesCapable: info.memoriesCapable,
                   eventsCapable: info.eventsCapable,
                   timelineCapable: info.timelineCapable,
+                  forgottenCapable: info.forgottenCapable,
                 ));
         await _persistGroups();
       }
@@ -461,6 +482,7 @@ class MultiSessionController extends Notifier<MultiSession> {
             memoriesCapable: g.memoriesCapable,
             eventsCapable: g.eventsCapable,
             timelineCapable: g.timelineCapable,
+            forgottenCapable: g.forgottenCapable,
           )
       ]),
     );
@@ -598,7 +620,8 @@ class MultiSessionController extends Notifier<MultiSession> {
         bool recapCapable,
         bool memoriesCapable,
         bool eventsCapable,
-        bool timelineCapable
+        bool timelineCapable,
+        bool forgottenCapable
       })> _decodeGroups(String? raw) {
     if (raw == null || raw.isEmpty) return const [];
     try {
@@ -624,6 +647,9 @@ class MultiSessionController extends Notifier<MultiSession> {
             memoriesCapable: e['memoriesCapable'] as bool? ?? false,
             eventsCapable: e['eventsCapable'] as bool? ?? false,
             timelineCapable: e['timelineCapable'] as bool? ?? false,
+            // Same story as the others: absent (an entry stored before this capability
+            // existed) means unknown, not capable - the next hydrate refreshes it.
+            forgottenCapable: e['forgottenCapable'] as bool? ?? false,
           )
       ];
     } catch (_) {
@@ -645,7 +671,8 @@ class MultiSessionController extends Notifier<MultiSession> {
                 bool recapCapable,
                 bool memoriesCapable,
                 bool eventsCapable,
-                bool timelineCapable
+                bool timelineCapable,
+                bool forgottenCapable
               })>
           entries) {
     return jsonEncode([
@@ -663,6 +690,7 @@ class MultiSessionController extends Notifier<MultiSession> {
           'memoriesCapable': e.memoriesCapable,
           'eventsCapable': e.eventsCapable,
           'timelineCapable': e.timelineCapable,
+          'forgottenCapable': e.forgottenCapable,
         }
     ]);
   }

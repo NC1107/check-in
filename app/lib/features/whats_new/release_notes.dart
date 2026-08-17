@@ -19,6 +19,12 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.19',
+    highlights: [
+      'Forgotten photos: old check-ins nobody ever got round to liking, pulled back out of the archive.',
+    ],
+  ),
+  ReleaseNote(
     version: '1.18',
     highlights: [
       "In more than one group? Memories now lets you pick which group you're looking back through, instead of picking for you.",
