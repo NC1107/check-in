@@ -11,6 +11,7 @@ import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../../widgets/app_widgets.dart';
 import '../../widgets/feed_autoplay.dart';
 import '../../widgets/likers_sheet.dart';
 import '../../widgets/photo_viewer.dart';
@@ -496,7 +497,8 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                       ? Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            _RecapBadge(accent: recapAccent),
+                            PillBadge(
+                                icon: Icons.auto_awesome, label: 'RECAP', accent: recapAccent),
                             // The group name, once the cover's own headline - now shown
                             // only here, reusing the same icon+muted-text idiom as a
                             // cross-post's "Shared to X" label (see _sharedToLabel below)
@@ -851,38 +853,6 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-/// The small pill a recap card's header wears in place of the usual author avatar row -
-/// the group identifies it, not a person, so there is nothing to name here.
-class _RecapBadge extends StatelessWidget {
-  const _RecapBadge({required this.accent});
-
-  final AccentPalette accent;
-
-  @override
-  Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-        decoration: BoxDecoration(color: accent.light, borderRadius: BorderRadius.circular(9999)),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.auto_awesome, size: 12, color: accent.base),
-            const SizedBox(width: 4),
-            Text('RECAP',
-                style: TextStyle(
-                    color: accent.base,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 11,
-                    letterSpacing: 0.6)),
-          ],
-        ),
       ),
     );
   }

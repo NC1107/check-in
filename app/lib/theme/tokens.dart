@@ -29,3 +29,15 @@ const kOnAccent = Color(0xFF07140C); // near-black text/icons on the green accen
 // Semantic.
 const kLike = Color(0xFFF2557B); // danger / like (rose-red, pops on black, distinct from green)
 const kSuccess = Color(0xFF37E07E); // online / success (matches the accent green)
+
+// Bottom nav shape - shared by home_shell.dart's _NavItem and the hidden Memories handle
+// (memories_screen.dart), so the handle's pill can mirror this exact icon+gap+label shape
+// and land its own center on the same line the Feed/You icon glyphs sit on. A Column
+// centered with `mainAxisAlignment.center` puts its first child's own center at
+// `boxCenter - (restOfBlockHeight)/2` regardless of that first child's own height - so
+// reusing the identical trailing gap+label-sized block after the pill (see MemoriesHandle's
+// build()) lands the pill on the icons' own optical center even though the pill (26pt tall)
+// and an icon glyph (23pt) aren't the same height.
+const kBottomNavIconSize = 23.0;
+const kBottomNavIconLabelGap = 3.0;
+const kBottomNavLabelStyle = TextStyle(fontSize: 11, fontWeight: FontWeight.w600);

@@ -72,6 +72,11 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		// gates showing the Memories entry point on this being true rather than probing the
 		// endpoint and hiding it after a failed request.
 		"memories": true,
+		// events is the capability signal for GET /api/memories/events, the "You were
+		// there" group-event hub entry. Same story as memories: a server predating it has
+		// no such route at all, so the client gates showing that entry on this being true
+		// rather than probing the endpoint and hiding it after a 404.
+		"events": true,
 	}
 	if settings, err := s.db.GetRecapSettings(r.Context()); err == nil {
 		resp["recapCadence"] = settings.Cadence

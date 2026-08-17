@@ -11,6 +11,7 @@ import 'package:checkin/api/models.dart';
 import 'package:checkin/features/memories/memories_screen.dart';
 import 'package:checkin/features/post/post_detail_screen.dart';
 import 'package:checkin/state/app_state.dart';
+import 'package:checkin/theme/accent.dart';
 
 /// A fake ApiClient handing back canned randomMemory() responses in order, one per call
 /// (the last entry repeats once exhausted) - lets a test pin exactly what "Another" fetches
@@ -56,7 +57,14 @@ class MemoriesHostState extends State<_MemoriesHost> with SingleTickerProviderSt
   late final controller =
       AnimationController(vsync: this, duration: const Duration(milliseconds: 220));
 
+  /// Threaded straight to [MemoriesHandle.feedActive]. Toggled via [setFeedActive] rather than
+  /// rebuilding [_MemoriesHost], so a test can flip it mid-test the same way home_shell.dart's
+  /// real tab switch would - see the pulse-wiring tests' "leaving the Feed tab" cases.
+  bool _feedActive = true;
+
   void close() => controller.animateTo(0, duration: Duration.zero);
+
+  void setFeedActive(bool active) => setState(() => _feedActive = active);
 
   @override
   void dispose() {
@@ -73,7 +81,7 @@ class MemoriesHostState extends State<_MemoriesHost> with SingleTickerProviderSt
       ]),
       bottomNavigationBar: SizedBox(
         height: 64,
-        child: Row(children: [MemoriesHandle(controller: controller)]),
+        child: Row(children: [MemoriesHandle(controller: controller, feedActive: _feedActive)]),
       ),
     );
   }
@@ -130,6 +138,13 @@ void main() {
       child: MaterialApp(home: home),
     ));
     await tester.pump();
+    // A capable handle schedules its ambient pulse timer (see MemoriesPillPulseController)
+    // the instant it first builds, since every gating condition defaults to eligible. Most
+    // tests here never touch the pulse and so never unmount the tree themselves - without
+    // this, that timer is still pending when the test body returns and flutter_test's own
+    // end-of-test invariant check ("A Timer is still pending") fails a test that has nothing
+    // to do with the pulse at all.
+    addTearDown(() => tester.pumpWidget(const SizedBox.shrink()));
     return key;
   }
 
@@ -221,7 +236,7 @@ void main() {
           SizedBox(
             width: kMemoriesHandleWidth,
             height: 64,
-            child: MemoriesHandle(controller: controller),
+            child: MemoriesHandle(controller: controller, feedActive: true),
           ),
         ],
       );
@@ -250,6 +265,11 @@ void main() {
         ),
       ));
       await tester.pump();
+      // Mirrors pumpHost's own teardown: a capable overlay handle schedules its ambient
+      // pulse timer immediately, and this helper's own next call already tears the PREVIOUS
+      // tree down (the SizedBox.shrink() above) but nothing tears down the last one built in
+      // a test - without this, that pulse timer is still pending when the test ends.
+      addTearDown(() => tester.pumpWidget(const SizedBox.shrink()));
     }
 
     for (final width in const [320.0, 800.0]) {
@@ -466,15 +486,24 @@ void main() {
       addTearDown(controller.dispose);
       var closeCalls = 0;
 
-      await tester.pumpWidget(MaterialApp(
-        navigatorKey: nav,
-        home: Scaffold(
-          body: MemoriesSurface(
-            controller: controller,
-            onClose: () {
-              closeCalls++;
-              controller.value = 0;
-            },
+      await tester.pumpWidget(ProviderScope(
+        // The surface's hub root reads multiSessionProvider (to decide which entries to
+        // offer) the instant it builds, so this needs a real ProviderScope even though
+        // this test never interacts with the hub itself.
+        overrides: [
+          multiSessionProvider.overrideWith(
+              () => MultiSessionController.seeded(const MultiSession(restored: true))),
+        ],
+        child: MaterialApp(
+          navigatorKey: nav,
+          home: Scaffold(
+            body: MemoriesSurface(
+              controller: controller,
+              onClose: () {
+                closeCalls++;
+                controller.value = 0;
+              },
+            ),
           ),
         ),
       ));
@@ -511,6 +540,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(key.currentState!.controller.value, 1);
 
+      // Hub root: the "Give me a memory" entry, then the screen it opens onto.
+      expect(find.text('Give me a memory'), findsOneWidget);
+      await tester.tap(find.text('Give me a memory'));
+      await tester.pumpAndSettle();
+
       // Idle until "Give me a memory" is tapped.
       expect(find.text('Give me a memory'), findsOneWidget);
       await tester.tap(find.text('Give me a memory'));
@@ -541,7 +575,9 @@ void main() {
 
       await tester.tap(find.bySemanticsLabel('Memories'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Give me a memory'));
+      await tester.tap(find.text('Give me a memory')); // hub entry
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Give me a memory')); // the action button
       await tester.pumpAndSettle();
 
       expect(find.text('Nothing to look back on yet.'), findsOneWidget);
@@ -575,7 +611,9 @@ void main() {
 
       await tester.tap(find.bySemanticsLabel('Memories'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Give me a memory'));
+      await tester.tap(find.text('Give me a memory')); // hub entry
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Give me a memory')); // the action button
       await tester.pump(); // starts the fetch against A; leaves it pending on completer
 
       // The active selection changes mid-flight: A is hidden and B is shown instead - the
@@ -618,6 +656,252 @@ void main() {
       expect(SchedulerBinding.instance.transientCallbackCount, 0,
           reason: 'unmounting mid-animation must not leave a ticker running behind it');
       expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('pill pulse controller', () {
+    // These build no widget tree at all - MemoriesPillPulseController is a plain object
+    // driving an AnimationController, exactly like MemoriesDragDriver above, so its
+    // scheduling rules are exercised directly. Still `testWidgets`, not `test`, purely to get
+    // the fake clock tester.pump(duration) advances - a real dart:async Timer here would
+    // otherwise make this suite wait out 30 real seconds per test.
+    testWidgets('inactive by default: rest opacity, nothing scheduled', (tester) async {
+      final controller = AnimationController(vsync: const TestVSync());
+      addTearDown(controller.dispose);
+      final pulse = MemoriesPillPulseController(controller);
+      addTearDown(pulse.dispose);
+
+      expect(pulse.opacity, kMemoriesPillRestOpacity);
+      expect(pulse.hasPendingTimer, isFalse);
+    });
+
+    testWidgets(
+        'setActive(true) schedules a timer; a full interval fires one rise-hold-fall pulse, '
+        'then reschedules the next one', (tester) async {
+      final controller = AnimationController(vsync: const TestVSync());
+      addTearDown(controller.dispose);
+      final pulse = MemoriesPillPulseController(controller);
+      addTearDown(pulse.dispose);
+
+      pulse.setActive(true);
+      expect(pulse.hasPendingTimer, isTrue);
+      expect(pulse.opacity, kMemoriesPillRestOpacity,
+          reason: 'no pulse until the interval actually elapses');
+
+      await tester.pump(kMemoriesPillPulseInterval);
+      await tester.pump(kMemoriesPillPulseRise);
+      expect(pulse.opacity, closeTo(kMemoriesPillPeakOpacity, 0.01));
+
+      await tester.pump(kMemoriesPillPulseHold);
+      expect(pulse.opacity, closeTo(kMemoriesPillPeakOpacity, 0.01),
+          reason: 'holds near peak for the hold window');
+
+      await tester.pump(kMemoriesPillPulseFall);
+      // One more, past the boundary rather than a bare zero-duration pump: a controller
+      // pumped by exactly its own total duration reports value 1.0 but its ticker doesn't
+      // itself flip AnimationStatus.completed (and stop) until a frame strictly PAST that
+      // point - a bare pump() reuses the same already-elapsed clock reading and so never
+      // supplies one. Without this the sweep's own status listener (which reschedules the
+      // next pulse) never runs, and the still-registered ticker trips flutter_test's own
+      // end-of-test "animation still running" check.
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(pulse.opacity, closeTo(kMemoriesPillRestOpacity, 0.01));
+      expect(pulse.hasPendingTimer, isTrue,
+          reason: 'settling back to rest must reschedule the next pulse, not stop for good');
+      // Explicit, not just the addTearDown above: this test's whole point is proving a
+      // rescheduled timer is genuinely pending when it ends, and addTearDown callbacks run
+      // after flutter_test's own "no pending timers" end-of-test check, too late to satisfy
+      // it - the assertion above already exercised what matters, so nothing is lost by
+      // cleaning up before returning rather than after.
+      pulse.dispose();
+    });
+
+    testWidgets('setActive(false) cancels a pending timer and snaps straight back to rest',
+        (tester) async {
+      final controller = AnimationController(vsync: const TestVSync());
+      addTearDown(controller.dispose);
+      final pulse = MemoriesPillPulseController(controller);
+      addTearDown(pulse.dispose);
+
+      pulse.setActive(true);
+      expect(pulse.hasPendingTimer, isTrue);
+
+      pulse.setActive(false);
+      expect(pulse.hasPendingTimer, isFalse);
+      expect(pulse.opacity, kMemoriesPillRestOpacity);
+
+      // Waiting out a couple of full intervals while inactive must never fire a pulse.
+      await tester.pump(kMemoriesPillPulseInterval * 2);
+      expect(pulse.opacity, kMemoriesPillRestOpacity);
+      expect(pulse.hasPendingTimer, isFalse);
+    });
+
+    testWidgets(
+        'going inactive mid-pulse cuts it off immediately rather than letting the cycle finish',
+        (tester) async {
+      final controller = AnimationController(vsync: const TestVSync());
+      addTearDown(controller.dispose);
+      final pulse = MemoriesPillPulseController(controller);
+      addTearDown(pulse.dispose);
+
+      pulse.setActive(true);
+      await tester.pump(kMemoriesPillPulseInterval);
+      await tester.pump(kMemoriesPillPulseRise);
+      expect(pulse.opacity, closeTo(kMemoriesPillPeakOpacity, 0.01),
+          reason: 'test sanity check: the pulse should be mid-hold, near peak, right now');
+
+      pulse.setActive(false);
+      expect(pulse.opacity, kMemoriesPillRestOpacity,
+          reason: 'a gating condition dropping must cut the pulse off immediately, not let a '
+              'mid-flight cycle finish');
+      expect(SchedulerBinding.instance.transientCallbackCount, 0,
+          reason: 'no ticker should be left running once the pulse is cut off');
+    });
+
+    testWidgets('dispose cancels a pending timer', (tester) async {
+      final controller = AnimationController(vsync: const TestVSync());
+      addTearDown(controller.dispose);
+      final pulse = MemoriesPillPulseController(controller);
+
+      pulse.setActive(true);
+      expect(pulse.hasPendingTimer, isTrue);
+
+      pulse.dispose();
+      expect(pulse.hasPendingTimer, isFalse);
+    });
+  });
+
+  group('pill pulse wiring', () {
+    Finder pillFinder() => find.byKey(const Key('memoriesPill'));
+
+    Color pillColor(WidgetTester tester) =>
+        (tester.widget<Container>(pillFinder()).decoration! as BoxDecoration).color!;
+
+    testWidgets(
+        'at rest the pill sits at the barely-there opacity, tinted by the accent - '
+        'not a hardcoded grey', (tester) async {
+      await pumpHost(tester, groups: [account('a.invalid', memoriesCapable: true)]);
+      final color = pillColor(tester);
+      expect(color.a, closeTo(kMemoriesPillRestOpacity, 0.01));
+      // No accent theme extension is wired up in this bare MaterialApp host, so
+      // context.accent resolves through AccentContext's own fallback to the first preset -
+      // exactly what a real app with nothing customized shows.
+      final accent = kAccentPresets.first.base;
+      expect(color.r, closeTo(accent.r, 0.005));
+      expect(color.g, closeTo(accent.g, 0.005));
+      expect(color.b, closeTo(accent.b, 0.005));
+    });
+
+    testWidgets(
+        'after 30s idle on the Feed tab with the surface closed, the pill pulses up to peak '
+        'and back down', (tester) async {
+      await pumpHost(tester, groups: [account('a.invalid', memoriesCapable: true)]);
+
+      await tester.pump(kMemoriesPillPulseInterval);
+      await tester.pump(kMemoriesPillPulseRise);
+      expect(pillColor(tester).a, closeTo(kMemoriesPillPeakOpacity, 0.01));
+
+      await tester.pump(kMemoriesPillPulseHold + kMemoriesPillPulseFall);
+      expect(pillColor(tester).a, closeTo(kMemoriesPillRestOpacity, 0.01));
+    });
+
+    testWidgets('the tap still opens the surface mid-pulse, at peak opacity', (tester) async {
+      final key = await pumpHost(tester,
+          groups: [account('a.invalid', memoriesCapable: true)],
+          api: (id) => _FakeMemoriesApi([null]));
+
+      await tester.pump(kMemoriesPillPulseInterval);
+      await tester.pump(kMemoriesPillPulseRise);
+      expect(pillColor(tester).a, closeTo(kMemoriesPillPeakOpacity, 0.01),
+          reason: 'test sanity check: the pulse should be at its peak right now');
+
+      await tester.tap(find.bySemanticsLabel('Memories'));
+      await tester.pumpAndSettle();
+      expect(key.currentState!.controller.value, 1,
+          reason: 'the tap must open the surface regardless of what the pulse is doing - the '
+              'pulse is a hint, never a gate');
+    });
+
+    testWidgets('the drag gesture still works while the pill is at rest opacity', (tester) async {
+      final key = await pumpHost(tester,
+          groups: [account('a.invalid', memoriesCapable: true)],
+          api: (id) => _FakeMemoriesApi([null]));
+      final width = tester.view.physicalSize.width / tester.view.devicePixelRatio;
+      expect(pillColor(tester).a, closeTo(kMemoriesPillRestOpacity, 0.01));
+
+      await tester.timedDrag(find.bySemanticsLabel('Memories'), Offset(width * 0.6, 0),
+          const Duration(milliseconds: 1500));
+      await tester.pumpAndSettle();
+      expect(key.currentState!.controller.value, 1);
+    });
+
+    testWidgets('leaving the Feed tab stops the pulse and it never fires while away',
+        (tester) async {
+      final key = await pumpHost(tester, groups: [account('a.invalid', memoriesCapable: true)]);
+      key.currentState!.setFeedActive(false);
+      await tester.pump();
+
+      await tester.pump(kMemoriesPillPulseInterval * 2);
+      expect(pillColor(tester).a, closeTo(kMemoriesPillRestOpacity, 0.01));
+      expect(SchedulerBinding.instance.transientCallbackCount, 0);
+    });
+
+    testWidgets('returning to the Feed tab lets the pulse schedule normally again', (tester) async {
+      final key = await pumpHost(tester, groups: [account('a.invalid', memoriesCapable: true)]);
+      key.currentState!.setFeedActive(false);
+      await tester.pump();
+      key.currentState!.setFeedActive(true);
+      await tester.pump();
+
+      await tester.pump(kMemoriesPillPulseInterval);
+      await tester.pump(kMemoriesPillPulseRise);
+      expect(pillColor(tester).a, closeTo(kMemoriesPillPeakOpacity, 0.01));
+    });
+
+    testWidgets('opening the surface stops the pulse; it never fires while the surface stays open',
+        (tester) async {
+      final key = await pumpHost(tester,
+          groups: [account('a.invalid', memoriesCapable: true)],
+          api: (id) => _FakeMemoriesApi([null]));
+
+      await tester.tap(find.bySemanticsLabel('Memories'));
+      await tester.pumpAndSettle();
+      expect(key.currentState!.controller.value, 1);
+
+      await tester.pump(kMemoriesPillPulseInterval * 2);
+      expect(pillColor(tester).a, closeTo(kMemoriesPillRestOpacity, 0.01),
+          reason: 'the pulse must never fire while the surface covers the screen');
+    });
+
+    testWidgets('backgrounding the app stops the pulse; resuming lets it schedule again',
+        (tester) async {
+      await pumpHost(tester, groups: [account('a.invalid', memoriesCapable: true)]);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      await tester.pump();
+      await tester.pump(kMemoriesPillPulseInterval * 2);
+      expect(pillColor(tester).a, closeTo(kMemoriesPillRestOpacity, 0.01),
+          reason: 'a timer waking every 30s in the background is a battery bug - the pulse '
+              'must not run at all while backgrounded');
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pump();
+      await tester.pump(kMemoriesPillPulseInterval);
+      await tester.pump(kMemoriesPillPulseRise);
+      expect(pillColor(tester).a, closeTo(kMemoriesPillPeakOpacity, 0.01),
+          reason: 'resuming must let the pulse schedule normally again');
+    });
+
+    testWidgets('reduced motion renders a constant modest opacity and never schedules a pulse',
+        (tester) async {
+      await pumpHost(tester,
+          groups: [account('a.invalid', memoriesCapable: true)], disableAnimations: true);
+      expect(pillColor(tester).a, closeTo(kMemoriesPillReducedMotionOpacity, 0.01));
+
+      await tester.pump(kMemoriesPillPulseInterval * 2);
+      expect(pillColor(tester).a, closeTo(kMemoriesPillReducedMotionOpacity, 0.01),
+          reason: 'reduced motion must never animate the pill at all, constant only');
+      expect(SchedulerBinding.instance.transientCallbackCount, 0);
     });
   });
 }

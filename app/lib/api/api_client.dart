@@ -294,6 +294,19 @@ class ApiClient {
     return post == null ? null : Post.fromJson(post as Map<String, dynamic>);
   }
 
+  /// events fetches the "You were there" group events for this group's history, newest
+  /// first - a clean empty list, not a failure, for a group with none detected yet (see
+  /// the server's handleEvents). Only ever called against a group whose server-info
+  /// advertised [ServerInfo.eventsCapable]; an older server has no such route.
+  Future<List<Event>> events({int? limit}) async {
+    final r = await _dio.get('/api/memories/events', queryParameters: {
+      if (limit != null) 'limit': limit,
+    });
+    return ((r.data as Map<String, dynamic>)['events'] as List)
+        .map((e) => Event.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
   /// lat/lng are only ever sent by the caller when the target server's server-info
   /// advertised the "recap" capability (see [ServerInfo.recapCapable]) - this server
   /// rejects unknown JSON fields, so an unguarded send would 400 every post against a
