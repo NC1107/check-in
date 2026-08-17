@@ -19,9 +19,15 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.18',
+    highlights: [
+      "In more than one group? Memories now lets you pick which group you're looking back through, instead of picking for you.",
+    ],
+  ),
+  ReleaseNote(
     version: '1.17',
     highlights: [
-      "Your months: scroll back through the group's history a month at a time, and open any month to see everything from it.",
+      "Month by month: scroll back through the group's history a month at a time, and open any month to see everything from it.",
     ],
   ),
   ReleaseNote(
