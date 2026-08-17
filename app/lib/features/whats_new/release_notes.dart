@@ -19,6 +19,13 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.16',
+    highlights: [
+      'You were there: the trips and nights out you all posted from are pulled back together, so everyone\'s photos from the same weekend sit in one place.',
+      'Find it next to the random check-in, in the same hidden spot.',
+    ],
+  ),
+  ReleaseNote(
     version: '1.15',
     highlights: [
       "There's a way to pull up a random old check-in hidden somewhere in the app. Have a look around.",
