@@ -701,116 +701,174 @@ func TestDetectTripsThirtyOneDaySpanSplits(t *testing.T) {
 	}
 }
 
-// ---- group home area: a hometown metro is more than one member's modal location ----
+// ---- group home area: recurrence over time, not volume ----
 //
-// Found by restoring a real seeded test group's year of data: a member's own modal
-// location alone reads every OTHER nearby location string in the same metro as equally
-// foreign, so a member whose modal city happened to be the next suburb over turned an
-// ordinary trip to the next suburb over - or even the metro's own biggest city - into a
-// "trip" whenever enough participants' individually modal locations were scattered across
-// different strings within the same metro. computeHomeArea fixes this by looking for
-// ROUTINE, MULTI-MEMBER history at a location, not any one member's own single busiest
-// place - see its own doc comment for the exact bar and why.
+// Found by restoring a real seeded test group's year of data, in two rounds. The first cut
+// of this rule (at least 2 members each posting on 3+ distinct days at a place) fixed the
+// hometown-metro false positives it was built for, but broke the flagship case the whole
+// feature exists for: a dense, week-long group vacation with several members posting
+// nearly every day matched that same bar, and a real trip silently stopped producing any
+// event at all. The right signal is RECURRENCE OVER TIME, not volume: a hometown is
+// somewhere the group returns to again and again in SEPARATE episodes across the year; a
+// vacation, however densely posted, is one contiguous episode. See computeHomeArea's own
+// doc comment for the exact bar and the deliberate tradeoff it makes.
 
-func TestComputeHomeAreaRequiresTwoMembersEachWithThreeDistinctDays(t *testing.T) {
-	rows := []eventPostRow{
-		// Ada alone: 5 distinct days in Arlington - plenty of history, but from only one
-		// member. One person's routine does not make a place the GROUP's home area.
-		evRow(1, 1, "Ada", "Arlington, United States", evDay(100, 8)),
-		evRow(2, 1, "Ada", "Arlington, United States", evDay(90, 8)),
-		evRow(3, 1, "Ada", "Arlington, United States", evDay(80, 8)),
-		evRow(4, 1, "Ada", "Arlington, United States", evDay(70, 8)),
-		evRow(5, 1, "Ada", "Arlington, United States", evDay(60, 8)),
+func TestCountEpisodesGapWithinToleranceStaysOneEpisode(t *testing.T) {
+	days := map[time.Time]bool{
+		dayOf(evDay(10, 0)): true,
+		dayOf(evDay(7, 0)):  true, // exactly homeAreaEpisodeGap (3 days) later
+	}
+	if n := countEpisodes(days); n != 1 {
+		t.Errorf("episodes = %d, want 1 - a gap of exactly homeAreaEpisodeGap is still the "+
+			"same episode, the same boundary tripWindow itself uses", n)
+	}
+}
+
+func TestCountEpisodesGapPastToleranceStartsANewEpisode(t *testing.T) {
+	days := map[time.Time]bool{
+		dayOf(evDay(10, 0)): true,
+		dayOf(evDay(6, 0)):  true, // 4 days later - one day past the tolerance
+	}
+	if n := countEpisodes(days); n != 2 {
+		t.Errorf("episodes = %d, want 2 - a gap past homeAreaEpisodeGap starts a new episode", n)
+	}
+}
+
+// TestComputeHomeAreaOneDenseEpisodeDoesNotQualifyRegardlessOfVolume pins the exact bug
+// that broke a real vacation: a single contiguous trip, however many days it spans or
+// however many members post however many of those days, is still only ONE episode, and one
+// episode alone can never clear homeAreaMinEpisodes no matter how much posting volume it
+// carries.
+func TestComputeHomeAreaOneDenseEpisodeDoesNotQualifyRegardlessOfVolume(t *testing.T) {
+	var rows []eventPostRow
+	var id int64 = 1
+	for _, day := range []int{6, 5, 4, 3, 2} {
+		rows = append(rows, evRow(id, 1, "Ada", "Tulum, Mexico", evDay(day, 8)))
+		id++
+		rows = append(rows, evRow(id, 2, "Bea", "Tulum, Mexico", evDay(day, 9)))
+		id++
 	}
 	got := computeHomeArea(rows, evNow)
-	if got["arlington, united states"] {
-		t.Fatalf("one member's own history must not be enough to make a place the group's "+
-			"home area, regardless of how many distinct days it covers: %v", got)
+	if got["tulum, mexico"] {
+		t.Fatalf("a single 5-day contiguous episode - however densely both members posted "+
+			"it - must not qualify as home area on its own: %v", got)
 	}
+}
 
-	// Bea now separately clears the same 3-distinct-day bar there too - a second member's
-	// independent routine is what actually makes it home area.
-	rows = append(rows,
-		evRow(6, 2, "Bea", "Arlington, United States", evDay(95, 9)),
-		evRow(7, 2, "Bea", "Arlington, United States", evDay(85, 9)),
-		evRow(8, 2, "Bea", "Arlington, United States", evDay(75, 9)))
-	got = computeHomeArea(rows, evNow)
+// TestComputeHomeAreaThreeSeparateEpisodesQualifies is the other half: the same two
+// members, this time visiting three times, each visit separated from the last by a real
+// gap well past homeAreaEpisodeGap - genuine recurrence, not one trip's worth of volume.
+func TestComputeHomeAreaThreeSeparateEpisodesQualifies(t *testing.T) {
+	rows := []eventPostRow{
+		evRow(1, 1, "Ada", "Arlington, United States", evDay(150, 8)),
+		evRow(2, 2, "Bea", "Arlington, United States", evDay(90, 9)),
+		evRow(3, 1, "Ada", "Arlington, United States", evDay(20, 8)),
+	}
+	got := computeHomeArea(rows, evNow)
 	if !got["arlington, united states"] {
-		t.Fatalf("want arlington, united states in the home area once a SECOND member also "+
-			"clears homeAreaMinDaysPerMember there: %v", got)
+		t.Fatalf("want arlington, united states in the home area - three separate episodes, "+
+			"each well past homeAreaEpisodeGap apart, from two distinct members: %v", got)
 	}
 }
 
-func TestComputeHomeAreaRequiresThreeDistinctDaysPerQualifyingMember(t *testing.T) {
+// TestComputeHomeAreaRequiresTwoDistinctMembersOverall: three separate episodes from one
+// member alone - a regular solo work trip, or visits to a relative's place, say - must not
+// make a location the GROUP's home area; a second, different member has to have posted
+// from there too.
+func TestComputeHomeAreaRequiresTwoDistinctMembersOverall(t *testing.T) {
 	rows := []eventPostRow{
-		// Ada and Bea each show up in Arlington on only 2 distinct days - short of the
-		// per-member floor, even though two different members are both represented.
-		evRow(1, 1, "Ada", "Arlington, United States", evDay(100, 8)),
-		evRow(2, 1, "Ada", "Arlington, United States", evDay(90, 8)),
-		evRow(3, 2, "Bea", "Arlington, United States", evDay(95, 9)),
-		evRow(4, 2, "Bea", "Arlington, United States", evDay(85, 9)),
+		evRow(1, 1, "Ada", "Richmond, United States", evDay(150, 8)),
+		evRow(2, 1, "Ada", "Richmond, United States", evDay(90, 8)),
+		evRow(3, 1, "Ada", "Richmond, United States", evDay(20, 8)),
 	}
 	got := computeHomeArea(rows, evNow)
-	if got["arlington, united states"] {
-		t.Fatalf("2 distinct days each is short of homeAreaMinDaysPerMember (3) for both "+
-			"members, so this must not qualify: %v", got)
+	if got["richmond, united states"] {
+		t.Fatalf("one member's own three separate episodes must not be enough on their own: %v", got)
+	}
+
+	rows = append(rows, evRow(4, 2, "Bea", "Richmond, United States", evDay(20, 9)))
+	got = computeHomeArea(rows, evNow)
+	if !got["richmond, united states"] {
+		t.Fatalf("want richmond, united states in the home area once a second, different "+
+			"member has also posted from there: %v", got)
 	}
 }
 
-// TestDetectEventsHometownMetroNeverProducesTripsButAFarawayTripStillDoes is the
-// end-to-end regression test for the bug found validating against the real seeded group:
-// a hometown metro spread across several nearby location strings (here, Washington and
-// Arlington, each independently established as routine for 2+ members) must never surface
-// as a trip no matter which individual participant's own modal location the cluster
-// happens to differ from - it should fall through to the gathering pass instead, same as
-// any other home-turf activity. A genuine faraway destination nobody has ANY history at
-// (Lisbon) must still read as a trip exactly as before; this rule only suppresses trips at
-// places the group already treats as home.
-func TestDetectEventsHometownMetroNeverProducesTripsButAFarawayTripStillDoes(t *testing.T) {
+// ---- the same rule, exercised end to end through detectEvents ----
+
+// TestDetectEventsDenseSingleEpisodeVacationStaysATrip is the regression test for the bug
+// this whole rule change exists to fix: a real week-long group vacation - four members,
+// most days posted, no other history anywhere near it - must still read as a trip. It is
+// exactly one episode, however densely posted, and can never clear homeAreaMinEpisodes on
+// its own. Each member's own established home base (Denver, with MORE distinct days than
+// the vacation itself) is what keeps this from tripping the same self-referential-home-base
+// circularity homeBaseMinDays already guards against elsewhere (see its own doc comment) -
+// without it, the vacation's own 5 distinct days would risk becoming each member's own
+// modal location purely for lack of anything to outweigh it.
+func TestDetectEventsDenseSingleEpisodeVacationStaysATrip(t *testing.T) {
+	names := map[int64]string{1: "Ada", 2: "Bea", 3: "Cid", 4: "Dee"}
+	var rows []eventPostRow
+	var id int64 = 1
+
+	// Deep-history home base: 6 distinct days each in Denver, safely more than the
+	// vacation's own 5 - so Denver, not the vacation destination, stays each member's modal
+	// (and therefore known, different-from-Tulum) home base.
+	for _, day := range []int{170, 165, 160, 155, 150, 145} {
+		for _, author := range []int64{1, 2, 3, 4} {
+			rows = append(rows, evRow(id, author, names[author], "Denver, USA", evDay(day, 7)))
+			id++
+		}
+	}
+
+	// The vacation itself: a 7-calendar-day span (day 7 through day 1), each member posting
+	// 5 of those 7 days - dense, but one contiguous episode.
+	for _, day := range []int{7, 6, 4, 3, 1} {
+		for _, author := range []int64{1, 2, 3, 4} {
+			rows = append(rows, evRow(id, author, names[author], "Tulum, Mexico", evDay(day, 8)))
+			id++
+		}
+	}
+
+	events := detectEvents(rows, evNow)
+	var trips []Event
+	for _, ev := range events {
+		if ev.Kind == EventKindTrip {
+			trips = append(trips, ev)
+		}
+	}
+	if len(trips) != 1 || trips[0].Place != "Tulum, Mexico" {
+		t.Fatalf("trips = %+v, want exactly one trip, to Tulum, Mexico - a dense week-long "+
+			"vacation is one episode and must never be mistaken for home area", trips)
+	}
+	if len(trips[0].Participants) != 4 {
+		t.Errorf("participants = %d, want all 4 members", len(trips[0].Participants))
+	}
+}
+
+// TestDetectEventsThreeScatteredEpisodesBecomeHomeAreaSuppressingTrips is the end-to-end
+// regression test for the bug found validating against the real seeded group: a hometown
+// metro spread across several nearby location strings (here, Washington and Arlington)
+// must never surface as a trip once each has genuinely recurred (3+ separate episodes, 2+
+// distinct members) across the year - it should fall through to the gathering pass
+// instead, same as any other home-turf activity, regardless of which individual
+// participant's own modal location the cluster happens to differ from.
+func TestDetectEventsThreeScatteredEpisodesBecomeHomeAreaSuppressingTrips(t *testing.T) {
 	var rows []eventPostRow
 
-	// Ada's deep history: mostly Washington (5 distinct days - her own modal location),
-	// with a smaller but still qualifying 3-distinct-day pattern in Arlington too - exactly
-	// how one real member's life spreads across a metro rather than sitting in one city.
-	for _, day := range []int{130, 125, 120, 115, 110} {
-		rows = append(rows, evRow(int64(1000+day), 1, "Ada", "Washington, United States", evDay(day, 8)))
-	}
-	for _, day := range []int{105, 100, 95} {
-		rows = append(rows, evRow(int64(2000+day), 1, "Ada", "Arlington, United States", evDay(day, 8)))
-	}
+	// Washington: three separate, well-gapped episodes from three different members - the
+	// group's own recurring rhythm there, not any one person's routine.
+	rows = append(rows,
+		evRow(1, 1, "Ada", "Washington, United States", evDay(170, 8)),
+		evRow(2, 2, "Bea", "Washington, United States", evDay(100, 9)),
+		evRow(3, 3, "Cid", "Washington, United States", evDay(30, 10)))
 
-	// Bea's deep history: Arlington is her modal location (3 distinct days, more than her
-	// 2 in Washington - which stays below homeBaseMinDays and so isn't even a candidate for
-	// her). Her own home base therefore reads as Arlington, not Washington.
-	for _, day := range []int{108, 103, 98} {
-		rows = append(rows, evRow(int64(3000+day), 2, "Bea", "Arlington, United States", evDay(day, 9)))
-	}
-	for _, day := range []int{118, 113} {
-		rows = append(rows, evRow(int64(4000+day), 2, "Bea", "Washington, United States", evDay(day, 9)))
-	}
-
-	// Cid's deep history: Washington, 3 distinct days - the second member (alongside Ada)
-	// whose routine is what actually makes Washington the group's home area, not just
-	// Ada's own modal city.
-	for _, day := range []int{140, 135, 128} {
-		rows = append(rows, evRow(int64(5000+day), 3, "Cid", "Washington, United States", evDay(day, 10)))
-	}
-
-	// The bogus "trip" this bug report was about: Bea (home base Arlington) and Dee (no
-	// history anywhere) post from WASHINGTON across two recent days. Under the old
-	// per-member-only away rule this reads as 2 away authors (Bea's home base differs;
-	// Dee's is unknown and the span is multi-day) - a bogus multi-day "trip" to the group's
-	// own biggest hometown city. Washington is home area: this must never become a trip.
+	// A bogus near-trip shape, the exact bug report: Bea and Dee post from Washington on
+	// two recent, different days. Under the old per-member-only away rule this could read
+	// as 2 away authors. Washington is now home area (3+ episodes already established
+	// above): this must never become a trip.
 	rows = append(rows,
 		evRow(10, 2, "Bea", "Washington, United States", evDay(10, 8)),
 		evRow(11, 4, "Dee", "Washington, United States", evDay(9, 8)))
-
-	// The same shape, one metro string over: Ada (home base Washington) and Dee post from
-	// ARLINGTON across two recent days - a bogus short "day trip" ten minutes from home.
-	// Arlington is also home area: this must never become a trip either.
-	rows = append(rows,
-		evRow(20, 1, "Ada", "Arlington, United States", evDay(8, 8)),
-		evRow(21, 4, "Dee", "Arlington, United States", evDay(7, 8)))
 
 	// A real same-day get-together at home turf: 3 posts, 2+ distinct authors, all on one
 	// day - exactly the shape that should fall through the (skipped) trip pass and clear
@@ -820,44 +878,72 @@ func TestDetectEventsHometownMetroNeverProducesTripsButAFarawayTripStillDoes(t *
 		evRow(31, 3, "Cid", "Washington, United States", evDay(3, 19)),
 		evRow(32, 4, "Dee", "Washington, United States", evDay(3, 20)))
 
-	// The genuine faraway trip: Ada and Bea in Lisbon, which neither of them - nor anyone
-	// else in the group - has ever posted from. This must still read as a trip.
+	// Arlington: the same shape, one metro string over - three separate episodes from
+	// three different members, plus a bogus recent two-day "day trip" that must also never
+	// qualify. No same-day cluster here: Arlington should produce no event at all.
 	rows = append(rows,
-		evRow(40, 1, "Ada", "Lisbon, Portugal", evDay(2, 8)),
-		evRow(41, 2, "Bea", "Lisbon, Portugal", evDay(1, 9)))
+		evRow(50, 1, "Ada", "Arlington, United States", evDay(160, 8)),
+		evRow(51, 3, "Cid", "Arlington, United States", evDay(95, 9)),
+		evRow(52, 2, "Bea", "Arlington, United States", evDay(25, 10)))
+	rows = append(rows,
+		evRow(60, 1, "Ada", "Arlington, United States", evDay(8, 8)),
+		evRow(61, 4, "Dee", "Arlington, United States", evDay(7, 8)))
 
 	events := detectEvents(rows, evNow)
 
 	for _, ev := range events {
-		if ev.Kind == EventKindTrip && (ev.Place == "Washington, United States" || ev.Place == "Arlington, United States") {
-			t.Errorf("got a %s TRIP at %q, want home-area locations to never produce a trip: %+v",
-				ev.Kind, ev.Place, ev)
+		if ev.Place == "Washington, United States" || ev.Place == "Arlington, United States" {
+			if ev.Kind == EventKindTrip {
+				t.Errorf("got a TRIP at %q, want home-area locations to never produce a "+
+					"trip: %+v", ev.Place, ev)
+			}
 		}
 	}
 
-	var trips, gatherings []Event
-	for _, ev := range events {
-		switch ev.Kind {
-		case EventKindTrip:
-			trips = append(trips, ev)
-		case EventKindGathering:
-			gatherings = append(gatherings, ev)
-		}
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want exactly 1 (the Washington gathering) - the two-post, "+
+			"two-different-recent-days clusters at Washington and Arlington, and the "+
+			"episode-establishing background history, must produce no event of their own: "+
+			"%+v", len(events), events)
 	}
-
-	if len(trips) != 1 || trips[0].Place != "Lisbon, Portugal" {
-		t.Fatalf("trips = %+v, want exactly one trip, to Lisbon, Portugal", trips)
+	if events[0].Kind != EventKindGathering || events[0].Place != "Washington, United States" {
+		t.Fatalf("events[0] = %+v, want the same-day 3-post/2-author gathering at "+
+			"Washington, United States", events[0])
 	}
+}
 
-	if len(gatherings) != 1 || gatherings[0].Place != "Washington, United States" {
-		t.Fatalf("gatherings = %+v, want exactly one gathering, at Washington, United States "+
-			"(the same-day 3-post/2-author cluster that fell through once the trip pass "+
-			"stopped consuming home-area posts)", gatherings)
+// TestDetectEventsTwiceVisitedPlaceStaysATrip: a place the group has genuinely been away
+// to twice, months apart, has only 2 episodes - short of homeAreaMinEpisodes (3) - so it
+// must keep reading as a trip each time. Twice a year is not a hometown; the bar this pins
+// is deliberately not "any recurrence at all", see computeHomeArea's own doc comment. Ada
+// and Bea's own home base is established at Washington, well away from New York and with
+// more distinct days than either New York visit accumulates on its own - the ordinary
+// known-different away branch, not the unknown/multi-day one, is what is under test here.
+func TestDetectEventsTwiceVisitedPlaceStaysATrip(t *testing.T) {
+	var rows []eventPostRow
+	for _, day := range []int{170, 165, 160} {
+		rows = append(rows,
+			evRow(int64(1000+day), 1, "Ada", "Washington, United States", evDay(day, 7)),
+			evRow(int64(1001+day), 2, "Bea", "Washington, United States", evDay(day, 8)))
 	}
+	rows = append(rows,
+		// First visit, months ago.
+		evRow(1, 1, "Ada", "New York, United States", evDay(150, 8)),
+		evRow(2, 2, "Bea", "New York, United States", evDay(149, 9)),
+		// Second visit, recently - well past tripWindow from the first, so the two never
+		// merge into a single run regardless.
+		evRow(4, 1, "Ada", "New York, United States", evDay(20, 8)),
+		evRow(5, 2, "Bea", "New York, United States", evDay(19, 9)))
 
+	events := detectEvents(rows, evNow)
 	if len(events) != 2 {
-		t.Fatalf("got %d events, want exactly 2 (the Lisbon trip and the Washington gathering) "+
-			"- the two-post, two-different-recent-days clusters at Washington and Arlington "+
-			"must produce no event at all, not some other kind of event: %+v", len(events), events)
+		t.Fatalf("got %d events, want 2 - two separate visits, each its own trip: %+v",
+			len(events), events)
+	}
+	for _, ev := range events {
+		if ev.Kind != EventKindTrip || ev.Place != "New York, United States" {
+			t.Errorf("event = %+v, want a trip to New York, United States - two episodes is "+
+				"short of homeAreaMinEpisodes, so this must never be treated as home area", ev)
+		}
 	}
 }

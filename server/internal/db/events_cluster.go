@@ -162,70 +162,106 @@ func displayLocation(run []eventPostRow) string {
 // check-ins I just posted from the place I'm evaluating."
 const homeBaseMinDays = 3
 
-// homeAreaMinMembers and homeAreaMinDaysPerMember are the bar a normalized location has to
+// homeAreaMinEpisodes and homeAreaMinMembers are the bar a normalized location has to
 // clear to count as part of the GROUP's home area, not just one member's own modal
-// location: at least this many DISTINCT members must have each posted from that place on
-// at least this many DISTINCT days within the trailing homeBaseLookback6Months window. A
-// real hometown metro spans several nearby location strings - a member's own city, the next
-// suburb over, downtown - not one, and a per-member modal location alone treats every
-// string but a member's single most-visited one as equally foreign: that is how a
-// ten-minute trip to the next suburb reads as a "trip" while the actual home city can too,
-// whenever enough members' individual modal locations happen to be scattered across
-// slightly different strings in the same metro. Requiring evidence from at least two
-// DIFFERENT members (three-plus days apiece, not just one member's repeat visits) is what
-// keeps a real one-off group trip from ever qualifying as home area: no faraway vacation
-// destination the group is actually away from has two-plus members separately
-// accumulating 3+ days there over six months the way ordinary hometown life naturally
-// does. These numbers reuse homeBaseMinDays' own per-member day threshold and its
-// six-month window - the same evidence bar computeHomeBases already applies to an
-// individual, just requiring it from more than one person before it describes the group
-// rather than that one person alone.
+// location. The right signal turned out to be RECURRENCE OVER TIME, not volume: an early
+// version of this rule counted distinct posting days per member, and a dense one-off
+// vacation (several members posting most days of a single week-long trip) matched that bar
+// just as well as an actual hometown does, deleting real trips outright. A hometown is
+// somewhere the group returns to again and again in SEPARATE episodes across the year; a
+// vacation, however busy, is one contiguous episode. See countEpisodes for exactly what
+// counts as separate. Three episodes is the chosen bar: twice a year (an annual trip to the
+// same family destination, say) still reads as a trip every time - that is deliberately
+// correct, not a gap - while three or more separate visits within the trailing window is
+// treated as the group having settled into a routine there, so any FURTHER visit lands as
+// a gathering (or nothing at all) rather than a trip. That is a deliberate tradeoff, not an
+// incidental one: a place the group is genuinely away from three-plus separate times a year
+// stops being described as a "trip" once its own recurrence gives it away. Requiring
+// homeAreaMinMembers (2) distinct members to have posted from the place at all, on top of
+// the episode count, is what keeps a single member's own repeated solo visits (a
+// grandparent's house, a regular work trip) from alone making a place read as the GROUP's
+// home area.
 const (
-	homeAreaMinMembers       = 2
-	homeAreaMinDaysPerMember = homeBaseMinDays
+	homeAreaMinEpisodes = 3
+	homeAreaMinMembers  = 2
 )
+
+// homeAreaEpisodeGap is how large a gap between one posting day at a location and the next
+// still counts as the SAME episode there, rather than the start of a new one. Reuses
+// tripWindow exactly - the same tolerance a trip's own day-merging already applies - so a
+// single vacation with an ordinary day or two of no posting in the middle does not
+// fragment into multiple "episodes" and get mistaken for recurring hometown visits.
+const homeAreaEpisodeGap = tripWindow
 
 // computeHomeArea returns the set of normalized locations (see normalizeLocation) that
 // read as the group's own collective home turf, as opposed to any single member's modal
 // location (see computeHomeBases): anywhere at least homeAreaMinMembers different members
-// each separately show homeAreaMinDaysPerMember or more days of routine posting history.
+// have posted from at all, AND whose posting days form at least homeAreaMinEpisodes
+// separate episodes (see countEpisodes) within the trailing homeBaseLookback6Months window.
 // detectTrips never lets a run at one of these locations become a trip, regardless of what
 // any individual participant's own home base happens to be - see its own doc comment for
 // why the per-member "away from MY city" signal alone is not enough to rule out home turf.
 func computeHomeArea(rows []eventPostRow, now time.Time) map[string]bool {
 	cutoff := now.AddDate(0, homeBaseLookback6Months, 0)
-	// normalized location -> author id -> distinct days posted there.
-	days := make(map[string]map[int64]map[time.Time]bool)
+	// normalized location -> distinct posting day, and separately, the authors who ever
+	// posted there - episode count is location-wide (across every member's posts, not
+	// evaluated per member), since a hometown's recurring episodes are the group's
+	// collective rhythm, not necessarily any one person's own.
+	daysByLoc := make(map[string]map[time.Time]bool)
+	authorsByLoc := make(map[string]map[int64]bool)
 	for _, r := range rows {
 		if r.CreatedAt.Before(cutoff) {
 			continue
 		}
 		loc := normalizeLocation(r.Location)
-		byAuthor := days[loc]
-		if byAuthor == nil {
-			byAuthor = make(map[int64]map[time.Time]bool)
-			days[loc] = byAuthor
+		days := daysByLoc[loc]
+		if days == nil {
+			days = make(map[time.Time]bool)
+			daysByLoc[loc] = days
 		}
-		daySet := byAuthor[r.AuthorID]
-		if daySet == nil {
-			daySet = make(map[time.Time]bool)
-			byAuthor[r.AuthorID] = daySet
+		days[dayOf(r.CreatedAt)] = true
+
+		authors := authorsByLoc[loc]
+		if authors == nil {
+			authors = make(map[int64]bool)
+			authorsByLoc[loc] = authors
 		}
-		daySet[dayOf(r.CreatedAt)] = true
+		authors[r.AuthorID] = true
 	}
-	homeArea := make(map[string]bool, len(days))
-	for loc, byAuthor := range days {
-		qualifying := 0
-		for _, daySet := range byAuthor {
-			if len(daySet) >= homeAreaMinDaysPerMember {
-				qualifying++
-			}
+
+	homeArea := make(map[string]bool, len(daysByLoc))
+	for loc, days := range daysByLoc {
+		if len(authorsByLoc[loc]) < homeAreaMinMembers {
+			continue
 		}
-		if qualifying >= homeAreaMinMembers {
+		if countEpisodes(days) >= homeAreaMinEpisodes {
 			homeArea[loc] = true
 		}
 	}
 	return homeArea
+}
+
+// countEpisodes merges a set of distinct posting days into maximal runs - consecutive days
+// no more than homeAreaEpisodeGap apart - and returns how many separate runs resulted. One
+// contiguous vacation, however many days it spans or however densely it is posted, is
+// always exactly one episode; a hometown is somewhere posted from across several such
+// episodes, separated by real gaps, over the trailing window.
+func countEpisodes(days map[time.Time]bool) int {
+	sorted := make([]time.Time, 0, len(days))
+	for d := range days {
+		sorted = append(sorted, d)
+	}
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Before(sorted[j]) })
+
+	episodes := 0
+	var last time.Time
+	for i, d := range sorted {
+		if i == 0 || d.Sub(last) > homeAreaEpisodeGap {
+			episodes++
+		}
+		last = d
+	}
+	return episodes
 }
 
 // computeHomeBases returns each author's modal (most DISTINCT DAYS posted from) location
