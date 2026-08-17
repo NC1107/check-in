@@ -68,16 +68,28 @@ type timelinePostRow struct {
 // with NO recency floor: unlike a "memory", which only means something once it's aged a
 // couple of weeks, the current month legitimately belongs on its own timeline as it happens.
 //
-// MONTH BUCKETING: a post's month is its created_at converted to the server PROCESS's own
-// local time zone (time.Local), not raw UTC. Go resolves time.Local exactly once, at
-// startup, from the standard TZ environment variable (falling back to /etc/localtime) - the
-// same mechanism docker-compose.yml's server service already relies on implicitly for its
-// own logs. Without this, a check-in made at 9pm local on the 31st could land in the
-// UTC calendar's next month, which is not the month a member who was there would recognize
-// it as. This is a simpler, server-wide notion of "local" than recap.go's own monthly
-// cadence (which honors a per-group admin-configured offset for scheduling a digest send
-// at a specific wall-clock hour) - deliberately so, since a timeline has no per-viewer or
-// per-group "local" to honor, only "what month did this actually happen in".
+// MONTH BUCKETING: a post's month is computed against the group's stored recap_offset
+// (RecapSettings.Offset, minutes east of UTC - see recap.go), the exact same value and the
+// exact same "local = UTC + offset" arithmetic recapDuePeriod already uses to compute its
+// own period boundaries. This is a deliberate reuse, not a new mechanism: an earlier version
+// of this feature bucketed by the server PROCESS's own time.Local, on the theory that
+// docker-compose.yml's server service already relied on the TZ environment variable for its
+// own clock. That theory was wrong on two counts - nothing in this server used time.Local
+// before this feature, and the compose file's server service does not forward TZ into the
+// container at all (only the CHECKIN_* variables it explicitly lists reach the container -
+// see the CHECKIN_PUBLIC_URL gotcha for the same trap elsewhere in this repo) - so the
+// distroless production image resolves time.Local to UTC unconditionally, and every
+// deployment's timeline silently bucketed by UTC regardless of where the group actually
+// lives. recap_offset has none of that fragility: it is written by the CLIENT, from a real
+// device's own clock (see recap_settings_screen.dart's DateTime.now().timeZoneOffset), so it
+// reflects an actual member's time zone and self-corrects across DST the next time recap
+// settings are saved, independent of anything about how the server container is configured.
+//
+// This is the GROUP's own stored offset, not a per-viewer one, and that is deliberate: a
+// timeline is one shared view of the group's history, and two members looking at "August"
+// have to mean the same calendar month - a per-viewer offset would let the same post land in
+// different months depending on who's asking, which is a worse kind of wrong than the whole
+// group sharing one admin-set approximation of "local".
 //
 // One query, not one per month: every eligible row is fetched in a single statement (the
 // same tradeoff RandomMemory's and EventsForViewer's own doc comments make - right-sized
@@ -88,6 +100,12 @@ type timelinePostRow struct {
 // months" gets expensive - at that point this would need a maintained per-month rollup
 // table instead of a live aggregation.
 func (d *DB) Timeline(ctx context.Context, viewerID int64) ([]TimelineMonth, error) {
+	settings, err := d.GetRecapSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	offset := time.Duration(settings.Offset) * time.Minute
+
 	rows, err := d.Pool.Query(ctx, `
 		SELECT p.id, p.author_id, COALESCE(p.location, ''), p.created_at,
 		       (SELECT count(*) FROM post_media pm JOIN media m ON m.id = pm.media_id
@@ -124,25 +142,33 @@ func (d *DB) Timeline(ctx context.Context, viewerID int64) ([]TimelineMonth, err
 		return nil, err
 	}
 
-	return bucketTimeline(eligible), nil
+	return bucketTimeline(eligible, offset), nil
 }
 
-// timelineKey is a calendar (year, month) bucket in the server's local time zone (see
+// timelineKey is a calendar (year, month) bucket in the group's stored local offset (see
 // Timeline's own doc comment).
 type timelineKey struct {
 	year  int
 	month int
 }
 
-// bucketTimeline groups eligible rows into calendar months and computes each month's stats
-// and cover picks. A pure function of the fetched rows, so the bucketing rule itself is
-// directly unit-testable without a database - the same reasoning detectEvents' own doc
-// comment gives for events. Months are omitted entirely when nothing landed in them (there
-// is nothing to omit-with-zeroes: a map only ever gains an entry when a row lands in it).
-func bucketTimeline(rows []timelinePostRow) []TimelineMonth {
+// bucketTimeline groups eligible rows into calendar months, using offset (the group's
+// stored recap_offset, minutes east of UTC as a Duration) to convert each row's created_at
+// into the group's own local wall-clock before reading off its year/month - never the
+// server process's own time.Local, which this function does not consult at all. A pure
+// function of the fetched rows and the offset, so the bucketing rule itself is directly
+// unit-testable without a database - the same reasoning detectEvents' own doc comment gives
+// for events. Months are omitted entirely when nothing landed in them (there is nothing to
+// omit-with-zeroes: a map only ever gains an entry when a row lands in it).
+func bucketTimeline(rows []timelinePostRow, offset time.Duration) []TimelineMonth {
 	buckets := make(map[timelineKey][]timelinePostRow, 12)
 	for _, r := range rows {
-		local := r.CreatedAt.In(time.Local)
+		// .UTC().Add(offset) mirrors recapDuePeriod's own idiom exactly (recap.go): the
+		// result is still tagged as a UTC time.Time, but its wall-clock fields (Year,
+		// Month, Day, ...) now numerically read as the group's own local time, which is
+		// all bucketing needs - this is never used as (or converted back into) a real
+		// time.Location.
+		local := r.CreatedAt.UTC().Add(offset)
 		k := timelineKey{year: local.Year(), month: int(local.Month())}
 		buckets[k] = append(buckets[k], r)
 	}
@@ -221,13 +247,23 @@ func buildTimelineMonth(k timelineKey, run []timelinePostRow) TimelineMonth {
 // year) before a request ever reaches this far, so a bad pair here would just mean a
 // caller bypassed that guard, not a scan this function needs to defend against itself.
 //
-// Bucketing uses the same server-local month boundaries as Timeline (see its doc comment
-// for the time-zone convention): [start, end) is computed against time.Local, then compared
-// as an absolute instant (timestamptz vs. timestamptz), so the boundary is correct
-// regardless of the database session's own time zone setting.
+// Uses the same group-local month boundaries as Timeline (see its doc comment for the
+// recap_offset convention): [start, end) is computed by taking the desired LOCAL wall-clock
+// month boundary and subtracting the offset to recover the real absolute instant - the same
+// "compute local, then subtract the offset" trick recapDuePeriod (recap.go) uses for its own
+// period boundaries - then compared as an absolute instant (timestamptz vs. timestamptz), so
+// it is correct regardless of the database session's own time zone setting.
 func (d *DB) TimelineMonthPosts(ctx context.Context, viewerID int64, year, month int) ([]Post, error) {
-	start := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.Local)
-	end := start.AddDate(0, 1, 0)
+	settings, err := d.GetRecapSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	offset := time.Duration(settings.Offset) * time.Minute
+
+	localMonthStart := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
+	localMonthEnd := localMonthStart.AddDate(0, 1, 0)
+	start := localMonthStart.Add(-offset)
+	end := localMonthEnd.Add(-offset)
 
 	rows, err := d.Pool.Query(ctx, `
 		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id, p.lat, p.lng,
