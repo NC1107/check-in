@@ -208,6 +208,13 @@ void main() {
       expect(find.text('Nothing forgotten yet.'), findsOneWidget);
       // Never a bare, permanent spinner.
       expect(find.byType(CircularProgressIndicator), findsNothing);
+      // The empty state must show this view's own feature icon, not a different one
+      // hardcoded independently of widget.icon (see _SinglePostView._emptyState's own doc
+      // comment) - the state most groups sit in for months, since nothing qualifies until a
+      // post clears the 90-day age floor.
+      expect(find.byIcon(Icons.hide_image_outlined), findsOneWidget);
+      expect(find.byIcon(Icons.history_outlined), findsNothing,
+          reason: 'the old hardcoded clock glyph must never leak into this view\'s empty state');
     });
 
     testWidgets('an honest error state when the fetch fails, with a way to retry', (tester) async {

@@ -1373,7 +1373,12 @@ class _SinglePostViewState extends ConsumerState<_SinglePostView> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.history_outlined, size: 40, color: _fgMuted),
+            // The feature's own icon, matching this file's own convention for an empty
+            // state (see _EventsListView._emptyState/Icons.map_outlined and
+            // _TimelineListView._emptyState/Icons.calendar_month_outlined, each mirroring
+            // their hub entry) - not a separate glyph the idle and unsupported states
+            // above already got right via widget.icon.
+            Icon(widget.icon, size: 40, color: _fgMuted),
             const SizedBox(height: 16),
             Text(widget.emptyTitle,
                 style: const TextStyle(
