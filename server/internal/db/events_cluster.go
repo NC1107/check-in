@@ -162,6 +162,72 @@ func displayLocation(run []eventPostRow) string {
 // check-ins I just posted from the place I'm evaluating."
 const homeBaseMinDays = 3
 
+// homeAreaMinMembers and homeAreaMinDaysPerMember are the bar a normalized location has to
+// clear to count as part of the GROUP's home area, not just one member's own modal
+// location: at least this many DISTINCT members must have each posted from that place on
+// at least this many DISTINCT days within the trailing homeBaseLookback6Months window. A
+// real hometown metro spans several nearby location strings - a member's own city, the next
+// suburb over, downtown - not one, and a per-member modal location alone treats every
+// string but a member's single most-visited one as equally foreign: that is how a
+// ten-minute trip to the next suburb reads as a "trip" while the actual home city can too,
+// whenever enough members' individual modal locations happen to be scattered across
+// slightly different strings in the same metro. Requiring evidence from at least two
+// DIFFERENT members (three-plus days apiece, not just one member's repeat visits) is what
+// keeps a real one-off group trip from ever qualifying as home area: no faraway vacation
+// destination the group is actually away from has two-plus members separately
+// accumulating 3+ days there over six months the way ordinary hometown life naturally
+// does. These numbers reuse homeBaseMinDays' own per-member day threshold and its
+// six-month window - the same evidence bar computeHomeBases already applies to an
+// individual, just requiring it from more than one person before it describes the group
+// rather than that one person alone.
+const (
+	homeAreaMinMembers       = 2
+	homeAreaMinDaysPerMember = homeBaseMinDays
+)
+
+// computeHomeArea returns the set of normalized locations (see normalizeLocation) that
+// read as the group's own collective home turf, as opposed to any single member's modal
+// location (see computeHomeBases): anywhere at least homeAreaMinMembers different members
+// each separately show homeAreaMinDaysPerMember or more days of routine posting history.
+// detectTrips never lets a run at one of these locations become a trip, regardless of what
+// any individual participant's own home base happens to be - see its own doc comment for
+// why the per-member "away from MY city" signal alone is not enough to rule out home turf.
+func computeHomeArea(rows []eventPostRow, now time.Time) map[string]bool {
+	cutoff := now.AddDate(0, homeBaseLookback6Months, 0)
+	// normalized location -> author id -> distinct days posted there.
+	days := make(map[string]map[int64]map[time.Time]bool)
+	for _, r := range rows {
+		if r.CreatedAt.Before(cutoff) {
+			continue
+		}
+		loc := normalizeLocation(r.Location)
+		byAuthor := days[loc]
+		if byAuthor == nil {
+			byAuthor = make(map[int64]map[time.Time]bool)
+			days[loc] = byAuthor
+		}
+		daySet := byAuthor[r.AuthorID]
+		if daySet == nil {
+			daySet = make(map[time.Time]bool)
+			byAuthor[r.AuthorID] = daySet
+		}
+		daySet[dayOf(r.CreatedAt)] = true
+	}
+	homeArea := make(map[string]bool, len(days))
+	for loc, byAuthor := range days {
+		qualifying := 0
+		for _, daySet := range byAuthor {
+			if len(daySet) >= homeAreaMinDaysPerMember {
+				qualifying++
+			}
+		}
+		if qualifying >= homeAreaMinMembers {
+			homeArea[loc] = true
+		}
+	}
+	return homeArea
+}
+
 // computeHomeBases returns each author's modal (most DISTINCT DAYS posted from) location
 // among their own rows from the trailing homeBaseLookback6Months, keyed by author id -
 // but only once a location clears homeBaseMinDays; see its own doc comment for why. An
@@ -229,7 +295,8 @@ func computeHomeBases(rows []eventPostRow, now time.Time) map[int64]string {
 // the thin DB-fetching wrapper that calls this.
 func detectEvents(rows []eventPostRow, now time.Time) []Event {
 	homeBase := computeHomeBases(rows, now)
-	trips, consumed := detectTrips(rows, homeBase)
+	homeArea := computeHomeArea(rows, now)
+	trips, consumed := detectTrips(rows, homeBase, homeArea)
 	gatherings := detectGatherings(rows, consumed)
 
 	events := make([]Event, 0, len(trips)+len(gatherings))
@@ -243,10 +310,15 @@ func detectEvents(rows []eventPostRow, now time.Time) []Event {
 // active days into runs (splitting wherever the gap between one active day and the next
 // exceeds tripWindow, or the run's total span from its first active day would exceed
 // tripMaxSpan), and keeps a run only when it qualifies as a trip (see
-// buildTripIfQualifies). Returns the qualifying events and the set of post ids they
-// claim, so detectGatherings never reconsiders the same posts as a second, different kind
-// of event.
-func detectTrips(rows []eventPostRow, homeBase map[int64]string) (events []Event, consumed map[int64]bool) {
+// buildTripIfQualifies). A location the group already reads as home area (see
+// computeHomeArea) is skipped entirely before any run is even built there - it is left
+// wholly unconsumed, not partially claimed and partially left over, so detectGatherings
+// sees every one of its posts and can still find a real get-together within it. Returns
+// the qualifying events and the set of post ids they claim, so detectGatherings never
+// reconsiders the same posts as a second, different kind of event.
+func detectTrips(
+	rows []eventPostRow, homeBase map[int64]string, homeArea map[string]bool,
+) (events []Event, consumed map[int64]bool) {
 	consumed = make(map[int64]bool)
 
 	byLocation := make(map[string][]eventPostRow)
@@ -261,6 +333,9 @@ func detectTrips(rows []eventPostRow, homeBase map[int64]string) (events []Event
 	sort.Strings(locations) // deterministic iteration; map order is not
 
 	for _, loc := range locations {
+		if homeArea[loc] {
+			continue
+		}
 		locRows := byLocation[loc]
 		sort.Slice(locRows, func(i, j int) bool { return locRows[i].CreatedAt.Before(locRows[j].CreatedAt) })
 
@@ -296,8 +371,13 @@ func detectTrips(rows []eventPostRow, homeBase map[int64]string) (events []Event
 
 // buildTripIfQualifies decides whether one normalized location's date-merged run of posts
 // is a trip: at least tripMinAwayAuthors distinct participants who can be confidently
-// called away from this location. What counts as away depends on what is actually known
-// about each participant, and the two cases are deliberately not treated the same:
+// called away from this location. Only ever reached for a location detectTrips has already
+// confirmed is NOT the group's own home area (see computeHomeArea) - this function has no
+// group-wide notion of "home," only each individual participant's own home base, which is
+// deliberately a weaker signal (see below) and not enough on its own to rule out a
+// location the group merely happens to spread its home-turf posting across several nearby
+// strings for. What counts as away depends on what is actually known about each
+// participant, and the two cases are deliberately not treated the same:
 //
 //   - Home base KNOWN (see computeHomeBases) and different from this location: away,
 //     regardless of how long the run is. A single day is enough - a day trip to a city
