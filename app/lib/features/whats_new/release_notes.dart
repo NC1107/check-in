@@ -18,86 +18,18 @@ class ReleaseNote {
 /// Curated release notes, newest first. Add an entry only when there's something members
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
+  // One consolidated entry rather than the eleven that shipped to TestFlight between the
+  // store's 1.5 and now: an App Store member last saw the 1.3 entry, so this is the whole
+  // story of the update they are actually installing, and it is deliberately word for word
+  // the same text as the App Store "What's New" so the two never tell different stories.
   ReleaseNote(
-    version: '1.19',
+    version: '1.20',
     highlights: [
-      'Forgotten photos: old check-ins nobody ever got round to liking, pulled back out of the archive.',
-    ],
-  ),
-  ReleaseNote(
-    version: '1.18',
-    highlights: [
-      "In more than one group? Memories now lets you pick which group you're looking back through, instead of picking for you.",
-    ],
-  ),
-  ReleaseNote(
-    version: '1.17',
-    highlights: [
-      "Month by month: scroll back through the group's history a month at a time, and open any month to see everything from it.",
-    ],
-  ),
-  ReleaseNote(
-    version: '1.16',
-    highlights: [
-      'You were there: the trips and nights out you all posted from are pulled back together, so everyone\'s photos from the same weekend sit in one place.',
-      'Find it next to the random check-in, in the same hidden spot.',
-    ],
-  ),
-  ReleaseNote(
-    version: '1.15',
-    highlights: [
-      "There's a way to pull up a random old check-in hidden somewhere in the app. Have a look around.",
-    ],
-  ),
-  ReleaseNote(
-    version: '1.14',
-    highlights: [
-      "Recap covers drift through the period's own photos while everyone who checked in floats on top.",
-      'Tap any photo in a recap to see it full screen, and jump from there to the original check-in.',
-    ],
-  ),
-  ReleaseNote(
-    version: '1.13',
-    highlights: [
-      'Recaps open on the people who checked in that period - a cluster of your faces, sized by who posted most.',
-      'Attaching a GIF to a comment no longer stacks a big empty panel above the keyboard.',
-    ],
-  ),
-  ReleaseNote(
-    version: '1.12',
-    highlights: [
-      'Recaps have a new look, and stand out from regular check-ins in your feed.',
-      "Titles: earn a badge on your profile from each week's recap, like Night Owl or Quiet Achiever. It stays until you earn a new one.",
-    ],
-  ),
-  ReleaseNote(
-    version: '1.11',
-    highlights: [
-      'Weekly recaps: your group now gets a recap post - the week in one swipeable deck, with the most-loved check-ins ranked (everyone who posted makes the wall) and awards like Night Owl and Most Travelled.',
-      'Hosts can change the recap schedule, or generate one on demand for any period, from group settings.',
-      'Save any recap panel to your camera roll to share it.',
-      'GIFs: tap the new GIF button when writing a check-in or a comment to search and attach one.',
-    ],
-  ),
-  ReleaseNote(
-    version: '1.10',
-    highlights: [
-      'Tag people on a check-in shared to several groups - each group sees its own members tagged, and the picker notes who is not in which group.',
-      'Tapping a playing clip now opens it full screen exactly in place - no restart, no stutter.',
-    ],
-  ),
-  ReleaseNote(
-    version: '1.9',
-    highlights: [
-      'Post video clips - record or pick a video, trim it down to ten seconds, and share it like a photo.',
-      'Clips play right in your feed as you scroll, with sound following your ring/silent switch. Tap one to go full screen exactly where it left off.',
-      'Invite someone with a link - it opens Check-In and fills in the group address for them. Hosts: find yours in the admin panel.',
-      'Joining another group now fills in your name and photo from the account you already have.',
-      "One check-in shared to several groups you're both in sends one notification now, not one per group.",
-      'GIFs animate now instead of freezing on their first frame.',
-      'Save any photo or video from a check-in to your camera roll.',
-      'Tapping a photo flies it into full screen instead of fading.',
-      'Joining a group no longer asks you to pick an app color again (or quietly changes the one you had).',
+      'Video clips. Record or pick a video, trim it down to ten seconds, and post it like a photo. Clips play as you scroll, with sound following your ring/silent switch, and tapping one opens it full screen right where it left off.',
+      "GIFs. There's a GIF button now when you write a check-in or a comment.",
+      "Recaps. Your group gets a recap post covering the period: one swipeable deck opening on a cover made from that period's own photos, with the most-loved check-ins ranked behind it and everyone who posted included. Hosts choose weekly or monthly, or generate one any time from group settings. You also pick up a title on your profile from it, like Night Owl or Quiet Achiever.",
+      "Memories. A place to look back through the group's history: a random old check-in, the trips and nights out you all posted from pulled back together into one place, your history month by month, and old photos nobody ever got round to liking. It isn't in the tab bar - have a look around the bottom of the feed.",
+      'Smaller things: invite links that open straight into the app and fill in the group address, tagging people on a check-in shared to several groups, filtering the feed by more than one place at once, saving any photo or clip to your camera roll, replying to a comment so that person gets notified, and one notification instead of three when a check-in is shared to groups you are both in.',
     ],
   ),
   ReleaseNote(
@@ -134,8 +66,11 @@ List<ReleaseNote> unseenReleaseNotes(String? lastSeen) {
   if (releaseNotes.isEmpty || lastSeen == null) return const [];
   if (lastSeen == releaseNotes.first.version) return const [];
   final idx = releaseNotes.indexWhere((n) => n.version == lastSeen);
-  // Unknown/older marker → everything is new; otherwise everything above it.
-  return idx < 0 ? releaseNotes : releaseNotes.sublist(0, idx);
+  // A marker we no longer recognise means the member has used the app before but their
+  // marker predates the list - entries get consolidated when one store release bundles
+  // several internal ones. Re-announcing the whole history to them would surface things
+  // they read long ago, so show only what actually just changed.
+  return idx < 0 ? releaseNotes.take(1).toList() : releaseNotes.sublist(0, idx);
 }
 
 /// Shows the "What's New" sheet once after an update, then records the latest version so it

@@ -14,8 +14,21 @@ void main() {
       expect(unseenReleaseNotes(releaseNotes.first.version), isEmpty);
     });
 
-    test('an unknown/older marker shows everything, newest first', () {
-      expect(unseenReleaseNotes('0.0-before-this-feature'), releaseNotes);
+    test('a marker we no longer recognise shows only what just changed', () {
+      // Entries get consolidated when one store release bundles several internal ones, so a
+      // marker can outlive its entry. Re-announcing the whole history to someone who has
+      // used the app for a year would surface notes they read long ago.
+      expect(unseenReleaseNotes('0.0-before-this-feature'), [releaseNotes.first]);
+    });
+
+    test('an App Store member on the last public release sees exactly one entry', () {
+      // The live store version's newest entry was 1.3, so that is the marker a member
+      // updating from it carries. They must land on the single consolidated entry whose
+      // text matches the App Store "What's New" word for word - not a wall of the internal
+      // entries that shipped to TestFlight in between.
+      final unseen = unseenReleaseNotes('1.3');
+      expect(unseen, hasLength(1));
+      expect(unseen.single.version, releaseNotes.first.version);
     });
   });
 
