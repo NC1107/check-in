@@ -27,6 +27,15 @@ const _fgPrimary = kFgPrimary;
 const _fgSecondary = kFgSecondary;
 const _fgMuted = kFgMuted;
 
+/// The photo grid shared by an event's detail (_EventDetailView) and a month's detail
+/// (_MonthDetailView) - one constant so the two can never quietly drift apart, per the
+/// founder's brief that the month grid "reuse the event detail's grid exactly".
+const _memoriesPhotoGridDelegate = SliverGridDelegateWithFixedCrossAxisCount(
+  crossAxisCount: 3,
+  mainAxisSpacing: 8,
+  crossAxisSpacing: 8,
+);
+
 /// How far open (as a fraction of the controller's 0..1 range, itself a fraction of the
 /// screen's width - the surface slides exactly one screen width) a drag has to travel before
 /// release commits it, absent a fast flick. See [settleMemoriesTarget].
@@ -270,7 +279,7 @@ class MemoriesDragDriver {
 }
 
 /// Which top-level screen the hub is showing - see [MemoriesHubController].
-enum HubScreen { hub, randomMemory, eventsList }
+enum HubScreen { hub, randomMemory, eventsList, timeline }
 
 /// The Memories surface's own tiny internal navigation stack: hub -> ("Give me a memory"
 /// or "You were there") -> (an events list entry may drill into one event's own detail).
@@ -282,12 +291,17 @@ enum HubScreen { hub, randomMemory, eventsList }
 class MemoriesHubController extends ChangeNotifier {
   HubScreen _screen = HubScreen.hub;
   Event? _selectedEvent;
+  TimelineMonth? _selectedMonth;
 
   HubScreen get screen => _screen;
 
   /// The event whose detail is showing, drilled into from the events list - null whenever
   /// the list itself (or any other screen) is what's showing.
   Event? get selectedEvent => _selectedEvent;
+
+  /// The month whose detail is showing, drilled into from the timeline list - null whenever
+  /// the list itself (or any other screen) is what's showing.
+  TimelineMonth? get selectedMonth => _selectedMonth;
 
   void openRandomMemory() {
     _screen = HubScreen.randomMemory;
@@ -305,14 +319,30 @@ class MemoriesHubController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Steps back exactly one level (event detail -> events list -> hub, or
-  /// randomMemory -> hub) and returns true, or does nothing and returns false when already
-  /// at the hub with nothing left to pop internally - the signal callers (Android back, the
-  /// header's own back chevron) use to know whether they should instead close the whole
-  /// surface.
+  void openTimeline() {
+    _screen = HubScreen.timeline;
+    _selectedMonth = null;
+    notifyListeners();
+  }
+
+  void openTimelineMonth(TimelineMonth month) {
+    _selectedMonth = month;
+    notifyListeners();
+  }
+
+  /// Steps back exactly one level (event detail -> events list -> hub, month detail ->
+  /// timeline list -> hub, or randomMemory -> hub) and returns true, or does nothing and
+  /// returns false when already at the hub with nothing left to pop internally - the
+  /// signal callers (Android back, the header's own back chevron) use to know whether they
+  /// should instead close the whole surface.
   bool back() {
     if (_selectedEvent != null) {
       _selectedEvent = null;
+      notifyListeners();
+      return true;
+    }
+    if (_selectedMonth != null) {
+      _selectedMonth = null;
       notifyListeners();
       return true;
     }
@@ -327,9 +357,10 @@ class MemoriesHubController extends ChangeNotifier {
   /// Jumps straight back to the hub root - called whenever the surface itself closes, so
   /// reopening it later never shows a stale sub-screen from last time.
   void reset() {
-    if (_screen == HubScreen.hub && _selectedEvent == null) return;
+    if (_screen == HubScreen.hub && _selectedEvent == null && _selectedMonth == null) return;
     _screen = HubScreen.hub;
     _selectedEvent = null;
+    _selectedMonth = null;
     notifyListeners();
   }
 }
@@ -677,10 +708,19 @@ class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
   // distinct child and actually animates the swap, instead of diffing into the same
   // widget type and skipping the transition.
   Widget _body() {
-    final selected = widget.hub.selectedEvent;
-    if (selected != null) {
+    final selectedEvent = widget.hub.selectedEvent;
+    if (selectedEvent != null) {
       return _EventDetailView(
-          key: ValueKey('event-${selected.postIds.join(',')}'), hub: widget.hub, event: selected);
+          key: ValueKey('event-${selectedEvent.postIds.join(',')}'),
+          hub: widget.hub,
+          event: selectedEvent);
+    }
+    final selectedMonth = widget.hub.selectedMonth;
+    if (selectedMonth != null) {
+      return _MonthDetailView(
+          key: ValueKey('month-${selectedMonth.year}-${selectedMonth.month}'),
+          hub: widget.hub,
+          month: selectedMonth);
     }
     switch (widget.hub.screen) {
       case HubScreen.hub:
@@ -689,6 +729,8 @@ class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
         return const _MemoriesBody(key: ValueKey('random'));
       case HubScreen.eventsList:
         return _EventsListView(key: const ValueKey('events'), hub: widget.hub);
+      case HubScreen.timeline:
+        return _TimelineListView(key: const ValueKey('timeline'), hub: widget.hub);
     }
   }
 
@@ -786,8 +828,9 @@ class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
   }
 }
 
-/// The hub root: "Give me a memory" and "You were there", each gated on its own server
-/// capability - a group whose server has one but not the other only ever offers that one.
+/// The hub root: "Give me a memory", "You were there" and "Your months", each gated on its
+/// own server capability - a group whose server has some subset of the three only ever
+/// offers those.
 class _MemoriesHubHome extends ConsumerWidget {
   const _MemoriesHubHome({super.key, required this.hub});
 
@@ -799,6 +842,31 @@ class _MemoriesHubHome extends ConsumerWidget {
         ref.watch(multiSessionProvider.select((s) => s.memoriesCapableShownGroups.isNotEmpty));
     final eventsOn =
         ref.watch(multiSessionProvider.select((s) => s.eventsCapableShownGroups.isNotEmpty));
+    final timelineOn =
+        ref.watch(multiSessionProvider.select((s) => s.timelineCapableShownGroups.isNotEmpty));
+    final entries = [
+      if (memoriesOn)
+        _HubEntry(
+          icon: Icons.auto_awesome_outlined,
+          title: 'Give me a memory',
+          subtitle: "Look back at something from your group's history.",
+          onTap: hub.openRandomMemory,
+        ),
+      if (eventsOn)
+        _HubEntry(
+          icon: Icons.map_outlined,
+          title: 'You were there',
+          subtitle: 'Trips and get-togethers your group shared.',
+          onTap: hub.openEventsList,
+        ),
+      if (timelineOn)
+        _HubEntry(
+          icon: Icons.calendar_month_outlined,
+          title: 'Your months',
+          subtitle: "The group's life, month by month.",
+          onTap: hub.openTimeline,
+        ),
+    ];
     return Center(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 18),
@@ -806,21 +874,10 @@ class _MemoriesHubHome extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (memoriesOn)
-              _HubEntry(
-                icon: Icons.auto_awesome_outlined,
-                title: 'Give me a memory',
-                subtitle: "Look back at something from your group's history.",
-                onTap: hub.openRandomMemory,
-              ),
-            if (memoriesOn && eventsOn) const SizedBox(height: 12),
-            if (eventsOn)
-              _HubEntry(
-                icon: Icons.map_outlined,
-                title: 'You were there',
-                subtitle: 'Trips and get-togethers your group shared.',
-                onTap: hub.openEventsList,
-              ),
+            for (var i = 0; i < entries.length; i++) ...[
+              if (i > 0) const SizedBox(height: 12),
+              entries[i],
+            ],
           ],
         ),
       ),
@@ -1508,11 +1565,7 @@ class _EventDetailViewState extends ConsumerState<_EventDetailView> {
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
             sliver: SliverGrid(
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                mainAxisSpacing: 8,
-                crossAxisSpacing: 8,
-              ),
+              gridDelegate: _memoriesPhotoGridDelegate,
               delegate: SliverChildBuilderDelegate(
                 (context, i) => _PhotoTile(post: photos[i].post, media: photos[i].media),
                 childCount: photos.length,
@@ -1576,6 +1629,410 @@ class _PhotoTile extends StatelessWidget {
             child: AuthImage(mediaId: media.id, groupId: post.groupId),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// The timeline list: the group's history bucketed into calendar months, newest first, for
+/// one (uniformly-picked, same reasoning as _EventsListViewState's own group pick)
+/// timeline-capable group in view.
+class _TimelineListView extends ConsumerStatefulWidget {
+  const _TimelineListView({super.key, required this.hub});
+
+  final MemoriesHubController hub;
+
+  @override
+  ConsumerState<_TimelineListView> createState() => _TimelineListViewState();
+}
+
+class _TimelineListViewState extends ConsumerState<_TimelineListView> {
+  List<TimelineMonth>? _months;
+  bool _loading = true;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  Future<void> _fetch() async {
+    final capable = ref.read(multiSessionProvider).timelineCapableShownGroups;
+    if (capable.isEmpty) {
+      setState(() {
+        _months = const [];
+        _loading = false;
+        _failed = false;
+      });
+      return;
+    }
+    // Picked once per visit, the same way _EventsListViewState picks a group for "You were
+    // there" - a group's history is inherently its own, so there is no sensible way to
+    // merge several groups' months into one shared timeline.
+    final group = capable[Random().nextInt(capable.length)];
+    setState(() {
+      _loading = true;
+      _failed = false;
+    });
+    try {
+      final months = await ref.read(apiForGroupProvider(group.id)).timeline();
+      if (!mounted) return;
+      setState(() {
+        _months = [for (final m in months) m.withGroup(group.id)];
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return Center(child: CircularProgressIndicator(color: context.accent));
+    if (_failed) return _errorState(context);
+    final months = _months ?? const [];
+    if (months.isEmpty) return _emptyState(context);
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(18, 4, 18, 24),
+      itemCount: months.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (_, i) => _MonthCard(
+        month: months[i],
+        onTap: () => widget.hub.openTimelineMonth(months[i]),
+      ),
+    );
+  }
+
+  Widget _emptyState(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.calendar_month_outlined, size: 40, color: _fgMuted),
+            SizedBox(height: 16),
+            Text('No history yet.',
+                style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            SizedBox(height: 6),
+            Text(
+              "Once your group starts checking in, their months will show up here.",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: _fgMuted, fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _errorState(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cloud_off_outlined, size: 40, color: _fgMuted),
+            const SizedBox(height: 16),
+            const Text("Couldn't load your group's months.",
+                style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 20),
+            PrimaryButton(label: 'Try again', enabled: !_loading, busy: _loading, onTap: _fetch),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One month: its cover strip, the month and year, and its numbers - check-ins, photos,
+/// places, and how many people posted. Tapping it opens that month's own photo grid (see
+/// _MonthDetailView).
+class _MonthCard extends StatelessWidget {
+  const _MonthCard({required this.month, required this.onTap});
+
+  final TimelineMonth month;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: month.label,
+      child: GestureDetector(
+        onTap: onTap,
+        // See _EventCard's identical guard: without this every descendant Text merges its
+        // own semantics into this node, turning one announced action into a wall of text.
+        child: ExcludeSemantics(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: _bgSurface,
+                border: Border.all(color: _border),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _CoverStrip(month: month),
+                  Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(month.label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 15)),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 14,
+                          runSpacing: 6,
+                          children: [
+                            _StatItem(
+                                icon: Icons.check_circle_outline,
+                                value: month.postCount,
+                                suffix: month.postCount == 1 ? 'check-in' : 'check-ins'),
+                            if (month.photoCount > 0)
+                              _StatItem(
+                                  icon: Icons.photo_outlined,
+                                  value: month.photoCount,
+                                  suffix: month.photoCount == 1 ? 'photo' : 'photos'),
+                            if (month.placeCount > 0)
+                              _StatItem(
+                                  icon: Icons.place_outlined,
+                                  value: month.placeCount,
+                                  suffix: month.placeCount == 1 ? 'place' : 'places'),
+                            _StatItem(
+                                icon: Icons.groups_outlined,
+                                value: month.posterCount,
+                                suffix: month.posterCount == 1 ? 'person' : 'people'),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One "N label" stat, e.g. "12 check-ins" - a small icon plus text pair a month card's
+/// stat row repeats for each number it shows.
+class _StatItem extends StatelessWidget {
+  const _StatItem({required this.icon, required this.value, required this.suffix});
+
+  final IconData icon;
+  final int value;
+  final String suffix;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: _fgMuted),
+        const SizedBox(width: 3),
+        Text('$value $suffix', style: const TextStyle(color: _fgMuted, fontSize: 12)),
+      ],
+    );
+  }
+}
+
+/// A month card's cover art: a thin strip of its best photos side by side, or a plain
+/// placeholder when the month carries no cover at all (an all-text month). Each tile is
+/// its own [AuthImage], which already degrades a since-deleted cover to a broken-image
+/// icon on its own (see auth_image.dart's errorWidget) rather than failing the whole card -
+/// exactly the "missing media must degrade, not break the strip" contract this needs.
+class _CoverStrip extends StatelessWidget {
+  const _CoverStrip({required this.month});
+
+  final TimelineMonth month;
+
+  @override
+  Widget build(BuildContext context) {
+    final ids = month.coverMediaIds;
+    if (ids.isEmpty) {
+      return const AspectRatio(
+        aspectRatio: 16 / 9,
+        child: ColoredBox(
+          color: _bgSurfaceHover,
+          child: Center(
+            child: Icon(Icons.photo_outlined, size: 32, color: _fgMuted),
+          ),
+        ),
+      );
+    }
+    return AspectRatio(
+      aspectRatio: 16 / 9,
+      child: Row(
+        children: [
+          for (var i = 0; i < ids.length; i++) ...[
+            if (i > 0) const SizedBox(width: 1),
+            Expanded(child: AuthImage(mediaId: ids[i], groupId: month.groupId)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// One month's own photos: fetches that month's posts directly - unlike _EventDetailView,
+/// which only ever has post ids to re-fetch one by one, the timeline month route already
+/// returns full feed-shaped posts in one call - and flattens them into the exact same photo
+/// grid _EventDetailView uses (see _memoriesPhotoGridDelegate): same columns, spacing, and
+/// tile radius. Tapping a photo opens the same full-screen viewer and "go to post" route.
+class _MonthDetailView extends ConsumerStatefulWidget {
+  const _MonthDetailView({super.key, required this.hub, required this.month});
+
+  final MemoriesHubController hub;
+  final TimelineMonth month;
+
+  @override
+  ConsumerState<_MonthDetailView> createState() => _MonthDetailViewState();
+}
+
+class _MonthDetailViewState extends ConsumerState<_MonthDetailView> {
+  List<Post>? _posts;
+
+  /// Whether the server capped this month's posts (see ApiClient.timelineMonth) - the
+  /// header's own check-in count is built from _posts.length plus this flag, never from
+  /// widget.month.postCount: that field is an unbounded aggregate from the month LIST route
+  /// and can legitimately exceed what this screen actually fetched and can show.
+  bool _hasMore = false;
+  bool _loading = true;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final groupId = widget.month.groupId;
+    if (groupId == null) {
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+      return;
+    }
+    try {
+      final result = await ref
+          .read(apiForGroupProvider(groupId))
+          .timelineMonth(widget.month.year, widget.month.month);
+      if (!mounted) return;
+      setState(() {
+        _posts = [for (final p in result.posts) p.withGroup(groupId)];
+        _hasMore = result.hasMore;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+    }
+  }
+
+  /// Every image on every fetched post, in the server's own (newest-first) order, paired
+  /// with the post it belongs to - the same flattening _EventDetailView.photos does.
+  List<({Post post, PostMedia media})> get _photos => [
+        for (final p in _posts ?? const <Post>[])
+          for (final m in p.imageMedia) (post: p, media: m),
+      ];
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return Center(child: CircularProgressIndicator(color: context.accent));
+    if (_failed) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off_outlined, size: 40, color: _fgMuted),
+              const SizedBox(height: 16),
+              const Text("Couldn't load this month.",
+                  style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 20),
+              PrimaryButton(label: 'Try again', enabled: true, onTap: _load),
+            ],
+          ),
+        ),
+      );
+    }
+    final photos = _photos;
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(child: _header(context)),
+        if (photos.isEmpty)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 40),
+              child: Center(
+                child:
+                    Text('No photos this month.', style: TextStyle(color: _fgMuted, fontSize: 13)),
+              ),
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+            sliver: SliverGrid(
+              gridDelegate: _memoriesPhotoGridDelegate,
+              delegate: SliverChildBuilderDelegate(
+                (context, i) => _PhotoTile(post: photos[i].post, media: photos[i].media),
+                childCount: photos.length,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _header(BuildContext context) {
+    final month = widget.month;
+    // Sized off what was actually fetched (see _load's own doc comment on _hasMore), so
+    // this line can never claim more check-ins than the grid below it actually holds. A
+    // "+" marks a month the server capped, rather than silently rounding it down to a
+    // plain (and then quietly wrong) number.
+    final shown = _posts?.length ?? 0;
+    final countLabel = _hasMore ? '$shown+' : '$shown';
+    final checkinNoun = (!_hasMore && shown == 1) ? 'check-in' : 'check-ins';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 4, 18, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(month.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
+          const SizedBox(height: 4),
+          Text(
+            '$countLabel $checkinNoun · '
+            '${month.posterCount} ${month.posterCount == 1 ? 'person' : 'people'}',
+            style: const TextStyle(color: _fgMuted, fontSize: 13),
+          ),
+        ],
       ),
     );
   }
