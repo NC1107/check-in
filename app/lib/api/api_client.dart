@@ -294,7 +294,7 @@ class ApiClient {
     return post == null ? null : Post.fromJson(post as Map<String, dynamic>);
   }
 
-  /// events fetches the "You were there" group events for this group's history, newest
+  /// events fetches the "Group trips" group events for this group's history, newest
   /// first - a clean empty list, not a failure, for a group with none detected yet (see
   /// the server's handleEvents). Only ever called against a group whose server-info
   /// advertised [ServerInfo.eventsCapable]; an older server has no such route.
@@ -308,10 +308,10 @@ class ApiClient {
   }
 
   /// timeline fetches this group's history bucketed into calendar months, newest first,
-  /// for the Memories hub's "Your months" browse - a clean empty list, not a failure, for a
-  /// group with no history yet (see the server's handleTimeline). Only ever called against
-  /// a group whose server-info advertised [ServerInfo.timelineCapable]; an older server has
-  /// no such route.
+  /// for the Memories hub's "Month by month" browse - a clean empty list, not a failure,
+  /// for a group with no history yet (see the server's handleTimeline). Only ever called
+  /// against a group whose server-info advertised [ServerInfo.timelineCapable]; an older
+  /// server has no such route.
   Future<List<TimelineMonth>> timeline() async {
     final r = await _dio.get('/api/memories/timeline');
     return ((r.data as Map<String, dynamic>)['months'] as List)

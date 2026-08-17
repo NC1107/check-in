@@ -230,12 +230,22 @@ class MultiSession {
           if (g.eventsCapable) g
       ];
 
-  /// The shown groups whose server advertises the Timeline capability - what the "Your
-  /// months" hub entry draws from. Independent of the other two hub-entry capabilities: a
+  /// The shown groups whose server advertises the Timeline capability - what the "Month by
+  /// month" hub entry draws from. Independent of the other two hub-entry capabilities: a
   /// server can have any subset of them.
   List<ServerAccount> get timelineCapableShownGroups => [
         for (final g in shownGroups)
           if (g.timelineCapable) g
+      ];
+
+  /// The shown groups capable of at least one Memories-surface feature (memories, events,
+  /// or timeline) - the option set for the Memories surface's own group selector (see
+  /// memories_screen.dart's header). A group need not have every capability to appear
+  /// here; which of the surface's three views it actually offers is decided per-group
+  /// once it's the selected one (see effectiveMemoriesGroupId and _MemoriesHubHome).
+  List<ServerAccount> get memoriesSurfaceCapableShownGroups => [
+        for (final g in shownGroups)
+          if (g.memoriesCapable || g.eventsCapable || g.timelineCapable) g
       ];
 
   /// Default cross-post targets for a new check-in: the groups currently in view

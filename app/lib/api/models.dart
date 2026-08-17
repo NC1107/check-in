@@ -72,15 +72,14 @@ class ServerInfo {
   /// the handle entirely rather than opening a surface that can never load anything.
   final bool memoriesCapable;
 
-  /// Whether this server has GET /api/memories/events - the "You were there" group-event
-  /// hub entry. Same story as [memoriesCapable]: a server predating it has no such route
-  /// at all, so the client hides that one hub entry rather than opening a list that can
-  /// never load anything. Independent of memoriesCapable - a server can have one without
-  /// the other.
+  /// Whether this server has GET /api/memories/events - the "Group trips" hub entry. Same
+  /// story as [memoriesCapable]: a server predating it has no such route at all, so the
+  /// client hides that one hub entry rather than opening a list that can never load
+  /// anything. Independent of memoriesCapable - a server can have one without the other.
   final bool eventsCapable;
 
   /// Whether this server has GET /api/memories/timeline and
-  /// /api/memories/timeline/{year}/{month} - the "Your months" hub entry. Same story as
+  /// /api/memories/timeline/{year}/{month} - the "Month by month" hub entry. Same story as
   /// [memoriesCapable] and [eventsCapable]: a server predating it has no such routes at
   /// all, so the client hides that hub entry rather than opening a browse that can never
   /// load anything. Independent of the other two.
@@ -944,7 +943,7 @@ class NotifyPrefs {
       );
 }
 
-/// One "You were there" detected group event - a trip (the group somewhere none of them
+/// One "Group trips" detected group event - a trip (the group somewhere none of them
 /// call home) or a gathering (a concentrated get-together at home turf). See the server's
 /// db/events_cluster.go for the whole detection algorithm this is a snapshot of.
 class Event {
@@ -1035,8 +1034,8 @@ class EventParticipant {
       );
 }
 
-/// One calendar month of a group's history for the "Your months" browse - see the server's
-/// db/timeline.go for the whole aggregation and its month-bucketing convention.
+/// One calendar month of a group's history for the "Month by month" browse - see the
+/// server's db/timeline.go for the whole aggregation and its month-bucketing convention.
 class TimelineMonth {
   TimelineMonth({
     required this.year,
