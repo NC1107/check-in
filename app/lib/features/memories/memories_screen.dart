@@ -293,7 +293,33 @@ class MemoriesHubController extends ChangeNotifier {
   Event? _selectedEvent;
   TimelineMonth? _selectedMonth;
 
+  /// The explicit group pick from the surface's own group selector, or null when nothing
+  /// has been picked yet (every reader falls back to [effectiveMemoriesGroupId]'s
+  /// deterministic default in that case). Lives here, not in a Riverpod provider, because
+  /// this controller is already the one thing every screen in the surface shares and
+  /// already outlives individual screen visits for exactly this reason (see the class doc
+  /// comment) - reusing it needs no new persistence machinery of its own.
+  String? _selectedGroupId;
+
   HubScreen get screen => _screen;
+
+  /// The group every Memories view currently reads from, once a selection has actually
+  /// been made - see [effectiveMemoriesGroupId] for what callers use instead, which also
+  /// covers the not-yet-selected case.
+  String? get selectedGroupId => _selectedGroupId;
+
+  /// Explicitly switches which group the whole surface reads from - the group selector's
+  /// own onTap. A no-op when [id] is already selected, so it can never trigger a spurious
+  /// refetch loop. Deliberately never called automatically with a computed default: see
+  /// [effectiveMemoriesGroupId], which resolves the default fresh on every read instead of
+  /// writing it back here, so a session change (a group hidden, added, or losing
+  /// capability) before any real pick is made can never leave this pinned to a stale
+  /// choice.
+  void selectGroup(String id) {
+    if (_selectedGroupId == id) return;
+    _selectedGroupId = id;
+    notifyListeners();
+  }
 
   /// The event whose detail is showing, drilled into from the events list - null whenever
   /// the list itself (or any other screen) is what's showing.
@@ -355,7 +381,10 @@ class MemoriesHubController extends ChangeNotifier {
   }
 
   /// Jumps straight back to the hub root - called whenever the surface itself closes, so
-  /// reopening it later never shows a stale sub-screen from last time.
+  /// reopening it later never shows a stale sub-screen from last time. Deliberately leaves
+  /// [selectedGroupId] untouched: the surface stays mounted for the app's whole session
+  /// (see home_shell.dart), so a group choice made on an earlier visit should still be
+  /// there the next time the surface opens, not reset along with the navigation stack.
   void reset() {
     if (_screen == HubScreen.hub && _selectedEvent == null && _selectedMonth == null) return;
     _screen = HubScreen.hub;
@@ -363,6 +392,29 @@ class MemoriesHubController extends ChangeNotifier {
     _selectedMonth = null;
     notifyListeners();
   }
+}
+
+/// The group every Memories view should actually read from right now: [picked] itself when
+/// it still names a group both shown and capable of at least one Memories-surface feature,
+/// otherwise a deterministic fallback - the feed's own single-group filter
+/// ([MultiSession.soleShown]) when that filter narrows to exactly one such group, else the
+/// first capable group in the app's existing shown-group ordering. Null only when [session]
+/// has no capable group shown at all.
+///
+/// A pure function of its arguments, not a stateful resolution written back into
+/// [MemoriesHubController] - every caller (the header selector, the hub's own per-entry
+/// capability gate, and each of the three views) just calls this fresh off the live
+/// [MultiSession], so a group being hidden, removed, or losing capability while the
+/// surface sits open can never leave the surface pointing at nothing, and - the bug this
+/// whole feature replaces - the result is never randomly chosen: the same inputs always
+/// resolve to the same group.
+String? effectiveMemoriesGroupId(MultiSession session, String? picked) {
+  final capable = session.memoriesSurfaceCapableShownGroups;
+  if (capable.isEmpty) return null;
+  if (picked != null && capable.any((g) => g.id == picked)) return picked;
+  final sole = session.soleShown;
+  if (sole != null && capable.any((g) => g.id == sole.id)) return sole.id;
+  return capable.first.id;
 }
 
 /// The memory's age the way a person would say it: "3 years ago" once the gap crosses a
@@ -689,7 +741,7 @@ class _MemoriesSurfaceState extends State<MemoriesSurface> {
   }
 }
 
-class _MemoriesSurfaceContent extends StatefulWidget {
+class _MemoriesSurfaceContent extends ConsumerStatefulWidget {
   const _MemoriesSurfaceContent(
       {required this.controller, required this.onClose, required this.hub});
 
@@ -698,16 +750,22 @@ class _MemoriesSurfaceContent extends StatefulWidget {
   final MemoriesHubController hub;
 
   @override
-  State<_MemoriesSurfaceContent> createState() => _MemoriesSurfaceContentState();
+  ConsumerState<_MemoriesSurfaceContent> createState() => _MemoriesSurfaceContentState();
 }
 
-class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
+class _MemoriesSurfaceContentState extends ConsumerState<_MemoriesSurfaceContent> {
   late final _drag = MemoriesDragDriver(widget.controller);
 
-  // Keyed per screen (and per selected event) so AnimatedSwitcher below treats each as a
-  // distinct child and actually animates the swap, instead of diffing into the same
-  // widget type and skipping the transition.
-  Widget _body() {
+  // Keyed per screen (and per selected event, month, or - for the three group-scoped
+  // screens - selected group) so AnimatedSwitcher below treats each as a distinct child
+  // and actually animates the swap, instead of diffing into the same widget type and
+  // skipping the transition. Embedding the group id in the events/timeline keys is also
+  // what makes switching the header's group selector refetch those two: a new key remounts
+  // the view outright, which is a plain, correct refetch since both start from a loading
+  // state on every visit anyway (see _EventsListViewState/_TimelineListViewState). The
+  // random-memory screen deliberately does NOT remount this way - see _MemoriesBody's own
+  // doc comment for why it instead reacts to a group change via didUpdateWidget.
+  Widget _body(String? selectedGroupId) {
     final selectedEvent = widget.hub.selectedEvent;
     if (selectedEvent != null) {
       return _EventDetailView(
@@ -726,11 +784,14 @@ class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
       case HubScreen.hub:
         return _MemoriesHubHome(key: const ValueKey('hub'), hub: widget.hub);
       case HubScreen.randomMemory:
-        return const _MemoriesBody(key: ValueKey('random'));
+        return _MemoriesBody(
+            key: const ValueKey('random'), hub: widget.hub, groupId: selectedGroupId);
       case HubScreen.eventsList:
-        return _EventsListView(key: const ValueKey('events'), hub: widget.hub);
+        return _EventsListView(
+            key: ValueKey('events-$selectedGroupId'), hub: widget.hub, groupId: selectedGroupId);
       case HubScreen.timeline:
-        return _TimelineListView(key: const ValueKey('timeline'), hub: widget.hub);
+        return _TimelineListView(
+            key: ValueKey('timeline-$selectedGroupId'), hub: widget.hub, groupId: selectedGroupId);
     }
   }
 
@@ -738,6 +799,8 @@ class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
   Widget build(BuildContext context) {
     final width = MediaQuery.sizeOf(context).width;
     final reduceMotion = MediaQuery.of(context).disableAnimations;
+    final session = ref.watch(multiSessionProvider);
+    final capableGroups = session.memoriesSurfaceCapableShownGroups;
     return GestureDetector(
       onHorizontalDragStart: (_) => _drag.start(),
       onHorizontalDragUpdate: (d) => _drag.update(d, width, reduceMotion),
@@ -758,6 +821,11 @@ class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
               // a swap of one for the other. Absent at the hub root, where there's nowhere
               // left to step back to.
               final atRoot = widget.hub.screen == HubScreen.hub && widget.hub.selectedEvent == null;
+              // The group selector only makes sense one level up from a specific fetched
+              // event or month - drilling further in is already scoped to whatever group
+              // that item came from, and switching there would have nothing coherent to do.
+              final inDetail = widget.hub.selectedEvent != null || widget.hub.selectedMonth != null;
+              final selectedGroupId = effectiveMemoriesGroupId(session, widget.hub.selectedGroupId);
               return Column(
                 children: [
                   Padding(
@@ -800,6 +868,18 @@ class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
                       ],
                     ),
                   ),
+                  // Only shown with something real to choose between - a member of exactly
+                  // one capable group (by far the common case) sees nothing here at all,
+                  // same as before this feature existed.
+                  if (capableGroups.length > 1 && !inDetail)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 14, right: 14, bottom: 10),
+                      child: _MemoriesGroupSelector(
+                        groups: capableGroups,
+                        selectedGroupId: selectedGroupId,
+                        onSelect: widget.hub.selectGroup,
+                      ),
+                    ),
                   Expanded(
                     // A lightweight fade + slide so stepping between hub/list/detail feels
                     // like the rest of the app's pushes, without dragging in a full
@@ -815,7 +895,7 @@ class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
                           child: child,
                         ),
                       ),
-                      child: _body(),
+                      child: _body(selectedGroupId),
                     ),
                   ),
                 ],
@@ -828,9 +908,103 @@ class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
   }
 }
 
-/// The hub root: "Give me a memory", "You were there" and "Your months", each gated on its
-/// own server capability - a group whose server has some subset of the three only ever
-/// offers those.
+/// One group in the Memories surface's own header selector (see
+/// [_MemoriesGroupSelector]) - the same pill idiom the feed's own filter sheet uses for its
+/// GROUPS row (a color dot, a border pill, a checkmark and accent fill once selected), so
+/// switching groups here reads as the app's existing multi-group affordance rather than a
+/// new one invented for this screen.
+class _MemoriesGroupPill extends StatelessWidget {
+  const _MemoriesGroupPill({required this.account, required this.selected, required this.onTap});
+
+  final ServerAccount account;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: account.displayName,
+      child: GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+          decoration: BoxDecoration(
+            color: selected ? context.accent : Colors.transparent,
+            border: Border.all(color: selected ? context.accent : _border),
+            borderRadius: BorderRadius.circular(9999),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(color: account.displayColor, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 6),
+              if (selected) ...[
+                Icon(Icons.check, size: 14, color: context.onAccent),
+                const SizedBox(width: 4),
+              ],
+              Text(account.displayName,
+                  style: TextStyle(
+                      color: selected ? context.onAccent : _fgSecondary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The Memories surface header's own group switcher: one [_MemoriesGroupPill] per capable
+/// shown group, horizontally scrollable so it never wraps the header taller. Governs all
+/// three of the surface's views at once (see [effectiveMemoriesGroupId]) - picking a group
+/// here is the one place that selection changes.
+class _MemoriesGroupSelector extends StatelessWidget {
+  const _MemoriesGroupSelector({
+    required this.groups,
+    required this.selectedGroupId,
+    required this.onSelect,
+  });
+
+  final List<ServerAccount> groups;
+  final String? selectedGroupId;
+  final ValueChanged<String> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    // A SingleChildScrollView, not a ListView, deliberately: it sizes itself to its child's
+    // own height rather than needing one handed down from a fixed-height box tuned to match
+    // the pills' current metrics - a future tweak to the pill's own padding or icon size can
+    // never leave it clipped again.
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (var i = 0; i < groups.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            _MemoriesGroupPill(
+              account: groups[i],
+              selected: groups[i].id == selectedGroupId,
+              onTap: () => onSelect(groups[i].id),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// The hub root: "Random check-in", "Group trips" and "Month by month", each gated on the
+/// SELECTED group's own server capability (see [effectiveMemoriesGroupId]) - a group whose
+/// server has some subset of the three only ever offers those, and switching the header's
+/// group selector changes which subset shows here exactly as it changes what the other two
+/// views fetch.
 class _MemoriesHubHome extends ConsumerWidget {
   const _MemoriesHubHome({super.key, required this.hub});
 
@@ -838,32 +1012,31 @@ class _MemoriesHubHome extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final memoriesOn =
-        ref.watch(multiSessionProvider.select((s) => s.memoriesCapableShownGroups.isNotEmpty));
-    final eventsOn =
-        ref.watch(multiSessionProvider.select((s) => s.eventsCapableShownGroups.isNotEmpty));
-    final timelineOn =
-        ref.watch(multiSessionProvider.select((s) => s.timelineCapableShownGroups.isNotEmpty));
+    final session = ref.watch(multiSessionProvider);
+    final selected = session.byId(effectiveMemoriesGroupId(session, hub.selectedGroupId));
+    final memoriesOn = selected?.memoriesCapable ?? false;
+    final eventsOn = selected?.eventsCapable ?? false;
+    final timelineOn = selected?.timelineCapable ?? false;
     final entries = [
       if (memoriesOn)
         _HubEntry(
           icon: Icons.auto_awesome_outlined,
-          title: 'Give me a memory',
+          title: 'Random check-in',
           subtitle: "Look back at something from your group's history.",
           onTap: hub.openRandomMemory,
         ),
       if (eventsOn)
         _HubEntry(
           icon: Icons.map_outlined,
-          title: 'You were there',
-          subtitle: 'Trips and get-togethers your group shared.',
+          title: 'Group trips',
+          subtitle: 'Trips and nights out your group shared.',
           onTap: hub.openEventsList,
         ),
       if (timelineOn)
         _HubEntry(
           icon: Icons.calendar_month_outlined,
-          title: 'Your months',
-          subtitle: "The group's life, month by month.",
+          title: 'Month by month',
+          subtitle: "The group's life, one month at a time.",
           onTap: hub.openTimeline,
         ),
     ];
@@ -942,11 +1115,14 @@ class _HubEntry extends StatelessWidget {
   }
 }
 
-/// The "Give me a memory" screen: the existing single-random-post action and whatever it
-/// fetches. Pushed onto the hub rather than shown at its root - see
-/// [MemoriesHubController].
+/// The "Random check-in" screen: the existing single-random-post action and whatever it
+/// fetches, scoped to [groupId] (see [effectiveMemoriesGroupId]). Pushed onto the hub
+/// rather than shown at its root - see [MemoriesHubController].
 class _MemoriesBody extends ConsumerStatefulWidget {
-  const _MemoriesBody({super.key});
+  const _MemoriesBody({super.key, required this.hub, required this.groupId});
+
+  final MemoriesHubController hub;
+  final String? groupId;
 
   @override
   ConsumerState<_MemoriesBody> createState() => _MemoriesBodyState();
@@ -957,40 +1133,85 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
   bool _loading = false;
   bool _fetched = false;
   bool _failed = false;
+  bool _unsupported = false;
+
+  /// Bumped by every call to [_fetch]; a call captures its own value and only ever applies
+  /// its result if it's still the current one when the response lands. Without this, a
+  /// group switch mid-request couldn't tell "this response belongs to the group now
+  /// selected" from "this response belongs to a group that's since been abandoned" - a late
+  /// arrival from the abandoned request would still call setState and paint its content
+  /// under a header pill that by then names a different group entirely.
+  int _fetchSeq = 0;
+
+  @override
+  void didUpdateWidget(_MemoriesBody old) {
+    super.didUpdateWidget(old);
+    if (old.groupId == widget.groupId) return;
+    // Nothing has ever been fetched for this screen, so there is nothing on screen that
+    // could disagree with the pill - stays idle, exactly like a fresh mount. It is a
+    // deliberate one-tap action, not something that should fire a request just because the
+    // selector moved.
+    if (!_loading && !_fetched) return;
+    // A fetch already started for the OLD group - in flight, or already landed. Reset to
+    // the same pre-fetch state a fresh mount starts from, THEN fetch again: the screen goes
+    // straight from "old group's content" to idle-while-loading and never sits on the old
+    // group's card, error, or unsupported message under the newly selected group's pill -
+    // not even for a single frame. Bumping _fetchSeq inside _fetch() below also means a
+    // still-in-flight response from the old group is discarded on arrival rather than
+    // painting over whatever this triggers next. See memories_test.dart's "switch during
+    // the first fetch" regression test.
+    setState(() {
+      _memory = null;
+      _loading = false;
+      _fetched = false;
+      _failed = false;
+      _unsupported = false;
+    });
+    _fetch();
+  }
 
   Future<void> _fetch() async {
-    final capable = ref.read(multiSessionProvider).memoriesCapableShownGroups;
-    if (capable.isEmpty) {
+    final seq = ++_fetchSeq;
+    final groupId = widget.groupId;
+    // Reads the current group's ServerAccount up front and reuses it after the await below
+    // rather than re-resolving it once the response lands: the selection can change while
+    // the request is in flight, and the fetched post has to stay tagged with the group it
+    // actually came from - not whatever happens to be selected by the time the response
+    // lands. See memories_test.dart's mid-flight selection-change test.
+    final account = groupId == null ? null : ref.read(multiSessionProvider).byId(groupId);
+    if (account == null) {
       setState(() {
         _fetched = true;
         _failed = false;
+        _unsupported = false;
         _memory = null;
       });
       return;
     }
-    // Uniformly across every capable group in view, not just the current one - a multi-group
-    // member's memories should draw from all of them, same as the feed does.
-    //
-    // Picked once, here, and reused after the await below rather than re-read from
-    // provider state at that point: the shown-group selection can change while the request
-    // is in flight (switching groups, a filter change), and the fetched post has to stay
-    // tagged with the group it actually came from - not whatever happens to be selected by
-    // the time the response lands. See memories_test.dart's mid-flight selection-change test.
-    final group = capable[Random().nextInt(capable.length)];
+    if (!account.memoriesCapable) {
+      setState(() {
+        _fetched = true;
+        _failed = false;
+        _unsupported = true;
+        _memory = null;
+      });
+      return;
+    }
     setState(() {
       _loading = true;
       _failed = false;
+      _unsupported = false;
     });
     try {
-      final post = await ref.read(apiForGroupProvider(group.id)).randomMemory();
-      if (!mounted) return;
+      final post = await ref.read(apiForGroupProvider(account.id)).randomMemory();
+      if (!mounted || seq != _fetchSeq) return;
       setState(() {
-        _memory = post?.withGroup(group.id);
+        _memory = post?.withGroup(account.id);
         _loading = false;
         _fetched = true;
       });
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || seq != _fetchSeq) return;
       setState(() {
         _loading = false;
         _fetched = true;
@@ -1010,6 +1231,7 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
   Widget build(BuildContext context) {
     if (!_fetched) return _idle(context);
     if (_failed) return _errorState(context);
+    if (_unsupported) return _unsupportedState(context);
     final m = _memory;
     return m == null ? _emptyState(context) : _loadedState(context, m);
   }
@@ -1027,7 +1249,30 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
                 textAlign: TextAlign.center, style: TextStyle(color: _fgSecondary, fontSize: 14)),
             const SizedBox(height: 20),
             PrimaryButton(
-                label: 'Give me a memory', enabled: !_loading, busy: _loading, onTap: _fetch),
+                label: 'Random check-in', enabled: !_loading, busy: _loading, onTap: _fetch),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _unsupportedState(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.auto_awesome_outlined, size: 40, color: _fgMuted),
+            SizedBox(height: 16),
+            Text("This group doesn't support Random check-in.",
+                style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            SizedBox(height: 6),
+            Text(
+              'Its server needs an update before this can pull anything up from its history.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: _fgMuted, fontSize: 13),
+            ),
           ],
         ),
       ),
@@ -1205,13 +1450,15 @@ String eventDateRangeLabel(Event event, {DateTime? now}) {
   return '${DateFormat.yMMMd().format(start)} - ${DateFormat.yMMMd().format(end)}';
 }
 
-/// The events list: every detected trip/gathering for one (uniformly-picked, same
-/// reasoning as _MemoriesBodyState's own memory pick) events-capable group in view,
-/// newest first exactly as the server already ranks them.
+/// The events list: every detected trip/gathering for [groupId] (see
+/// [effectiveMemoriesGroupId]), newest first exactly as the server already ranks them. Keyed
+/// by that group id at the call site (see _MemoriesSurfaceContentState._body), so switching
+/// the header's group selector remounts this fresh rather than leaving stale events up.
 class _EventsListView extends ConsumerStatefulWidget {
-  const _EventsListView({super.key, required this.hub});
+  const _EventsListView({super.key, required this.hub, required this.groupId});
 
   final MemoriesHubController hub;
+  final String? groupId;
 
   @override
   ConsumerState<_EventsListView> createState() => _EventsListViewState();
@@ -1221,6 +1468,7 @@ class _EventsListViewState extends ConsumerState<_EventsListView> {
   List<Event>? _events;
   bool _loading = true;
   bool _failed = false;
+  bool _unsupported = false;
 
   @override
   void initState() {
@@ -1229,28 +1477,36 @@ class _EventsListViewState extends ConsumerState<_EventsListView> {
   }
 
   Future<void> _fetch() async {
-    final capable = ref.read(multiSessionProvider).eventsCapableShownGroups;
-    if (capable.isEmpty) {
+    final groupId = widget.groupId;
+    final account = groupId == null ? null : ref.read(multiSessionProvider).byId(groupId);
+    if (account == null) {
       setState(() {
         _events = const [];
         _loading = false;
         _failed = false;
+        _unsupported = false;
       });
       return;
     }
-    // Picked once per visit, the same way _MemoriesBodyState picks a group for "Give me a
-    // memory" - events are inherently one group's own history, so there is no sensible way
-    // to merge several groups' events into one list the way the feed merges posts.
-    final group = capable[Random().nextInt(capable.length)];
+    if (!account.eventsCapable) {
+      setState(() {
+        _events = const [];
+        _loading = false;
+        _failed = false;
+        _unsupported = true;
+      });
+      return;
+    }
     setState(() {
       _loading = true;
       _failed = false;
+      _unsupported = false;
     });
     try {
-      final events = await ref.read(apiForGroupProvider(group.id)).events();
+      final events = await ref.read(apiForGroupProvider(account.id)).events();
       if (!mounted) return;
       setState(() {
-        _events = [for (final e in events) e.withGroup(group.id)];
+        _events = [for (final e in events) e.withGroup(account.id)];
         _loading = false;
       });
     } catch (_) {
@@ -1266,6 +1522,7 @@ class _EventsListViewState extends ConsumerState<_EventsListView> {
   Widget build(BuildContext context) {
     if (_loading) return Center(child: CircularProgressIndicator(color: context.accent));
     if (_failed) return _errorState(context);
+    if (_unsupported) return _unsupportedState(context);
     final events = _events ?? const [];
     if (events.isEmpty) return _emptyState(context);
     return ListView.separated(
@@ -1293,6 +1550,29 @@ class _EventsListViewState extends ConsumerState<_EventsListView> {
             SizedBox(height: 6),
             Text(
               "Once your group checks in together from the same place, they'll show up here.",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: _fgMuted, fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _unsupportedState(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.map_outlined, size: 40, color: _fgMuted),
+            SizedBox(height: 16),
+            Text("This group doesn't support Group trips.",
+                style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            SizedBox(height: 6),
+            Text(
+              'Its server needs an update before trips and gatherings can show up here.',
               textAlign: TextAlign.center,
               style: TextStyle(color: _fgMuted, fontSize: 13),
             ),
@@ -1635,12 +1915,14 @@ class _PhotoTile extends StatelessWidget {
 }
 
 /// The timeline list: the group's history bucketed into calendar months, newest first, for
-/// one (uniformly-picked, same reasoning as _EventsListViewState's own group pick)
-/// timeline-capable group in view.
+/// [groupId] (see [effectiveMemoriesGroupId]). Keyed by that group id at the call site (see
+/// _MemoriesSurfaceContentState._body), so switching the header's group selector remounts
+/// this fresh rather than leaving stale months up.
 class _TimelineListView extends ConsumerStatefulWidget {
-  const _TimelineListView({super.key, required this.hub});
+  const _TimelineListView({super.key, required this.hub, required this.groupId});
 
   final MemoriesHubController hub;
+  final String? groupId;
 
   @override
   ConsumerState<_TimelineListView> createState() => _TimelineListViewState();
@@ -1650,6 +1932,7 @@ class _TimelineListViewState extends ConsumerState<_TimelineListView> {
   List<TimelineMonth>? _months;
   bool _loading = true;
   bool _failed = false;
+  bool _unsupported = false;
 
   @override
   void initState() {
@@ -1658,28 +1941,36 @@ class _TimelineListViewState extends ConsumerState<_TimelineListView> {
   }
 
   Future<void> _fetch() async {
-    final capable = ref.read(multiSessionProvider).timelineCapableShownGroups;
-    if (capable.isEmpty) {
+    final groupId = widget.groupId;
+    final account = groupId == null ? null : ref.read(multiSessionProvider).byId(groupId);
+    if (account == null) {
       setState(() {
         _months = const [];
         _loading = false;
         _failed = false;
+        _unsupported = false;
       });
       return;
     }
-    // Picked once per visit, the same way _EventsListViewState picks a group for "You were
-    // there" - a group's history is inherently its own, so there is no sensible way to
-    // merge several groups' months into one shared timeline.
-    final group = capable[Random().nextInt(capable.length)];
+    if (!account.timelineCapable) {
+      setState(() {
+        _months = const [];
+        _loading = false;
+        _failed = false;
+        _unsupported = true;
+      });
+      return;
+    }
     setState(() {
       _loading = true;
       _failed = false;
+      _unsupported = false;
     });
     try {
-      final months = await ref.read(apiForGroupProvider(group.id)).timeline();
+      final months = await ref.read(apiForGroupProvider(account.id)).timeline();
       if (!mounted) return;
       setState(() {
-        _months = [for (final m in months) m.withGroup(group.id)];
+        _months = [for (final m in months) m.withGroup(account.id)];
         _loading = false;
       });
     } catch (_) {
@@ -1695,6 +1986,7 @@ class _TimelineListViewState extends ConsumerState<_TimelineListView> {
   Widget build(BuildContext context) {
     if (_loading) return Center(child: CircularProgressIndicator(color: context.accent));
     if (_failed) return _errorState(context);
+    if (_unsupported) return _unsupportedState(context);
     final months = _months ?? const [];
     if (months.isEmpty) return _emptyState(context);
     return ListView.separated(
@@ -1722,6 +2014,29 @@ class _TimelineListViewState extends ConsumerState<_TimelineListView> {
             SizedBox(height: 6),
             Text(
               "Once your group starts checking in, their months will show up here.",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: _fgMuted, fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _unsupportedState(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.calendar_month_outlined, size: 40, color: _fgMuted),
+            SizedBox(height: 16),
+            Text("This group doesn't support Month by month.",
+                style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            SizedBox(height: 6),
+            Text(
+              'Its server needs an update before you can browse its history here.',
               textAlign: TextAlign.center,
               style: TextStyle(color: _fgMuted, fontSize: 13),
             ),

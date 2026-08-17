@@ -10,7 +10,7 @@ import 'package:checkin/features/post/post_detail_screen.dart';
 import 'package:checkin/state/app_state.dart';
 import 'package:checkin/widgets/photo_viewer.dart';
 
-/// The Memories surface's "Your months" hub entry: the hub gating it on its own
+/// The Memories surface's "Month by month" hub entry: the hub gating it on its own
 /// capability, the month list's loading/loaded/empty/error states, and drilling into one
 /// month's own photo grid - reusing the existing full-screen viewer for the "go to post"
 /// route exactly as the events feature (and a normal feed carousel) already does.
@@ -68,12 +68,14 @@ Future<void> settle(WidgetTester tester) async {
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  ServerAccount account(String id, {bool timelineCapable = false}) => ServerAccount(
+  ServerAccount account(String id, {bool timelineCapable = false, bool memoriesCapable = false}) =>
+      ServerAccount(
         id: id,
         baseUrl: 'https://$id',
         serverName: id,
         token: 't',
         timelineCapable: timelineCapable,
+        memoriesCapable: memoriesCapable,
       );
 
   TimelineMonth month({
@@ -134,21 +136,46 @@ void main() {
     addTearDown(() => tester.pumpWidget(const SizedBox.shrink()));
   }
 
+  /// Like [pumpOpenSurface] but wires up more than one shown group, each resolved to its
+  /// own api via [apiFor] - what the header's own group selector tests need in order to
+  /// switch between groups.
+  Future<void> pumpOpenSurfaceMulti(WidgetTester tester,
+      {required List<ServerAccount> groups,
+      required ApiClient Function(String groupId) apiFor}) async {
+    final controller = AnimationController(
+        vsync: const TestVSync(), value: 1, duration: const Duration(milliseconds: 220));
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        multiSessionProvider.overrideWith(
+            () => MultiSessionController.seeded(MultiSession(groups: groups, restored: true))),
+        apiForGroupProvider.overrideWith((ref, id) => apiFor(id)),
+      ],
+      child: MaterialApp(
+        home: Scaffold(
+          body: MemoriesSurface(controller: controller, onClose: () => controller.value = 0),
+        ),
+      ),
+    ));
+    await tester.pump();
+    addTearDown(() => tester.pumpWidget(const SizedBox.shrink()));
+  }
+
   group('hub capability gate', () {
-    testWidgets('offers "Your months" when the group advertises the timeline capability',
+    testWidgets('offers "Month by month" when the group advertises the timeline capability',
         (tester) async {
       await pumpOpenSurface(tester,
           serverAccount: account('a.invalid', timelineCapable: true), api: _FakeTimelineApi());
 
-      expect(find.text('Your months'), findsOneWidget);
+      expect(find.text('Month by month'), findsOneWidget);
     });
 
-    testWidgets('hides "Your months" when the group predates the timeline capability',
+    testWidgets('hides "Month by month" when the group predates the timeline capability',
         (tester) async {
       await pumpOpenSurface(tester,
           serverAccount: account('a.invalid', timelineCapable: false), api: _FakeTimelineApi());
 
-      expect(find.text('Your months'), findsNothing);
+      expect(find.text('Month by month'), findsNothing);
     });
   });
 
@@ -160,7 +187,7 @@ void main() {
           serverAccount: account('a.invalid', timelineCapable: true),
           api: _FakeTimelineApi(months: [aug, jul]));
 
-      await tester.tap(find.text('Your months'));
+      await tester.tap(find.text('Month by month'));
       await settle(tester);
 
       expect(find.text('August 2026'), findsOneWidget);
@@ -181,7 +208,7 @@ void main() {
           serverAccount: account('a.invalid', timelineCapable: true),
           api: _FakeTimelineApi(months: const []));
 
-      await tester.tap(find.text('Your months'));
+      await tester.tap(find.text('Month by month'));
       await settle(tester);
 
       expect(find.text('No history yet.'), findsOneWidget);
@@ -193,7 +220,7 @@ void main() {
           serverAccount: account('a.invalid', timelineCapable: true),
           api: _FakeTimelineApi(failTimeline: true));
 
-      await tester.tap(find.text('Your months'));
+      await tester.tap(find.text('Month by month'));
       await settle(tester);
 
       expect(find.text("Couldn't load your group's months."), findsOneWidget);
@@ -211,7 +238,7 @@ void main() {
           serverAccount: account('a.invalid', timelineCapable: true),
           api: _FakeTimelineApi(months: [deletedCover]));
 
-      await tester.tap(find.text('Your months'));
+      await tester.tap(find.text('Month by month'));
       await settle(tester);
 
       expect(find.text('August 2026'), findsOneWidget);
@@ -222,14 +249,14 @@ void main() {
           serverAccount: account('a.invalid', timelineCapable: true),
           api: _FakeTimelineApi(months: [month()]));
 
-      await tester.tap(find.text('Your months'));
+      await tester.tap(find.text('Month by month'));
       await settle(tester);
       expect(find.bySemanticsLabel('Back'), findsOneWidget);
 
       await tester.tap(find.bySemanticsLabel('Back'));
       await settle(tester);
 
-      expect(find.text('Your months'), findsOneWidget);
+      expect(find.text('Month by month'), findsOneWidget);
       expect(find.bySemanticsLabel('Back'), findsNothing,
           reason: 'back at the hub root has nowhere left to step back to');
     });
@@ -251,7 +278,7 @@ void main() {
       await pumpOpenSurface(tester,
           serverAccount: account('a.invalid', timelineCapable: true), api: api);
 
-      await tester.tap(find.text('Your months'));
+      await tester.tap(find.text('Month by month'));
       await settle(tester);
       await tester.tap(find.text('August 2026'));
       await settle(tester);
@@ -280,7 +307,7 @@ void main() {
       await pumpOpenSurface(tester,
           serverAccount: account('a.invalid', timelineCapable: true), api: api);
 
-      await tester.tap(find.text('Your months'));
+      await tester.tap(find.text('Month by month'));
       await settle(tester);
       await tester.tap(find.text('August 2026'));
       await settle(tester);
@@ -317,7 +344,7 @@ void main() {
       await pumpOpenSurface(tester,
           serverAccount: account('a.invalid', timelineCapable: true), api: api);
 
-      await tester.tap(find.text('Your months'));
+      await tester.tap(find.text('Month by month'));
       await settle(tester);
       await tester.tap(find.text('August 2026'));
       await settle(tester);
@@ -332,7 +359,7 @@ void main() {
       await pumpOpenSurface(tester,
           serverAccount: account('a.invalid', timelineCapable: true), api: api);
 
-      await tester.tap(find.text('Your months'));
+      await tester.tap(find.text('Month by month'));
       await settle(tester);
       await tester.tap(find.text('August 2026'));
       await settle(tester);
@@ -363,7 +390,7 @@ void main() {
       await pumpOpenSurface(tester,
           serverAccount: account('a.invalid', timelineCapable: true), api: api);
 
-      await tester.tap(find.text('Your months'));
+      await tester.tap(find.text('Month by month'));
       await settle(tester);
       await tester.tap(find.text('August 2026'));
       await settle(tester);
@@ -384,12 +411,12 @@ void main() {
       await pumpOpenSurface(tester,
           serverAccount: account('a.invalid', timelineCapable: true), api: api);
 
-      await tester.tap(find.text('Your months'));
+      await tester.tap(find.text('Month by month'));
       await settle(tester);
       await tester.tap(find.text('August 2026'));
       await settle(tester);
       expect(find.text('August 2026'), findsOneWidget);
-      expect(find.text('Your months'), findsNothing,
+      expect(find.text('Month by month'), findsNothing,
           reason: 'the hub root is not showing while a month is open');
 
       await tester.tap(find.bySemanticsLabel('Back'));
@@ -398,7 +425,7 @@ void main() {
       // One step back lands on the timeline LIST, with the tapped month's card still
       // there - not the hub root, which would need a second back to reach.
       expect(find.text('August 2026'), findsOneWidget);
-      expect(find.text('Your months'), findsNothing,
+      expect(find.text('Month by month'), findsNothing,
           reason: 'one back step from month detail must land on the list, not the hub root');
       expect(find.bySemanticsLabel('Back'), findsOneWidget,
           reason: 'the list is not the hub root, so back must still be offered');
@@ -406,9 +433,33 @@ void main() {
       await tester.tap(find.bySemanticsLabel('Back'));
       await settle(tester);
 
-      expect(find.text('Your months'), findsOneWidget,
+      expect(find.text('Month by month'), findsOneWidget,
           reason: 'the second back step reaches the hub root');
       expect(find.bySemanticsLabel('Back'), findsNothing);
+    });
+  });
+
+  group('group selector', () {
+    testWidgets(
+        'switching to a group lacking the timeline capability shows the explicit '
+        'not-supported message, not a bare empty state', (tester) async {
+      final groupA = account('a.invalid', memoriesCapable: true, timelineCapable: true);
+      final groupB = account('b.invalid', memoriesCapable: true, timelineCapable: false);
+      await pumpOpenSurfaceMulti(tester,
+          groups: [groupA, groupB],
+          apiFor: (id) => _FakeTimelineApi(months: id == 'a.invalid' ? [month()] : const []));
+
+      await tester.tap(find.text('Month by month'));
+      await settle(tester);
+      expect(find.text('August 2026'), findsOneWidget);
+
+      await tester.tap(find.text('b.invalid')); // the header's own group selector pill
+      await settle(tester);
+
+      expect(find.text("This group doesn't support Month by month."), findsOneWidget);
+      expect(find.text('No history yet.'), findsNothing,
+          reason: 'a group with no such capability at all must read as unsupported, not as '
+              'an honest empty state - those mean different things');
     });
   });
 }
