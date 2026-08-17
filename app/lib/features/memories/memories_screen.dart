@@ -1792,7 +1792,7 @@ class _MonthCard extends StatelessWidget {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
-                                color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 16)),
+                                color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 15)),
                         const SizedBox(height: 8),
                         Wrap(
                           spacing: 14,
@@ -1847,7 +1847,7 @@ class _StatItem extends StatelessWidget {
       children: [
         Icon(icon, size: 14, color: _fgMuted),
         const SizedBox(width: 3),
-        Text('$value $suffix', style: const TextStyle(color: _fgSecondary, fontSize: 12)),
+        Text('$value $suffix', style: const TextStyle(color: _fgMuted, fontSize: 12)),
       ],
     );
   }
