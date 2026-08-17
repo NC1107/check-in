@@ -55,6 +55,18 @@ type Config struct {
 	// KlipyBaseURL is the upstream Klipy API's base URL. Overridable so tests can point the
 	// proxy at an httptest fake instead of the real service.
 	KlipyBaseURL string
+	// TrustedProxyHops is how many reverse proxies sit directly in front of this server -
+	// the ones the auth rate limiter (rateLimitAuth) is allowed to trust for the caller's
+	// real IP, read from the X-Forwarded-For chain at that exact position (see
+	// middleware.ClientIPFromXFFTrustedProxies). The standard Compose deployment is exactly
+	// one (Caddy; see docker-compose.yml and "only expose 80/443" in
+	// docs/self-hosting/security.md) and that's the default. A host fronting Caddy with
+	// another proxy of their own (a corporate load balancer, say) adds one for each such
+	// hop - putting Cloudflare in front of Caddy does NOT count, since Caddy is still the
+	// only hop that talks to this process directly. Getting this wrong in either direction
+	// either lets a caller spoof their way past the limiter again or throttles everyone
+	// under one shared bucket, so it's a knob to change deliberately, not to guess at.
+	TrustedProxyHops int
 }
 
 // DefaultRelayURL is the maintainer-run relay the published apps' Firebase project is
@@ -83,6 +95,7 @@ func Load() (Config, error) {
 		RelayURL:           relayURLFromEnv(),
 		KlipyKey:           getenv("CHECKIN_KLIPY_KEY", ""),
 		KlipyBaseURL:       getenv("CHECKIN_KLIPY_BASE_URL", DefaultKlipyBaseURL),
+		TrustedProxyHops:   getPositiveInt("CHECKIN_TRUSTED_PROXY_HOPS", 1),
 	}
 	if cfg.DatabaseURL == "" {
 		return cfg, fmt.Errorf("CHECKIN_DATABASE_URL is required")
@@ -111,6 +124,18 @@ func getenv(key, def string) string {
 func getint64(key string, def int64) int64 {
 	if v := os.Getenv(key); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+// getPositiveInt reads a positive integer env var, falling back to def when it's unset,
+// unparseable, or not positive - middleware.ClientIPFromXFFTrustedProxies panics on
+// anything less than 1, so a malformed value here must never reach it.
+func getPositiveInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
 			return n
 		}
 	}
