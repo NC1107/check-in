@@ -1033,8 +1033,9 @@ final locationsProvider =
 });
 
 /// One group's member list (used to join the same person across groups by phone in the
-/// People filter, and for their profile photos there). An empty query returns every
-/// active member, phone included - the same data the tag-people picker already reads.
+/// People filter, and for their profile photos there). An empty query returns every active
+/// member - the same data the tag-people picker already reads - with each carrying
+/// [User.phoneKey] rather than their real number (see its doc comment).
 final groupMembersProvider = FutureProvider.autoDispose.family<List<User>, String>((ref, groupId) {
   return ref.watch(apiForGroupProvider(groupId)).searchUsers('');
 });

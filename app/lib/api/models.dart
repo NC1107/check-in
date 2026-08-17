@@ -244,8 +244,9 @@ class User {
   User({
     required this.id,
     required this.name,
-    required this.phone,
     required this.isAdmin,
+    this.phone = '',
+    this.phoneKey = '',
     this.firstName = '',
     this.lastName = '',
     this.profileMediaId,
@@ -258,7 +259,18 @@ class User {
   final String name; // display name
   final String firstName;
   final String lastName;
+
+  /// The real phone number - only ever present on the caller's own record (GET /api/me) or
+  /// the admin-only member listing. Empty everywhere else (see [phoneKey]).
   final String phone;
+
+  /// A peer view's stand-in for [phone]: a one-way hash of it, present wherever [phone] is
+  /// empty. Two accounts with the same phone always produce the same key, which is what
+  /// [PersonDirectory] uses to merge the same human across the groups this device is signed
+  /// into - it never needs the number itself, only whether two entries match. See the
+  /// server's auth.PhoneMatchKey doc comment for what this does and doesn't protect against.
+  final String phoneKey;
+
   final bool isAdmin;
   final int? profileMediaId;
 
@@ -279,6 +291,7 @@ class User {
         firstName: j['firstName'] as String? ?? '',
         lastName: j['lastName'] as String? ?? '',
         phone: j['phone'] as String? ?? '',
+        phoneKey: j['phoneKey'] as String? ?? '',
         isAdmin: j['isAdmin'] as bool? ?? false,
         profileMediaId: j['profileMediaId'] as int?,
         birthdayMonth: (j['birthdayMonth'] as num?)?.toInt() ?? 0,

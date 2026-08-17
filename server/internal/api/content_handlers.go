@@ -7,8 +7,65 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nc1107/check-in/server/internal/auth"
 	"github.com/nc1107/check-in/server/internal/db"
 )
+
+// peerUser is how another member appears to an ordinary member: everything db.User carries
+// except the phone number, which this invite-only app treats as a credential (see
+// docs/self-hosting/security.md) - handing it back for the whole roster in one request is
+// what CRITICAL 2 of the pre-submission audit flagged. Only the caller's own record
+// (GET /api/me and friends) and the admin-only user list legitimately return db.User with
+// Phone still on it.
+//
+// PhoneKey stands in for Phone so the app's one legitimate use of a peer's number - joining
+// the same human across the several groups a device is signed into, client-side - keeps
+// working; see auth.PhoneMatchKey's doc comment for what it does and doesn't protect
+// against.
+type peerUser struct {
+	ID             int64      `json:"id"`
+	PhoneKey       string     `json:"phoneKey"`
+	Name           string     `json:"name"`
+	FirstName      string     `json:"firstName"`
+	LastName       string     `json:"lastName"`
+	BirthdayMonth  int        `json:"birthdayMonth"`
+	BirthdayDay    int        `json:"birthdayDay"`
+	ProfileMediaID *int64     `json:"profileMediaId,omitempty"`
+	IsAdmin        bool       `json:"isAdmin"`
+	Status         string     `json:"status"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	Title          *string    `json:"title,omitempty"`
+	TitleSetAt     *time.Time `json:"titleSetAt,omitempty"`
+}
+
+// newPeerUser converts a db.User to the shape a peer may see.
+func newPeerUser(u db.User) peerUser {
+	return peerUser{
+		ID:             u.ID,
+		PhoneKey:       auth.PhoneMatchKey(u.Phone),
+		Name:           u.Name,
+		FirstName:      u.FirstName,
+		LastName:       u.LastName,
+		BirthdayMonth:  int(u.Birthday.Month()),
+		BirthdayDay:    u.Birthday.Day(),
+		ProfileMediaID: u.ProfileMediaID,
+		IsAdmin:        u.IsAdmin,
+		Status:         u.Status,
+		CreatedAt:      u.CreatedAt,
+		Title:          u.Title,
+		TitleSetAt:     u.TitleSetAt,
+	}
+}
+
+// newPeerUsers converts a list the same way, never returning nil (an absent list should
+// serialize as "[]", matching every other list handler in this package).
+func newPeerUsers(users []db.User) []peerUser {
+	out := make([]peerUser, len(users))
+	for i, u := range users {
+		out[i] = newPeerUser(u)
+	}
+	return out
+}
 
 func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	viewer := userFrom(r)
@@ -79,7 +136,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"posts": posts, "people": people})
+	writeJSON(w, http.StatusOK, map[string]any{"posts": posts, "people": newPeerUsers(people)})
 }
 
 func (s *Server) handleSearchUsers(w http.ResponseWriter, r *http.Request) {
@@ -89,7 +146,7 @@ func (s *Server) handleSearchUsers(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"users": users})
+	writeJSON(w, http.StatusOK, map[string]any{"users": newPeerUsers(users)})
 }
 
 func (s *Server) handleGetUser(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +164,7 @@ func (s *Server) handleGetUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
-	writeJSON(w, http.StatusOK, user)
+	writeJSON(w, http.StatusOK, newPeerUser(user))
 }
 
 // handleUserPosts returns one person's timeline (git-history style): their posts in

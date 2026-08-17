@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/nc1107/check-in/server/internal/auth"
 	"github.com/nc1107/check-in/server/internal/db"
@@ -86,11 +87,28 @@ func (s *Server) requireAdmin(next http.Handler) http.Handler {
 }
 
 // rateLimitAuth throttles unauthenticated auth endpoints by client IP.
-// Uses X-Real-IP (set by Caddy) when available; falls back to RemoteAddr with
-// port stripped, so per-port bucket proliferation cannot bypass the limiter.
+//
+// The key comes from middleware.GetClientIP, which Router's
+// middleware.ClientIPFromXFFTrustedProxies populates from the position in the merged
+// X-Forwarded-For chain that only a trusted reverse proxy could have written - never a
+// header a caller can just set themselves. That matters here specifically: this group is
+// the one auth-rate-limited path unauthenticated callers can hit directly, so it's the one
+// an attacker actually controls the request headers of. (rateLimitUser doesn't have this
+// problem - it keys on the authenticated user id, not an address at all.)
+//
+// The previous version keyed on the client-supplied X-Real-IP outright, on the theory that
+// Caddy sets it - it doesn't; Caddy's reverse_proxy only ever adds X-Forwarded-For unless
+// told otherwise, so that header reached this handler exactly as a caller sent it. A
+// production check against /api/auth/check-phone confirmed the result: 60 rapid requests
+// all succeeded, and so did 14 more with a fresh X-Real-IP on each one - every request
+// minted its own always-empty bucket.
+//
+// RemoteAddr is the fallback for a request with no trusted-proxy chain at all (local dev
+// with no Caddy in front, or the harness's own httptest requests) - the raw TCP peer, which
+// can't be spoofed.
 func (s *Server) rateLimitAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := r.Header.Get("X-Real-IP")
+		ip := middleware.GetClientIP(r.Context())
 		if ip == "" {
 			ip, _, _ = net.SplitHostPort(r.RemoteAddr)
 			if ip == "" {

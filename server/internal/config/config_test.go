@@ -70,3 +70,46 @@ func TestKlipyKeyFromEnv(t *testing.T) {
 		t.Errorf("KlipyKey = %q, want the configured value", cfg.KlipyKey)
 	}
 }
+
+// The default must match the standard Compose deployment - exactly one hop (Caddy) - or
+// the auth rate limiter's IP-from-X-Forwarded-For lookup reads the wrong position out of
+// the box.
+func TestTrustedProxyHopsDefaultsToOne(t *testing.T) {
+	os.Unsetenv("CHECKIN_TRUSTED_PROXY_HOPS")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.TrustedProxyHops != 1 {
+		t.Errorf("TrustedProxyHops = %d, want 1", cfg.TrustedProxyHops)
+	}
+}
+
+func TestTrustedProxyHopsFromEnv(t *testing.T) {
+	t.Setenv("CHECKIN_TRUSTED_PROXY_HOPS", "2")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.TrustedProxyHops != 2 {
+		t.Errorf("TrustedProxyHops = %d, want the configured value 2", cfg.TrustedProxyHops)
+	}
+}
+
+// middleware.ClientIPFromXFFTrustedProxies panics below 1, so a malformed value (zero,
+// negative, or unparseable) must never reach it - it has to fall back to the safe default
+// instead.
+func TestTrustedProxyHopsRejectsInvalidValues(t *testing.T) {
+	for _, v := range []string{"0", "-1", "not-a-number", ""} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("CHECKIN_TRUSTED_PROXY_HOPS", v)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("load: %v", err)
+			}
+			if cfg.TrustedProxyHops != 1 {
+				t.Errorf("TrustedProxyHops = %d for input %q, want the default 1", cfg.TrustedProxyHops, v)
+			}
+		})
+	}
+}

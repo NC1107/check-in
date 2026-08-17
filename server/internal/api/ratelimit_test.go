@@ -83,6 +83,20 @@ func TestContentBurstsClearOneWholeCheckIn(t *testing.T) {
 	}
 }
 
+// GET /api/media/{id} is a read on a hot path (every image a feed page renders), so it needs
+// its own bucket far more generous than the upload limiter - it used to have no limiter at
+// all, which is what let an id-walk enumerate every media row at wire speed (see
+// GetVisibleMedia's doc comment).
+func TestMediaReadRateLimitIsGenerous(t *testing.T) {
+	limits := newContentLimits()
+	if limits.mediaRead == nil {
+		t.Fatal("content limits must include a mediaRead bucket")
+	}
+	if limits.mediaRead.burst < 100 {
+		t.Errorf("mediaRead burst = %v, want enough to clear a full feed page of images", limits.mediaRead.burst)
+	}
+}
+
 // The gif proxy is search-as-you-type: the client debounces, but a burst still has to clear
 // a few keystrokes fired before the debounce catches up.
 func TestGifRateLimitMatchesSpec(t *testing.T) {
