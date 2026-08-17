@@ -55,9 +55,12 @@ class _FakeTimelineApi extends ApiClient {
 /// A bounded stand-in for pumpAndSettle(): a real AuthImage's network fetch never resolves
 /// in a widget test, so pumpAndSettle's "pump until nothing is scheduled" loop times out the
 /// instant any screen here renders a cover photo or photo tile. A handful of explicit frames
-/// is plenty to flush a fetch's own Future and let setState rebuild.
+/// is plenty to flush a fetch's own Future and let setState rebuild - 400ms total, with
+/// margin past the hub's own 200ms AnimatedSwitcher transition (memories_screen.dart), so a
+/// test asserting the OUTGOING screen is fully gone (not just that the incoming one showed
+/// up) isn't racing the crossfade's own teardown.
 Future<void> settle(WidgetTester tester) async {
-  for (var i = 0; i < 5; i++) {
+  for (var i = 0; i < 8; i++) {
     await tester.pump(const Duration(milliseconds: 50));
   }
 }
@@ -368,6 +371,44 @@ void main() {
       expect(find.text('200+ check-ins · 3 people'), findsOneWidget);
       expect(find.text('205 check-ins · 3 people'), findsNothing,
           reason: 'must never surface the list route\'s unbounded aggregate over a capped page');
+    });
+
+    testWidgets('the back chevron returns to the timeline list, not straight to the hub root',
+        (tester) async {
+      final aug = month(year: 2026, month: 8);
+      final api = _FakeTimelineApi(months: [
+        aug
+      ], monthPosts: {
+        '2026-8': [photoPost(11)],
+      });
+      await pumpOpenSurface(tester,
+          serverAccount: account('a.invalid', timelineCapable: true), api: api);
+
+      await tester.tap(find.text('Your months'));
+      await settle(tester);
+      await tester.tap(find.text('August 2026'));
+      await settle(tester);
+      expect(find.text('August 2026'), findsOneWidget);
+      expect(find.text('Your months'), findsNothing,
+          reason: 'the hub root is not showing while a month is open');
+
+      await tester.tap(find.bySemanticsLabel('Back'));
+      await settle(tester);
+
+      // One step back lands on the timeline LIST, with the tapped month's card still
+      // there - not the hub root, which would need a second back to reach.
+      expect(find.text('August 2026'), findsOneWidget);
+      expect(find.text('Your months'), findsNothing,
+          reason: 'one back step from month detail must land on the list, not the hub root');
+      expect(find.bySemanticsLabel('Back'), findsOneWidget,
+          reason: 'the list is not the hub root, so back must still be offered');
+
+      await tester.tap(find.bySemanticsLabel('Back'));
+      await settle(tester);
+
+      expect(find.text('Your months'), findsOneWidget,
+          reason: 'the second back step reaches the hub root');
+      expect(find.bySemanticsLabel('Back'), findsNothing);
     });
   });
 }
