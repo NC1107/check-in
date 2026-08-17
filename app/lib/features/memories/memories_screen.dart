@@ -929,7 +929,7 @@ class _MemoriesGroupPill extends StatelessWidget {
       child: GestureDetector(
         onTap: onTap,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 7),
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
           decoration: BoxDecoration(
             color: selected ? context.accent : Colors.transparent,
             border: Border.all(color: selected ? context.accent : _border),
@@ -939,13 +939,13 @@ class _MemoriesGroupPill extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 9,
-                height: 9,
+                width: 10,
+                height: 10,
                 decoration: BoxDecoration(color: account.displayColor, shape: BoxShape.circle),
               ),
               const SizedBox(width: 6),
               if (selected) ...[
-                Icon(Icons.check, size: 13, color: context.onAccent),
+                Icon(Icons.check, size: 14, color: context.onAccent),
                 const SizedBox(width: 4),
               ],
               Text(account.displayName,
@@ -978,17 +978,23 @@ class _MemoriesGroupSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 32,
-      child: ListView.separated(
-        scrollDirection: Axis.horizontal,
-        itemCount: groups.length,
-        separatorBuilder: (_, __) => const SizedBox(width: 8),
-        itemBuilder: (_, i) => _MemoriesGroupPill(
-          account: groups[i],
-          selected: groups[i].id == selectedGroupId,
-          onTap: () => onSelect(groups[i].id),
-        ),
+    // A SingleChildScrollView, not a ListView, deliberately: it sizes itself to its child's
+    // own height rather than needing one handed down from a fixed-height box tuned to match
+    // the pills' current metrics - a future tweak to the pill's own padding or icon size can
+    // never leave it clipped again.
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (var i = 0; i < groups.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            _MemoriesGroupPill(
+              account: groups[i],
+              selected: groups[i].id == selectedGroupId,
+              onTap: () => onSelect(groups[i].id),
+            ),
+          ],
+        ],
       ),
     );
   }
