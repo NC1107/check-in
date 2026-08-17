@@ -2,6 +2,7 @@ package db
 
 import (
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -13,9 +14,10 @@ const (
 	EventKindGathering EventKind = "gathering"
 )
 
-// Event is one detected cluster of check-ins: a trip (posts at a place that isn't home
-// turf for at least two participants) or a gathering (a concentrated same-day spike at a
-// home-turf place). See detectEvents for how the two are told apart.
+// Event is one detected cluster of check-ins: a trip (posts somewhere at least two
+// participants can be confidently called away from) or a gathering (a concentrated
+// same-day spike at a place that reads as home turf, or that nobody has enough history to
+// call otherwise). See buildTripIfQualifies for exactly what "confidently away" requires.
 type Event struct {
 	Kind         EventKind          `json:"kind"`
 	Place        string             `json:"place"`
@@ -75,6 +77,17 @@ const homeBaseLookback6Months = -6 // months, passed to time.AddDate
 // unrelated visits to the same place months apart stay two events, not one.
 const tripWindow = 3 * 24 * time.Hour
 
+// tripMaxSpan caps how long a single trip run is allowed to run on for, measured from its
+// first active day, regardless of how tightly packed the days in between are (a run can
+// clear tripWindow at every step and still, added up, cover half a year). 30 days is
+// generous for a real trip - long enough for an extended stay, short enough that nothing
+// resembling "moved somewhere for a season" gets presented as one continuous vacation. A
+// run that would otherwise keep merging past this splits at the boundary: the days beyond
+// it start a fresh candidate run of their own (which is separately judged - it may or may
+// not qualify as its own trip), rather than the whole thing being silently truncated or
+// discarded.
+const tripMaxSpan = 30 * 24 * time.Hour
+
 // gatheringMinPosts and gatheringMinAuthors are the (higher-than-a-trip's) bar a single
 // day at a home-turf place has to clear to read as a real get-together rather than a
 // hometown's ordinary background posting - see detectGatherings' own doc comment for why
@@ -101,6 +114,42 @@ func dayOf(t time.Time) time.Time {
 	return time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
 }
 
+// normalizeLocation returns a comparison key for "is this the same place", not something
+// ever shown to a member: case-folded, with runs of internal whitespace collapsed to a
+// single space. Location is client-supplied from on-device reverse geocoding
+// (content_handlers.go trims it but never otherwise touches it), and the same real place
+// legitimately comes back differently shaped depending on the poster's OS and locale -
+// "Lisbon, Portugal" from one phone, "lisbon, portugal" from another, an extra space from
+// a third. Without folding those together here, a genuine shared trip can silently
+// fragment across posts into clusters too small to ever clear tripMinAwayAuthors or
+// gatheringMinAuthors, and produce no event at all. Every place this file groups or
+// compares locations (computeHomeBases, detectTrips, detectGatherings) has to use this key
+// consistently, or a member's own home-base evidence could fragment the exact same way.
+//
+// What a member actually SEES stays the original, unfolded string - see displayLocation.
+func normalizeLocation(loc string) string {
+	return strings.ToLower(strings.Join(strings.Fields(loc), " "))
+}
+
+// displayLocation picks the most common ORIGINAL location string among run's posts - what
+// an event actually shows, even though its rows were grouped by normalizeLocation's
+// case-folded key. Ties break toward the lexicographically smallest string, the same
+// deterministic-tiebreak convention this file uses everywhere else.
+func displayLocation(run []eventPostRow) string {
+	counts := make(map[string]int, len(run))
+	for _, r := range run {
+		counts[r.Location]++
+	}
+	var best string
+	var bestCount int
+	for loc, n := range counts {
+		if n > bestCount || (n == bestCount && loc < best) {
+			best, bestCount = loc, n
+		}
+	}
+	return best
+}
+
 // homeBaseMinDays is the fewest DISTINCT calendar days an author has to have posted from
 // one place within the trailing window before that place counts as evidence of home turf
 // at all - not just the most-visited place among however little history exists. Without a
@@ -117,18 +166,23 @@ const homeBaseMinDays = 3
 // among their own rows from the trailing homeBaseLookback6Months, keyed by author id -
 // but only once a location clears homeBaseMinDays; see its own doc comment for why. An
 // author with no location clearing that bar (including one with no rows in the window at
-// all) has no entry - detectTrips treats a missing home base as "away everywhere", the
-// conservative (never wrongly calls somewhere home turf) choice for anyone without enough
-// history to say otherwise.
+// all) has no entry - buildTripIfQualifies treats a missing home base as a weaker signal
+// of "away" than a known, different one; see its own doc comment for the full rule.
+//
+// The map is keyed by normalizeLocation's folded form, not the original string, and so is
+// every lookup against it (see buildTripIfQualifies) - a member's own home-base evidence
+// has to fold the same case/whitespace variants together that clustering does, or it would
+// fragment exactly the way raw location grouping would (see normalizeLocation's own doc
+// comment).
 //
 // Ties (two-plus places with the same distinct-day count) break toward the
-// lexicographically smallest location string - simple, deterministic, and independent of
+// lexicographically smallest normalized key - simple, deterministic, and independent of
 // Go's unspecified map iteration order, which is what actually matters here: any
 // consistent tiebreak is defensible, but the result has to be the same every time this
 // runs over the same rows.
 func computeHomeBases(rows []eventPostRow, now time.Time) map[int64]string {
 	cutoff := now.AddDate(0, homeBaseLookback6Months, 0)
-	// authorID -> location -> the set of distinct days posted there.
+	// authorID -> normalized location -> the set of distinct days posted there.
 	days := make(map[int64]map[string]map[time.Time]bool)
 	for _, r := range rows {
 		if r.CreatedAt.Before(cutoff) {
@@ -139,10 +193,11 @@ func computeHomeBases(rows []eventPostRow, now time.Time) map[int64]string {
 			byLoc = make(map[string]map[time.Time]bool)
 			days[r.AuthorID] = byLoc
 		}
-		daySet := byLoc[r.Location]
+		loc := normalizeLocation(r.Location)
+		daySet := byLoc[loc]
 		if daySet == nil {
 			daySet = make(map[time.Time]bool)
-			byLoc[r.Location] = daySet
+			byLoc[loc] = daySet
 		}
 		daySet[dayOf(r.CreatedAt)] = true
 	}
@@ -184,9 +239,10 @@ func detectEvents(rows []eventPostRow, now time.Time) []Event {
 	return events
 }
 
-// detectTrips clusters rows by location, merges each location's consecutive active days
-// into runs (splitting wherever the gap between one active day and the next exceeds
-// tripWindow), and keeps a run only when it qualifies as a trip (see
+// detectTrips clusters rows by normalized location, merges each location's consecutive
+// active days into runs (splitting wherever the gap between one active day and the next
+// exceeds tripWindow, or the run's total span from its first active day would exceed
+// tripMaxSpan), and keeps a run only when it qualifies as a trip (see
 // buildTripIfQualifies). Returns the qualifying events and the set of post ids they
 // claim, so detectGatherings never reconsiders the same posts as a second, different kind
 // of event.
@@ -195,7 +251,8 @@ func detectTrips(rows []eventPostRow, homeBase map[int64]string) (events []Event
 
 	byLocation := make(map[string][]eventPostRow)
 	for _, r := range rows {
-		byLocation[r.Location] = append(byLocation[r.Location], r)
+		loc := normalizeLocation(r.Location)
+		byLocation[loc] = append(byLocation[loc], r)
 	}
 	locations := make([]string, 0, len(byLocation))
 	for loc := range byLocation {
@@ -208,7 +265,7 @@ func detectTrips(rows []eventPostRow, homeBase map[int64]string) (events []Event
 		sort.Slice(locRows, func(i, j int) bool { return locRows[i].CreatedAt.Before(locRows[j].CreatedAt) })
 
 		var run []eventPostRow
-		var lastDay time.Time
+		var firstDay, lastDay time.Time
 		flush := func() {
 			if len(run) == 0 {
 				return
@@ -223,8 +280,11 @@ func detectTrips(rows []eventPostRow, homeBase map[int64]string) (events []Event
 		}
 		for _, r := range locRows {
 			day := dayOf(r.CreatedAt)
-			if len(run) > 0 && day.Sub(lastDay) > tripWindow {
+			if len(run) > 0 && (day.Sub(lastDay) > tripWindow || day.Sub(firstDay) > tripMaxSpan) {
 				flush()
+			}
+			if len(run) == 0 {
+				firstDay = day
 			}
 			run = append(run, r)
 			lastDay = day
@@ -234,23 +294,44 @@ func detectTrips(rows []eventPostRow, homeBase map[int64]string) (events []Event
 	return events, consumed
 }
 
-// buildTripIfQualifies decides whether one location's date-merged run of posts is a trip:
-// at least tripMinAwayAuthors distinct authors whose OWN home base isn't this location (an
-// author with no home base at all counts as away too - see computeHomeBases). Checking the
-// away subset specifically, rather than the run's full author count, is what lets a trip
-// still qualify when a local host who lives right there shows up in a few of the photos:
-// the group traveled even if not every single person in the photos did.
+// buildTripIfQualifies decides whether one normalized location's date-merged run of posts
+// is a trip: at least tripMinAwayAuthors distinct participants who can be confidently
+// called away from this location. What counts as away depends on what is actually known
+// about each participant, and the two cases are deliberately not treated the same:
+//
+//   - Home base KNOWN (see computeHomeBases) and different from this location: away,
+//     regardless of how long the run is. A single day is enough - a day trip to a city
+//     two hours away is still a trip.
+//   - Home base UNKNOWN (no location anywhere clears homeBaseMinDays for that person):
+//     away only when the run spans MORE THAN ONE DAY. A same-day cluster with no
+//     home-base evidence either way is far more likely an ordinary local hangout that
+//     just hasn't accumulated enough history yet than a genuine trip - four members with
+//     no posting history at all, out to dinner once, must not read as a trip - so it is
+//     left for detectGatherings to judge on its own, stricter bar instead. A run spanning
+//     multiple days is trip-shaped on its own evidence even with nothing to compare it
+//     against, which is what keeps a group's first-ever trip together detectable (before
+//     anyone has 3+ days of history anywhere to prove they were "away" from).
+//
+// Checking the away subset specifically, rather than the run's full author count, is also
+// what lets a trip still qualify when a local host who lives right there shows up in a few
+// of the photos: the group traveled even if not every single person in the photos did.
 func buildTripIfQualifies(loc string, run []eventPostRow, homeBase map[int64]string) (Event, bool) {
+	multiDay := dayOf(run[0].CreatedAt).Before(dayOf(run[len(run)-1].CreatedAt))
+
 	away := make(map[int64]bool)
 	for _, r := range run {
-		if hb, ok := homeBase[r.AuthorID]; !ok || hb != loc {
+		hb, known := homeBase[r.AuthorID]
+		switch {
+		case known && hb != loc:
+			away[r.AuthorID] = true
+		case !known && multiDay:
 			away[r.AuthorID] = true
 		}
 	}
 	if len(away) < tripMinAwayAuthors {
 		return Event{}, false
 	}
-	return buildEvent(EventKindTrip, loc, run), true
+	return buildEvent(EventKindTrip, run), true
 }
 
 // detectGatherings buckets whatever posts a trip run didn't already claim by (location,
@@ -264,7 +345,7 @@ func buildTripIfQualifies(loc string, run []eventPostRow, homeBase map[int64]str
 // actual get-together happened" rather than "a week of routine local check-ins."
 func detectGatherings(rows []eventPostRow, consumed map[int64]bool) []Event {
 	type bucketKey struct {
-		loc string
+		loc string // normalizeLocation's folded form - see detectTrips' identical reasoning
 		day time.Time
 	}
 	buckets := make(map[bucketKey][]eventPostRow)
@@ -272,7 +353,7 @@ func detectGatherings(rows []eventPostRow, consumed map[int64]bool) []Event {
 		if consumed[r.PostID] {
 			continue
 		}
-		k := bucketKey{loc: r.Location, day: dayOf(r.CreatedAt)}
+		k := bucketKey{loc: normalizeLocation(r.Location), day: dayOf(r.CreatedAt)}
 		buckets[k] = append(buckets[k], r)
 	}
 
@@ -295,7 +376,7 @@ func detectGatherings(rows []eventPostRow, consumed map[int64]bool) []Event {
 			authors[r.AuthorID] = true
 		}
 		if len(run) >= gatheringMinPosts && len(authors) >= gatheringMinAuthors {
-			events = append(events, buildEvent(EventKindGathering, k.loc, run))
+			events = append(events, buildEvent(EventKindGathering, run))
 		}
 	}
 	return events
@@ -307,8 +388,10 @@ func detectGatherings(rows []eventPostRow, consumed map[int64]bool) []Event {
 // convention recapPeople uses for the recap cover's own roster - see its doc comment for
 // why post count, not likes, is the right lens for "who showed up"), and a cover picked as
 // the most-liked photo in the run (ties broken toward the earlier post id, for a
-// deterministic pick when two posts tie on likes).
-func buildEvent(kind EventKind, loc string, run []eventPostRow) Event {
+// deterministic pick when two posts tie on likes). Place is computed from run itself (see
+// displayLocation) rather than passed in, since the caller only ever has the normalized
+// grouping key at hand - what a member sees always comes from the original strings.
+func buildEvent(kind EventKind, run []eventPostRow) Event {
 	sorted := make([]eventPostRow, len(run))
 	copy(sorted, run)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -360,7 +443,7 @@ func buildEvent(kind EventKind, loc string, run []eventPostRow) Event {
 
 	return Event{
 		Kind:         kind,
-		Place:        loc,
+		Place:        displayLocation(sorted),
 		StartDate:    dayOf(sorted[0].CreatedAt),
 		EndDate:      dayOf(sorted[len(sorted)-1].CreatedAt),
 		Participants: people,

@@ -57,8 +57,10 @@ func (h *harness) events(token string, limit int) eventsResp {
 }
 
 // TestEventsDetectsATrip pins the happy path: two members with no prior history (so
-// neither has a home base anywhere, and both count as "away") checking in together from
-// the same place a couple of days apart forms one trip.
+// neither has a home base anywhere) checking in together from the same place across two
+// distinct days forms one trip - with no home-base evidence either way, a cluster has to
+// span more than one day to read as a trip rather than a local hangout (see the server's
+// buildTripIfQualifies).
 func TestEventsDetectsATrip(t *testing.T) {
 	h := newHarness(t)
 	admin := h.admin("Robin")
@@ -66,7 +68,7 @@ func TestEventsDetectsATrip(t *testing.T) {
 	now := time.Now()
 
 	h.eventPost(admin, "Lisbon, Portugal", now.Add(-2*24*time.Hour))
-	h.eventPost(member, "Lisbon, Portugal", now.Add(-2*24*time.Hour+time.Hour))
+	h.eventPost(member, "Lisbon, Portugal", now.Add(-1*24*time.Hour))
 
 	got := h.events(admin.Token, 0)
 	if len(got.Events) != 1 {
@@ -103,7 +105,7 @@ func TestEventsWireShapeHasTheKeysTheClientReads(t *testing.T) {
 	now := time.Now()
 
 	h.eventPost(admin, "Lisbon, Portugal", now.Add(-2*24*time.Hour))
-	h.eventPost(member, "Lisbon, Portugal", now.Add(-2*24*time.Hour+time.Hour))
+	h.eventPost(member, "Lisbon, Portugal", now.Add(-1*24*time.Hour))
 
 	var env struct {
 		Events []map[string]any `json:"events"`
@@ -147,7 +149,7 @@ func TestEventsExcludesRecapPosts(t *testing.T) {
 	now := time.Now()
 
 	h.eventPost(admin, "Lisbon, Portugal", now.Add(-2*24*time.Hour))
-	h.eventPost(member, "Lisbon, Portugal", now.Add(-2*24*time.Hour+time.Hour))
+	h.eventPost(member, "Lisbon, Portugal", now.Add(-1*24*time.Hour))
 	recapID := seedEventRecapPost(t, h, admin.ID, "Lisbon, Portugal", now.Add(-2*24*time.Hour+2*time.Hour))
 
 	got := h.events(admin.Token, 0)
@@ -175,7 +177,7 @@ func TestEventsExcludesBlockedAuthors(t *testing.T) {
 	now := time.Now()
 
 	h.eventPost(admin, "Lisbon, Portugal", now.Add(-2*24*time.Hour))
-	h.eventPost(member, "Lisbon, Portugal", now.Add(-2*24*time.Hour+time.Hour))
+	h.eventPost(member, "Lisbon, Portugal", now.Add(-1*24*time.Hour))
 
 	if got := h.events(admin.Token, 0); len(got.Events) != 1 {
 		t.Fatalf("got %d events before blocking, want 1", len(got.Events))
@@ -199,7 +201,7 @@ func TestEventsExcludesRevokedAuthors(t *testing.T) {
 	now := time.Now()
 
 	h.eventPost(admin, "Lisbon, Portugal", now.Add(-2*24*time.Hour))
-	h.eventPost(member, "Lisbon, Portugal", now.Add(-2*24*time.Hour+time.Hour))
+	h.eventPost(member, "Lisbon, Portugal", now.Add(-1*24*time.Hour))
 
 	if got := h.events(admin.Token, 0); len(got.Events) != 1 {
 		t.Fatalf("got %d events before revoking, want 1", len(got.Events))
@@ -243,7 +245,7 @@ func TestEventsAnyMemberMayCall(t *testing.T) {
 	now := time.Now()
 
 	h.eventPost(member, "Lisbon, Portugal", now.Add(-2*24*time.Hour))
-	h.eventPost(other, "Lisbon, Portugal", now.Add(-2*24*time.Hour+time.Hour))
+	h.eventPost(other, "Lisbon, Portugal", now.Add(-1*24*time.Hour))
 
 	got := h.events(member.Token, 0)
 	if len(got.Events) != 1 {
@@ -273,9 +275,9 @@ func TestEventsRespectsLimit(t *testing.T) {
 	now := time.Now()
 
 	h.eventPost(admin, "Porto, Portugal", now.Add(-40*24*time.Hour))
-	h.eventPost(member, "Porto, Portugal", now.Add(-40*24*time.Hour+time.Hour))
+	h.eventPost(member, "Porto, Portugal", now.Add(-39*24*time.Hour))
 	h.eventPost(admin, "Lisbon, Portugal", now.Add(-2*24*time.Hour))
-	h.eventPost(member, "Lisbon, Portugal", now.Add(-2*24*time.Hour+time.Hour))
+	h.eventPost(member, "Lisbon, Portugal", now.Add(-1*24*time.Hour))
 
 	all := h.events(admin.Token, 0)
 	if len(all.Events) != 2 {
