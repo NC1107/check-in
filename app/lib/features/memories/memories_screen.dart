@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:math';
+import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -43,6 +45,148 @@ const kMemoriesFlickVelocity = 500.0;
 /// centered) - that kept the notch centered but still measurably shifted the Feed and You
 /// icons inward, which is exactly the kind of shift this "invisible" feature must not cause.
 const kMemoriesHandleWidth = 44.0;
+
+/// The pill's opacity at rest: barely there, per the founder's "sortve hidden" brief - dim
+/// enough to read as a seam in the bar rather than a control, until the periodic pulse (or,
+/// under reduced motion, [kMemoriesPillReducedMotionOpacity]) says otherwise.
+const kMemoriesPillRestOpacity = 0.12;
+
+/// The pill's opacity at the peak of its periodic pulse - close to the old always-on grey
+/// pill's own alpha, so the hint reads as a genuine affordance for the second or so it holds.
+const kMemoriesPillPeakOpacity = 0.55;
+
+/// The pill's constant opacity under [MediaQuery.disableAnimations]: nothing ever animates
+/// there, so a reduced-motion viewer needs a steady, findable affordance rather than living
+/// with the rest opacity's near-invisibility as the only state they'd ever see.
+const kMemoriesPillReducedMotionOpacity = 0.34;
+
+/// How often the pill pulses to remind an idle viewer it's there.
+const kMemoriesPillPulseInterval = Duration(seconds: 30);
+const kMemoriesPillPulseRise = Duration(milliseconds: 220);
+const kMemoriesPillPulseHold = Duration(milliseconds: 560);
+const kMemoriesPillPulseFall = Duration(milliseconds: 220);
+
+/// One full pulse sweep: rise, then hold, then fall - see
+/// [MemoriesPillPulseController._controller]'s own doc comment for why this is driven as one
+/// continuous [AnimationController] sweep rather than three separately-scheduled steps.
+/// `final`, not `const`: [Duration.+] isn't a const-evaluable operator.
+final kMemoriesPillPulseTotalDuration =
+    kMemoriesPillPulseRise + kMemoriesPillPulseHold + kMemoriesPillPulseFall;
+
+/// The 4x26 grab handle's ambient pulse: drives [opacity] from [kMemoriesPillRestOpacity] up
+/// to [kMemoriesPillPeakOpacity] and back for about a second, roughly every
+/// [kMemoriesPillPulseInterval] - the founder's "mostly hidden, but says hello every 30s"
+/// brief. A tiny state machine, not a widget, precisely so its scheduling rules (see
+/// [setActive]) are unit-testable without pumping a widget tree - the same reasoning
+/// [MemoriesDragDriver] documents for the drag.
+///
+/// Owns the [AnimationController] its caller constructs (vsync'd to the handle's own State)
+/// but never the decision to animate at all: [setActive] is the single gate every condition
+/// the founder's brief lists (Feed tab active, surface closed, app resumed, motion allowed)
+/// goes through, so "must never run in the background" only has to be enforced in one place -
+/// see MemoriesHandle's build() and lifecycle callbacks, the only callers.
+///
+/// One pulse is a single continuous [AnimationController.forward] sweep from 0 to 1 across
+/// [_pulseDuration] (rise+hold+fall), not three separately-awaited animate/delay steps
+/// chained together - deliberately: a `Future.delayed` created as a *side effect* of an
+/// earlier animation's completion (mid-callback, not at the top of a fresh event) can land in
+/// a timing noman's-land under flutter_test's own step-driven fake clock, where a
+/// `tester.pump(duration)` that lands exactly on its target time doesn't reliably fire it
+/// within that same call. A single sweep has one Ticker, started once, with [opacity] derived
+/// purely from where in that sweep [_controller]'s own value currently sits - the same
+/// well-trodden `tester.pump(duration)` mechanics every other AnimationController in this file
+/// already relies on, no timer/future boundary for the fake clock to trip over.
+class MemoriesPillPulseController {
+  MemoriesPillPulseController(this._controller) {
+    // Owned outright, regardless of whatever the caller constructed it with - forward(from:)
+    // needs a duration to animate over, and pinning it here means a caller can never
+    // accidentally desync it from the rise/hold/fall constants above by constructing the
+    // controller with a different (or no) duration of its own.
+    _controller.duration = kMemoriesPillPulseTotalDuration;
+    _controller.addStatusListener(_onStatus);
+  }
+
+  /// Where the rise-to-hold and hold-to-fall handoffs fall within the sweep (as 0..1
+  /// fractions of [kMemoriesPillPulseTotalDuration]) - [opacity] uses these to work out which
+  /// phase [_controller]'s current value is in.
+  static final double _riseEnd =
+      kMemoriesPillPulseRise.inMicroseconds / kMemoriesPillPulseTotalDuration.inMicroseconds;
+  static final double _holdEnd = (kMemoriesPillPulseRise + kMemoriesPillPulseHold).inMicroseconds /
+      kMemoriesPillPulseTotalDuration.inMicroseconds;
+
+  final AnimationController _controller;
+  Timer? _timer;
+  bool _active = false;
+  bool _disposed = false;
+
+  /// The pill's opacity right now: [kMemoriesPillRestOpacity] at rest (the sweep's start and
+  /// end alike), ramping up to [kMemoriesPillPeakOpacity] across the rise fraction, holding
+  /// there, then ramping back down across the fall fraction. Meant to be read inside an
+  /// [AnimatedBuilder] listening to the wrapped controller.
+  double get opacity {
+    final t = _controller.value;
+    double peaked; // 0 = at rest, 1 = fully peaked
+    if (t <= _riseEnd) {
+      peaked = _riseEnd <= 0 ? 1 : t / _riseEnd;
+    } else if (t <= _holdEnd) {
+      peaked = 1;
+    } else {
+      final fallSpan = 1 - _holdEnd;
+      peaked = fallSpan <= 0 ? 0 : 1 - (t - _holdEnd) / fallSpan;
+    }
+    return lerpDouble(kMemoriesPillRestOpacity, kMemoriesPillPeakOpacity, peaked)!;
+  }
+
+  /// Whether a pulse is currently scheduled to fire. Exposed only for tests to assert the
+  /// timer really was cancelled (not just that nothing threw) - see memories_test.dart's
+  /// pulse controller group.
+  @visibleForTesting
+  bool get hasPendingTimer => _timer != null;
+
+  /// The single gate on whether the pulse may run at all. A caller passes the AND of every
+  /// condition that must hold; toggling it off (a tab switch, the surface opening, the app
+  /// backgrounding, reduced motion) cuts an in-flight pulse off immediately rather than
+  /// letting it finish its cycle - the whole point of a gate that "must stop" is that nothing
+  /// keeps animating a moment after it should not be.
+  void setActive(bool active) {
+    if (_disposed || active == _active) return;
+    _active = active;
+    if (active) {
+      _schedule();
+    } else {
+      _timer?.cancel();
+      _timer = null;
+      if (_controller.value != 0 || _controller.isAnimating) _controller.value = 0;
+    }
+  }
+
+  void _schedule() {
+    _timer?.cancel();
+    _timer = Timer(kMemoriesPillPulseInterval, _fire);
+  }
+
+  void _fire() {
+    if (!_active || _disposed) return;
+    _controller.forward(from: 0);
+  }
+
+  /// Reschedules the next pulse once a sweep runs all the way to its end - the single place
+  /// that decides "settling back to rest reschedules", so a caller never has to chain off the
+  /// forward() call itself (see the class doc comment for why that chaining was the bug).
+  void _onStatus(AnimationStatus status) {
+    if (status == AnimationStatus.completed && _active && !_disposed) _schedule();
+  }
+
+  /// Stops the timer and any in-flight animation cleanly. Idempotent.
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _timer?.cancel();
+    _timer = null;
+    _controller.removeStatusListener(_onStatus);
+    _controller.stop();
+  }
+}
 
 /// Decides whether an in-progress interactive drag of the Memories surface should settle
 /// open (1.0) or closed (0.0) once the finger lifts. [position] is the drag's current
@@ -154,21 +298,57 @@ String memoryAgeLabel(DateTime createdAt, {DateTime? now}) {
 /// never discovers the drag both go through this) and on an interactive rightward drag past
 /// [kMemoriesOpenThreshold] or a rightward flick.
 class MemoriesHandle extends ConsumerStatefulWidget {
-  const MemoriesHandle({super.key, required this.controller});
+  const MemoriesHandle({super.key, required this.controller, required this.feedActive});
 
   final AnimationController controller;
+
+  /// Whether the Feed tab is the one currently showing. home_shell.dart keeps the bottom bar
+  /// (and so this handle) mounted on the You tab too, but the ambient pulse (see
+  /// [MemoriesPillPulseController]) only ever runs here - pulsing on a tab the gesture's own
+  /// screen isn't behind would draw an eye that has already left.
+  final bool feedActive;
 
   @override
   ConsumerState<MemoriesHandle> createState() => _MemoriesHandleState();
 }
 
-class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
+class _MemoriesHandleState extends ConsumerState<MemoriesHandle>
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   late final _drag = MemoriesDragDriver(widget.controller);
+  late final _pulseController = AnimationController(vsync: this);
+  late final _pulse = MemoriesPillPulseController(_pulseController);
 
-  // Cached from the last build, so dispose() (which cannot safely call MediaQuery.of -
-  // the context is on its way out) still knows whether to animate or snap when it settles
-  // a stranded drag. See dispose()'s own comment.
+  // Cached from the last build/lifecycle event, so callbacks that fire outside build (the
+  // shared controller's own listener, an app-lifecycle change) can recompute the pulse's
+  // one gating condition (see _recomputePulse) without a BuildContext of their own, and so
+  // dispose() (which cannot safely call MediaQuery.of - the context is on its way out) still
+  // knows whether to animate or snap when it settles a stranded drag. See dispose()'s own
+  // comment.
   bool _reduceMotion = false;
+  bool _capable = false;
+  bool _appResumed = true;
+
+  // Whether the shared Memories surface is anywhere above fully closed - mirrors
+  // _HomeShellState's own _memoriesOpen and _MemoriesSurfaceState's _open, read off the same
+  // controller. The pulse must not run while the surface covers the screen (see
+  // _recomputePulse).
+  late bool _surfaceOpen = widget.controller.value > 0;
+
+  void _onControllerChanged() {
+    final open = widget.controller.value > 0;
+    if (open == _surfaceOpen) return;
+    _surfaceOpen = open;
+    _recomputePulse();
+  }
+
+  /// The pulse's single gate: every condition the founder's brief lists, ANDed together and
+  /// handed to [MemoriesPillPulseController.setActive]. Called from build() with the latest
+  /// values, and from every callback that can change one of them outside a build (the
+  /// controller listener, app-lifecycle changes) using the cached fields above.
+  void _recomputePulse() {
+    _pulse
+        .setActive(_capable && widget.feedActive && !_surfaceOpen && _appResumed && !_reduceMotion);
+  }
 
   void _open(bool reduceMotion) {
     HapticFeedback.selectionClick();
@@ -178,7 +358,34 @@ class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    widget.controller.addListener(_onControllerChanged);
+  }
+
+  @override
+  void didUpdateWidget(MemoriesHandle old) {
+    super.didUpdateWidget(old);
+    if (old.feedActive != widget.feedActive) _recomputePulse();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Never let the pulse keep ticking, or a timer keep waking the device, once the app is
+    // backgrounded - a timer firing every 30s in the background is a battery bug, not a hint.
+    final resumed = state == AppLifecycleState.resumed;
+    if (resumed == _appResumed) return;
+    _appResumed = resumed;
+    _recomputePulse();
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    widget.controller.removeListener(_onControllerChanged);
+    _pulse.dispose();
+    _pulseController.dispose();
     // Belt and braces alongside _HomeShellState's own capability-drop guard (the
     // authoritative fix - see its doc comment): if this whole widget is ever removed from
     // the tree while a drag was in progress, rather than merely rebuilt to
@@ -196,6 +403,8 @@ class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
         ref.watch(multiSessionProvider.select((s) => s.memoriesCapableShownGroups.isNotEmpty));
     final reduceMotion = MediaQuery.of(context).disableAnimations;
     _reduceMotion = reduceMotion;
+    _capable = capable;
+    _recomputePulse();
     // An overlay, not a Row child (see the class doc comment) - shrinking to nothing here
     // costs no layout, only removes the gesture surface and lets taps fall through to
     // whatever the handle was sitting on top of.
@@ -211,6 +420,7 @@ class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
     }
 
     final width = MediaQuery.sizeOf(context).width;
+    final accent = context.accent;
     return Semantics(
       button: true,
       label: 'Memories',
@@ -221,18 +431,70 @@ class _MemoriesHandleState extends ConsumerState<MemoriesHandle> {
         onHorizontalDragUpdate: (d) => _drag.update(d, width, reduceMotion),
         onHorizontalDragEnd: (d) => _drag.end(d, reduceMotion),
         onHorizontalDragCancel: () => _drag.cancel(reduceMotion),
-        child: SizedBox(
-          width: kMemoriesHandleWidth,
-          height: 64,
-          // The visible pill stays exactly 4x26, centered in the wider tap target - only the
-          // grabbable area grows, never the look.
-          child: Center(
-            child: Container(
-              width: 4,
-              height: 26,
-              decoration: BoxDecoration(
-                color: _fgMuted.withValues(alpha: 0.55),
-                borderRadius: BorderRadius.circular(9999),
+        // SafeArea-then-fixed-64-box mirrors BottomAppBar's own build exactly (see Flutter's
+        // BottomAppBar, and home_shell.dart's Positioned doc comment right above where this
+        // handle is placed) - it's what makes this box land at the same origin as the bar's
+        // own content box on every device, regardless of its bottom safe inset, rather than
+        // being centered against the bar's taller, safe-area-inflated total height.
+        //
+        // Getting the box right isn't enough on its own, though: a plain Center inside it
+        // would still land the pill on the box's own geometric middle, which sits BELOW
+        // where the Feed/You icon glyphs actually are - their Column packs icon+gap+label
+        // together and centers that whole block, so the icon (the block's top part) ends up
+        // above the block's own center once a label is added underneath. Repeating the exact
+        // same icon-slot + gap + label-sized shape below (see _NavItem, and
+        // kBottomNavIconSize/kBottomNavIconLabelGap/kBottomNavLabelStyle's shared doc
+        // comment) reproduces that same displacement for the pill: Column's
+        // mainAxisAlignment.center puts a first child's own center at
+        // `boxCenter - (gap + labelHeight) / 2` regardless of that child's own height, so the
+        // pill (26pt) lands exactly where a 23pt icon glyph would, without this having to
+        // know or hardcode that offset as a magic pixel value.
+        child: SafeArea(
+          child: SizedBox(
+            width: kMemoriesHandleWidth,
+            height: 64,
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  AnimatedBuilder(
+                    animation: _pulseController,
+                    builder: (context, _) {
+                      final opacity =
+                          reduceMotion ? kMemoriesPillReducedMotionOpacity : _pulse.opacity;
+                      // The visible pill stays exactly 4x26, centered in the wider tap
+                      // target - only the grabbable area grows, never the look.
+                      return Container(
+                        key: const Key('memoriesPill'),
+                        width: 4,
+                        height: 26,
+                        decoration: BoxDecoration(
+                          color: accent.withValues(alpha: opacity),
+                          borderRadius: BorderRadius.circular(9999),
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: kBottomNavIconLabelGap),
+                  // Invisible - reserves exactly the label's own single-line height so this
+                  // Column's shape matches _NavItem's and the pill above lands on the icons'
+                  // own line. Never painted, never announced, and never findable by real
+                  // copy: a plain "Memories" here would collide with find.text('Memories')
+                  // elsewhere (the surface's own header title). maxLines: 1 matters in a way
+                  // it doesn't for _NavItem's real "Feed"/"You" labels: those fit their Row's
+                  // much wider Expanded slot on one line easily, but this handle is only
+                  // kMemoriesHandleWidth (44) wide - without pinning this placeholder to one
+                  // line it wraps across several, inflating the reserved height and
+                  // overflowing the 64-tall box.
+                  const Opacity(
+                    opacity: 0,
+                    child: ExcludeSemantics(
+                      child: Text('MemoriesHandleLabelSpacer',
+                          maxLines: 1, style: kBottomNavLabelStyle),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),

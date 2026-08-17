@@ -414,11 +414,24 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
             ),
           ),
           // The hidden Memories entry point: a small grab handle overlaid on the bar, not a
-          // fourth Row destination - see MemoriesHandle's doc comment.
-          SizedBox(
+          // fourth Row destination - see MemoriesHandle's doc comment. Positioned to fill the
+          // Stack's full height (top:0, bottom:0) rather than a fixed 64-tall box centered by
+          // the Stack's own `alignment: centerLeft` above: BottomAppBar wraps its content in
+          // a SafeArea *outside* a fixed-height 64 box (see Flutter's BottomAppBar.build), so
+          // the bar's real rendered height is 64 plus the device's bottom safe inset, with
+          // the Feed/You row pinned to the TOP of that box rather than centered within it. A
+          // handle sized to a flat 64 and centered by the Stack's alignment centers against
+          // that taller total height instead, which lands it visibly below the icons' actual
+          // center on any device with a bottom safe inset (the founder's own bug report).
+          // Matching the full height here and repeating BottomAppBar's exact
+          // SafeArea-then-64-box shape inside MemoriesHandle itself (see its build()) is what
+          // makes the two align pixel-for-pixel regardless of that inset.
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
             width: kMemoriesHandleWidth,
-            height: 64,
-            child: MemoriesHandle(controller: _memoriesController),
+            child: MemoriesHandle(controller: _memoriesController, feedActive: _index == 0),
           ),
         ],
       ),
@@ -461,10 +474,9 @@ class _NavItem extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(selected ? activeIcon : icon, size: 23, color: color),
-              const SizedBox(height: 3),
-              Text(label,
-                  style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600)),
+              Icon(selected ? activeIcon : icon, size: kBottomNavIconSize, color: color),
+              const SizedBox(height: kBottomNavIconLabelGap),
+              Text(label, style: kBottomNavLabelStyle.copyWith(color: color)),
             ],
           ),
         ),

@@ -29,6 +29,29 @@ class _FakeApi extends ApiClient {
 
   @override
   Future<Post?> randomMemory() async => null;
+
+  // HomeShell's own initState fires this on every build (see _refreshDigestOffset) - best
+  // effort and swallowed on failure there, but a real Dio call against the reserved,
+  // non-resolving alpha.invalid host still leaves platform-level DNS/connection timers
+  // dangling past a rejected Future. Harmless in production (the request just eventually
+  // errors), but flutter_test's own "no pending timers" end-of-test invariant catches it the
+  // moment any test here does a final teardown pump - stubbed the same way feed/randomMemory
+  // already are, so nothing in this suite makes a real network call at all.
+  @override
+  Future<NotifyPrefs> updateNotificationPrefs(
+          {bool? posts,
+          bool? replies,
+          bool? likes,
+          bool? digestEnabled,
+          int? digestHour,
+          int? digestOffset}) async =>
+      NotifyPrefs(
+          posts: true,
+          replies: true,
+          likes: true,
+          digestEnabled: false,
+          digestHour: 20,
+          digestOffset: digestOffset ?? 0);
 }
 
 void main() {
@@ -63,6 +86,12 @@ void main() {
       ),
     );
     await tester.pump();
+    // The real HomeShell's handle is capable here (alpha.memoriesCapable) and schedules its
+    // ambient pulse timer (see MemoriesPillPulseController) the instant it first builds.
+    // None of these tests unmount the tree themselves, so without this that timer is still
+    // pending when the test body returns and flutter_test's own end-of-test invariant check
+    // ("A Timer is still pending") fails a test that has nothing to do with the pulse.
+    addTearDown(() => tester.pumpWidget(const SizedBox.shrink()));
     return controller;
   }
 
@@ -145,6 +174,25 @@ void main() {
 
     expect(autoplay(tester).enabled, isTrue,
         reason: 'closing the surface must give autoplay back to the feed');
+  });
+
+  testWidgets("the pill sits on the Feed icon's own vertical center, even with a bottom safe inset",
+      (tester) async {
+    // An iPhone-style home-indicator inset. BottomAppBar wraps its Row content in a SafeArea
+    // *outside* a fixed-height 64 box (see Flutter's BottomAppBar.build), so the bar's real
+    // rendered height is 64 + this inset with the Row pinned to the top of it - a handle
+    // centered against that taller total height (the bug this guards) would sit visibly
+    // below the icons' actual center by about half of it.
+    tester.view.padding = const FakeViewPadding(bottom: 34);
+    addTearDown(tester.view.resetPadding);
+    await pump(tester);
+
+    final pillY = tester.getCenter(find.byKey(const Key('memoriesPill'))).dy;
+    final feedIconY = tester.getCenter(find.byIcon(Icons.home_rounded)).dy;
+
+    expect(pillY, closeTo(feedIconY, 1.0),
+        reason: "the handle overlay must center the pill on the Feed/You icons' own line, "
+            "not against the bar's taller safe-area-inflated total height");
   });
 
   testWidgets(
