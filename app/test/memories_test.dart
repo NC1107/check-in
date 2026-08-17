@@ -203,6 +203,126 @@ void main() {
     });
   });
 
+  group('group selection', () {
+    ServerAccount accountWith(String id, {bool memories = false, bool events = false}) =>
+        ServerAccount(
+          id: id,
+          baseUrl: 'https://$id',
+          serverName: id,
+          token: 't',
+          memoriesCapable: memories,
+          eventsCapable: events,
+        );
+
+    test(
+        'effectiveMemoriesGroupId follows the feed\'s own single-group filter when it '
+        'resolves to exactly one group', () {
+      final session = MultiSession(
+        groups: [
+          accountWith('a.invalid', memories: true),
+          accountWith('b.invalid', memories: true)
+        ],
+        hiddenGroupIds: const {'a.invalid'},
+        restored: true,
+      );
+      expect(effectiveMemoriesGroupId(session, null), 'b.invalid');
+    });
+
+    test(
+        'effectiveMemoriesGroupId falls back to the first capable group in shown order when '
+        'the feed filter does not resolve to exactly one group', () {
+      final session = MultiSession(
+        groups: [accountWith('a.invalid', events: true), accountWith('b.invalid', memories: true)],
+        restored: true,
+      );
+      // Both shown (no single-group filter to defer to) - the deterministic fallback is
+      // simply "first in the app's existing shown-group order", regardless of which of the
+      // two capabilities each one happens to carry.
+      expect(effectiveMemoriesGroupId(session, null), 'a.invalid');
+    });
+
+    test(
+        'effectiveMemoriesGroupId keeps an explicit pick even when it differs from the '
+        'deterministic default', () {
+      final session = MultiSession(
+        groups: [
+          accountWith('a.invalid', memories: true),
+          accountWith('b.invalid', memories: true)
+        ],
+        restored: true,
+      );
+      expect(effectiveMemoriesGroupId(session, 'b.invalid'), 'b.invalid');
+    });
+
+    test('effectiveMemoriesGroupId repairs a pick that no longer names a shown, capable group', () {
+      final session =
+          MultiSession(groups: [accountWith('a.invalid', memories: true)], restored: true);
+      expect(effectiveMemoriesGroupId(session, 'gone.invalid'), 'a.invalid');
+    });
+
+    test('effectiveMemoriesGroupId resolves to null with nothing capable shown', () {
+      final session = MultiSession(groups: [accountWith('a.invalid')], restored: true);
+      expect(effectiveMemoriesGroupId(session, null), isNull);
+    });
+
+    testWidgets('the group selector is absent with exactly one capable group', (tester) async {
+      await pumpHost(tester,
+          groups: [account('a.invalid', memoriesCapable: true)],
+          api: (id) => _FakeMemoriesApi([null]));
+
+      await tester.tap(find.bySemanticsLabel('Memories'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('a.invalid'), findsNothing);
+    });
+
+    testWidgets('the group selector appears with more than one capable group', (tester) async {
+      await pumpHost(tester,
+          groups: [
+            account('a.invalid', memoriesCapable: true),
+            account('b.invalid', memoriesCapable: true)
+          ],
+          api: (id) => _FakeMemoriesApi([null]));
+
+      await tester.tap(find.bySemanticsLabel('Memories'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('a.invalid'), findsOneWidget);
+      expect(find.text('b.invalid'), findsOneWidget);
+    });
+
+    testWidgets(
+        'the default group pick is deterministic across repeated fresh opens - never random, '
+        'the exact bug this feature replaces', (tester) async {
+      // A is memories-only, B is events-only, so whichever of "Random check-in"/"Group
+      // trips" the hub root offers on first open - before the selector is ever touched -
+      // reveals which group the default landed on without drilling any further in.
+      final groups = [
+        accountWith('a.invalid', memories: true),
+        accountWith('b.invalid', events: true)
+      ];
+      String? firstOpenEntries;
+      for (var i = 0; i < 2; i++) {
+        await pumpHost(tester, groups: groups, api: (id) => _FakeMemoriesApi([null]));
+        await tester.tap(find.bySemanticsLabel('Memories'));
+        await tester.pumpAndSettle();
+
+        final entries = [
+          if (find.text('Random check-in').evaluate().isNotEmpty) 'Random check-in',
+          if (find.text('Group trips').evaluate().isNotEmpty) 'Group trips',
+        ].join(',');
+        if (firstOpenEntries == null) {
+          firstOpenEntries = entries;
+        } else {
+          expect(entries, firstOpenEntries,
+              reason: 'the default group selection must be deterministic, never random, '
+                  'across repeated fresh opens');
+        }
+        await tester.pumpWidget(const SizedBox.shrink());
+      }
+    });
+  });
+
   group('layout stability', () {
     // A bottom bar built from exactly the same pieces home_shell.dart now uses, mirrored
     // side by side: [base] carries no trace of the Memories feature at all (the true
@@ -457,7 +577,7 @@ void main() {
       // Starts fully OPEN, deliberately not 0: a buggy cancel that ignores whether a drag
       // was actually in progress would call settleMemoriesTarget with the driver's default
       // (untouched) _dragAccum of 0, which is below the open threshold, and yank the
-      // surface closed - exactly the real scenario of tapping "Give me a memory" or
+      // surface closed - exactly the real scenario of tapping "Random check-in" or
       // "Another" while the surface is sitting open. Starting at 0 could not tell a
       // present guard from a missing one: either way the controller would settle at 0,
       // since that is also what settleMemoriesTarget(0, 0) computes.
@@ -540,14 +660,14 @@ void main() {
       await tester.pumpAndSettle();
       expect(key.currentState!.controller.value, 1);
 
-      // Hub root: the "Give me a memory" entry, then the screen it opens onto.
-      expect(find.text('Give me a memory'), findsOneWidget);
-      await tester.tap(find.text('Give me a memory'));
+      // Hub root: the "Random check-in" entry, then the screen it opens onto.
+      expect(find.text('Random check-in'), findsOneWidget);
+      await tester.tap(find.text('Random check-in'));
       await tester.pumpAndSettle();
 
-      // Idle until "Give me a memory" is tapped.
-      expect(find.text('Give me a memory'), findsOneWidget);
-      await tester.tap(find.text('Give me a memory'));
+      // Idle until "Random check-in" is tapped.
+      expect(find.text('Random check-in'), findsOneWidget);
+      await tester.tap(find.text('Random check-in'));
       await tester.pumpAndSettle();
 
       expect(find.text('first memory'), findsOneWidget);
@@ -575,9 +695,9 @@ void main() {
 
       await tester.tap(find.bySemanticsLabel('Memories'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Give me a memory')); // hub entry
+      await tester.tap(find.text('Random check-in')); // hub entry
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Give me a memory')); // the action button
+      await tester.tap(find.text('Random check-in')); // the action button
       await tester.pumpAndSettle();
 
       expect(find.text('Nothing to look back on yet.'), findsOneWidget);
@@ -591,7 +711,8 @@ void main() {
       final completer = Completer<Post?>();
       final groupA = account('a.invalid', memoriesCapable: true);
       final groupB = account('b.invalid', memoriesCapable: true);
-      // Only A is shown, so the uniform pick among capable shown groups is deterministic.
+      // Only A is shown, so it's the sole shown group and effectiveMemoriesGroupId resolves
+      // to it deterministically with no selection made yet.
       final session = MultiSessionController.seeded(MultiSession(
           groups: [groupA, groupB], hiddenGroupIds: const {'b.invalid'}, restored: true));
 
@@ -611,9 +732,9 @@ void main() {
 
       await tester.tap(find.bySemanticsLabel('Memories'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Give me a memory')); // hub entry
+      await tester.tap(find.text('Random check-in')); // hub entry
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Give me a memory')); // the action button
+      await tester.tap(find.text('Random check-in')); // the action button
       await tester.pump(); // starts the fetch against A; leaves it pending on completer
 
       // The active selection changes mid-flight: A is hidden and B is shown instead - the
@@ -634,6 +755,60 @@ void main() {
       final detail = tester.widget<PostDetailScreen>(find.byType(PostDetailScreen));
       expect(detail.postId, 555);
       expect(detail.groupId, 'a.invalid');
+    });
+
+    testWidgets(
+        'switching the header\'s group selector while a memory is already showing refetches '
+        'from the newly selected group', (tester) async {
+      final groupA = account('a.invalid', memoriesCapable: true);
+      final groupB = account('b.invalid', memoriesCapable: true);
+      await pumpHost(tester,
+          groups: [groupA, groupB],
+          api: (id) => id == 'a.invalid'
+              ? _FakeMemoriesApi([memory(201, body: 'from A')])
+              : _FakeMemoriesApi([memory(202, body: 'from B')]));
+
+      await tester.tap(find.bySemanticsLabel('Memories'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Random check-in')); // hub entry
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Random check-in')); // action button - fetches the default, A
+      await tester.pumpAndSettle();
+      expect(find.text('from A'), findsOneWidget);
+
+      await tester.tap(find.text('b.invalid')); // the selector pill
+      await tester.pumpAndSettle();
+
+      expect(find.text('from B'), findsOneWidget,
+          reason: 'switching the selector must refetch the currently-showing view from the '
+              'newly picked group');
+      expect(find.text('from A'), findsNothing);
+
+      await tester.tap(find.bySemanticsLabel('Open this memory'));
+      await tester.pumpAndSettle();
+
+      final detail = tester.widget<PostDetailScreen>(find.byType(PostDetailScreen));
+      expect(detail.postId, 202,
+          reason: 'the refetched result must carry the newly selected group\'s id');
+      expect(detail.groupId, 'b.invalid');
+    });
+
+    testWidgets('renders the renamed hub entry and button, never the old strings', (tester) async {
+      await pumpHost(tester,
+          groups: [account('a.invalid', memoriesCapable: true)],
+          api: (id) => _FakeMemoriesApi([null]));
+
+      await tester.tap(find.bySemanticsLabel('Memories'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Random check-in'), findsOneWidget);
+      expect(find.text('Give me a memory'), findsNothing);
+
+      await tester.tap(find.text('Random check-in'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Random check-in'), findsOneWidget); // the idle-state button
+      expect(find.text('Give me a memory'), findsNothing);
     });
   });
 

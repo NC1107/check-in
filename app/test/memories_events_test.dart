@@ -10,7 +10,7 @@ import 'package:checkin/features/post/post_detail_screen.dart';
 import 'package:checkin/state/app_state.dart';
 import 'package:checkin/widgets/photo_viewer.dart';
 
-/// The Memories surface's "You were there" hub entry: the hub itself gating each entry on
+/// The Memories surface's "Group trips" hub entry: the hub itself gating each entry on
 /// its own capability, the events list's loading/loaded/empty/error states, and drilling
 /// into one event's own photos - reusing the existing full-screen viewer for the "go to
 /// post" route exactly as a normal feed carousel does.
@@ -124,27 +124,52 @@ void main() {
     addTearDown(() => tester.pumpWidget(const SizedBox.shrink()));
   }
 
+  /// Like [pumpOpenSurface] but wires up more than one shown group, each resolved to its
+  /// own api via [apiFor] - what the header's own group selector tests need in order to
+  /// switch between groups.
+  Future<void> pumpOpenSurfaceMulti(WidgetTester tester,
+      {required List<ServerAccount> groups,
+      required ApiClient Function(String groupId) apiFor}) async {
+    final controller = AnimationController(
+        vsync: const TestVSync(), value: 1, duration: const Duration(milliseconds: 220));
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        multiSessionProvider.overrideWith(
+            () => MultiSessionController.seeded(MultiSession(groups: groups, restored: true))),
+        apiForGroupProvider.overrideWith((ref, id) => apiFor(id)),
+      ],
+      child: MaterialApp(
+        home: Scaffold(
+          body: MemoriesSurface(controller: controller, onClose: () => controller.value = 0),
+        ),
+      ),
+    ));
+    await tester.pump();
+    addTearDown(() => tester.pumpWidget(const SizedBox.shrink()));
+  }
+
   group('hub capability gate', () {
     testWidgets('offers both entries when both capabilities are advertised', (tester) async {
       await pumpOpenSurface(tester,
           serverAccount: account('a.invalid', memoriesCapable: true, eventsCapable: true),
           api: _FakeEventsApi());
 
-      expect(find.text('Give me a memory'), findsOneWidget);
-      expect(find.text('You were there'), findsOneWidget);
+      expect(find.text('Random check-in'), findsOneWidget);
+      expect(find.text('Group trips'), findsOneWidget);
     });
 
-    testWidgets('hides "You were there" when the group predates the events capability',
+    testWidgets('hides "Group trips" when the group predates the events capability',
         (tester) async {
       await pumpOpenSurface(tester,
           serverAccount: account('a.invalid', memoriesCapable: true, eventsCapable: false),
           api: _FakeEventsApi());
 
-      expect(find.text('Give me a memory'), findsOneWidget);
-      expect(find.text('You were there'), findsNothing);
+      expect(find.text('Random check-in'), findsOneWidget);
+      expect(find.text('Group trips'), findsNothing);
     });
 
-    testWidgets('hides "Give me a memory" when the group has events but not memories',
+    testWidgets('hides "Random check-in" when the group has events but not memories',
         (tester) async {
       // Not reachable through the real handle (which gates on memoriesCapable alone), but
       // the hub's own per-entry gate has to hold regardless of how it was reached.
@@ -152,8 +177,8 @@ void main() {
           serverAccount: account('a.invalid', memoriesCapable: false, eventsCapable: true),
           api: _FakeEventsApi());
 
-      expect(find.text('Give me a memory'), findsNothing);
-      expect(find.text('You were there'), findsOneWidget);
+      expect(find.text('Random check-in'), findsNothing);
+      expect(find.text('Group trips'), findsOneWidget);
     });
   });
 
@@ -170,7 +195,7 @@ void main() {
           serverAccount: account('a.invalid', memoriesCapable: true, eventsCapable: true),
           api: _FakeEventsApi(events: [trip, gathering]));
 
-      await tester.tap(find.text('You were there'));
+      await tester.tap(find.text('Group trips'));
       await settle(tester);
 
       expect(find.text('Lisbon, Portugal'), findsOneWidget);
@@ -195,7 +220,7 @@ void main() {
           serverAccount: account('a.invalid', memoriesCapable: true, eventsCapable: true),
           api: _FakeEventsApi(events: const []));
 
-      await tester.tap(find.text('You were there'));
+      await tester.tap(find.text('Group trips'));
       await settle(tester);
 
       expect(find.text('No trips or gatherings yet.'), findsOneWidget);
@@ -207,7 +232,7 @@ void main() {
           serverAccount: account('a.invalid', memoriesCapable: true, eventsCapable: true),
           api: _FakeEventsApi(failEvents: true));
 
-      await tester.tap(find.text('You were there'));
+      await tester.tap(find.text('Group trips'));
       await settle(tester);
 
       expect(find.text("Couldn't load your group's events."), findsOneWidget);
@@ -219,15 +244,15 @@ void main() {
           serverAccount: account('a.invalid', memoriesCapable: true, eventsCapable: true),
           api: _FakeEventsApi(events: [event()]));
 
-      await tester.tap(find.text('You were there'));
+      await tester.tap(find.text('Group trips'));
       await settle(tester);
       expect(find.bySemanticsLabel('Back'), findsOneWidget);
 
       await tester.tap(find.bySemanticsLabel('Back'));
       await settle(tester);
 
-      expect(find.text('Give me a memory'), findsOneWidget);
-      expect(find.text('You were there'), findsOneWidget);
+      expect(find.text('Random check-in'), findsOneWidget);
+      expect(find.text('Group trips'), findsOneWidget);
       expect(find.bySemanticsLabel('Back'), findsNothing,
           reason: 'back at the hub root has nowhere left to step back to');
     });
@@ -248,7 +273,7 @@ void main() {
           serverAccount: account('a.invalid', memoriesCapable: true, eventsCapable: true),
           api: api);
 
-      await tester.tap(find.text('You were there'));
+      await tester.tap(find.text('Group trips'));
       await settle(tester);
       await tester.tap(find.text('Lisbon, Portugal'));
       await settle(tester);
@@ -275,7 +300,7 @@ void main() {
           serverAccount: account('a.invalid', memoriesCapable: true, eventsCapable: true),
           api: api);
 
-      await tester.tap(find.text('You were there'));
+      await tester.tap(find.text('Group trips'));
       await settle(tester);
       await tester.tap(find.text('Lisbon, Portugal'));
       await settle(tester);
@@ -309,12 +334,36 @@ void main() {
           serverAccount: account('a.invalid', memoriesCapable: true, eventsCapable: true),
           api: api);
 
-      await tester.tap(find.text('You were there'));
+      await tester.tap(find.text('Group trips'));
       await settle(tester);
       await tester.tap(find.text('Lisbon, Portugal'));
       await settle(tester);
 
       expect(find.text('No photos in this one.'), findsOneWidget);
+    });
+  });
+
+  group('group selector', () {
+    testWidgets(
+        'switching to a group lacking the events capability shows the explicit '
+        'not-supported message, not a bare empty state', (tester) async {
+      final groupA = account('a.invalid', memoriesCapable: true, eventsCapable: true);
+      final groupB = account('b.invalid', memoriesCapable: true, eventsCapable: false);
+      await pumpOpenSurfaceMulti(tester,
+          groups: [groupA, groupB],
+          apiFor: (id) => _FakeEventsApi(events: id == 'a.invalid' ? [event()] : const []));
+
+      await tester.tap(find.text('Group trips'));
+      await settle(tester);
+      expect(find.text('Lisbon, Portugal'), findsOneWidget);
+
+      await tester.tap(find.text('b.invalid')); // the header's own group selector pill
+      await settle(tester);
+
+      expect(find.text("This group doesn't support Group trips."), findsOneWidget);
+      expect(find.text('No trips or gatherings yet.'), findsNothing,
+          reason: 'a group with no such capability at all must read as unsupported, not as '
+              'an honest empty state - those mean different things');
     });
   });
 }
