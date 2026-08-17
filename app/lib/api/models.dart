@@ -18,6 +18,7 @@ class ServerInfo {
     this.recapOffset = 0,
     this.titlesCapable = false,
     this.memoriesCapable = false,
+    this.eventsCapable = false,
   });
 
   final String name;
@@ -70,6 +71,13 @@ class ServerInfo {
   /// the handle entirely rather than opening a surface that can never load anything.
   final bool memoriesCapable;
 
+  /// Whether this server has GET /api/memories/events - the "You were there" group-event
+  /// hub entry. Same story as [memoriesCapable]: a server predating it has no such route
+  /// at all, so the client hides that one hub entry rather than opening a list that can
+  /// never load anything. Independent of memoriesCapable - a server can have one without
+  /// the other.
+  final bool eventsCapable;
+
   factory ServerInfo.fromJson(Map<String, dynamic> j) => ServerInfo(
         name: j['name'] as String? ?? 'Check-In',
         initialized: j['initialized'] as bool? ?? false,
@@ -85,6 +93,7 @@ class ServerInfo {
         recapOffset: (j['recapOffset'] as num?)?.toInt() ?? 0,
         titlesCapable: j['titles'] as bool? ?? false,
         memoriesCapable: j['memories'] as bool? ?? false,
+        eventsCapable: j['events'] as bool? ?? false,
       );
 }
 
@@ -923,6 +932,95 @@ class NotifyPrefs {
         digestEnabled: j['digestEnabled'] as bool? ?? false,
         digestHour: (j['digestHour'] as num?)?.toInt() ?? 20,
         digestOffset: (j['digestOffset'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// One "You were there" detected group event - a trip (the group somewhere none of them
+/// call home) or a gathering (a concentrated get-together at home turf). See the server's
+/// db/events_cluster.go for the whole detection algorithm this is a snapshot of.
+class Event {
+  Event({
+    required this.kind,
+    required this.place,
+    required this.startDate,
+    required this.endDate,
+    required this.participants,
+    required this.postIds,
+    required this.photoCount,
+    this.coverMediaId,
+    this.groupId,
+  });
+
+  /// "trip" | "gathering".
+  final String kind;
+  final String place;
+  final DateTime startDate;
+  final DateTime endDate;
+  final List<EventParticipant> participants;
+  final List<int> postIds;
+  final int photoCount;
+
+  /// The most-liked photo in the event, or null when nothing in it has a photo at all (an
+  /// all-text or all-clip event) - the card then falls back to a plain place/date cover.
+  final int? coverMediaId;
+
+  /// Which connected group this event came from. Never sent by the server (single-tenant
+  /// per server) - the client stamps it when fetching, the same way [Post.groupId] is
+  /// stamped, so the event's photos and "go to post" links route to the right server.
+  final String? groupId;
+
+  bool get isTrip => kind == 'trip';
+
+  /// "4 friends" / "Ada" / "Ada & Bea" - the participant summary a card shows under the
+  /// place/date line. Mirrors [Post.peopleLabel]'s own name-list shape but without the
+  /// "with" prefix, since a card names who the EVENT belongs to, not who a post is with.
+  String get participantsLabel {
+    final names = [for (final p in participants) p.name];
+    if (names.isEmpty) return '';
+    if (names.length == 1) return names[0];
+    if (names.length == 2) return '${names[0]} & ${names[1]}';
+    return '${names.length} friends';
+  }
+
+  Event withGroup(String groupId) => Event(
+        kind: kind,
+        place: place,
+        startDate: startDate,
+        endDate: endDate,
+        participants: participants,
+        postIds: postIds,
+        photoCount: photoCount,
+        coverMediaId: coverMediaId,
+        groupId: groupId,
+      );
+
+  factory Event.fromJson(Map<String, dynamic> j) => Event(
+        kind: j['kind'] as String? ?? 'trip',
+        place: j['place'] as String? ?? '',
+        startDate: DateTime.parse(j['startDate'] as String),
+        endDate: DateTime.parse(j['endDate'] as String),
+        participants: ((j['participants'] as List?) ?? const [])
+            .map((e) => EventParticipant.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        postIds: ((j['postIds'] as List?) ?? const []).map((e) => (e as num).toInt()).toList(),
+        photoCount: (j['photoCount'] as num?)?.toInt() ?? 0,
+        coverMediaId: (j['coverMediaId'] as num?)?.toInt(),
+      );
+}
+
+/// One member who showed up in an [Event], ordered in [Event.participants] by
+/// contribution (see the server's own buildEvent).
+class EventParticipant {
+  EventParticipant({required this.id, required this.name, this.photoId});
+
+  final int id;
+  final String name;
+  final int? photoId;
+
+  factory EventParticipant.fromJson(Map<String, dynamic> j) => EventParticipant(
+        id: (j['id'] as num?)?.toInt() ?? 0,
+        name: j['name'] as String? ?? '',
+        photoId: (j['photoId'] as num?)?.toInt(),
       );
 }
 

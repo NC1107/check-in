@@ -486,15 +486,24 @@ void main() {
       addTearDown(controller.dispose);
       var closeCalls = 0;
 
-      await tester.pumpWidget(MaterialApp(
-        navigatorKey: nav,
-        home: Scaffold(
-          body: MemoriesSurface(
-            controller: controller,
-            onClose: () {
-              closeCalls++;
-              controller.value = 0;
-            },
+      await tester.pumpWidget(ProviderScope(
+        // The surface's hub root reads multiSessionProvider (to decide which entries to
+        // offer) the instant it builds, so this needs a real ProviderScope even though
+        // this test never interacts with the hub itself.
+        overrides: [
+          multiSessionProvider.overrideWith(
+              () => MultiSessionController.seeded(const MultiSession(restored: true))),
+        ],
+        child: MaterialApp(
+          navigatorKey: nav,
+          home: Scaffold(
+            body: MemoriesSurface(
+              controller: controller,
+              onClose: () {
+                closeCalls++;
+                controller.value = 0;
+              },
+            ),
           ),
         ),
       ));
@@ -531,6 +540,11 @@ void main() {
       await tester.pumpAndSettle();
       expect(key.currentState!.controller.value, 1);
 
+      // Hub root: the "Give me a memory" entry, then the screen it opens onto.
+      expect(find.text('Give me a memory'), findsOneWidget);
+      await tester.tap(find.text('Give me a memory'));
+      await tester.pumpAndSettle();
+
       // Idle until "Give me a memory" is tapped.
       expect(find.text('Give me a memory'), findsOneWidget);
       await tester.tap(find.text('Give me a memory'));
@@ -561,7 +575,9 @@ void main() {
 
       await tester.tap(find.bySemanticsLabel('Memories'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Give me a memory'));
+      await tester.tap(find.text('Give me a memory')); // hub entry
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Give me a memory')); // the action button
       await tester.pumpAndSettle();
 
       expect(find.text('Nothing to look back on yet.'), findsOneWidget);
@@ -595,7 +611,9 @@ void main() {
 
       await tester.tap(find.bySemanticsLabel('Memories'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Give me a memory'));
+      await tester.tap(find.text('Give me a memory')); // hub entry
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Give me a memory')); // the action button
       await tester.pump(); // starts the fetch against A; leaves it pending on completer
 
       // The active selection changes mid-flight: A is hidden and B is shown instead - the

@@ -7,18 +7,21 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../../api/api_client.dart';
 import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/app_widgets.dart';
 import '../../widgets/auth_image.dart';
+import '../../widgets/photo_viewer.dart';
 import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
 
 // Theme tokens (centralized in theme/tokens.dart).
 const _bgMain = kBgMain;
 const _bgSurface = kBgSurface;
+const _bgSurfaceHover = kBgSurfaceHover;
 const _border = kBorder;
 const _fgPrimary = kFgPrimary;
 const _fgSecondary = kFgSecondary;
@@ -263,6 +266,71 @@ class MemoriesDragDriver {
     controller.animateTo(target,
         duration: reduceMotion ? Duration.zero : const Duration(milliseconds: 220),
         curve: Curves.easeOut);
+  }
+}
+
+/// Which top-level screen the hub is showing - see [MemoriesHubController].
+enum HubScreen { hub, randomMemory, eventsList }
+
+/// The Memories surface's own tiny internal navigation stack: hub -> ("Give me a memory"
+/// or "You were there") -> (an events list entry may drill into one event's own detail).
+/// Not a real [Navigator] - the stack here is never more than 2 deep and entirely known in
+/// advance, so a plain [ChangeNotifier] holding "which screen" plus "which event, if any"
+/// is simpler than standing up nested routing for it, while still giving MemoriesSurface's
+/// own PopScope (see its doc comment) a single place to ask "is there anywhere left to step
+/// back to before closing the whole surface".
+class MemoriesHubController extends ChangeNotifier {
+  HubScreen _screen = HubScreen.hub;
+  Event? _selectedEvent;
+
+  HubScreen get screen => _screen;
+
+  /// The event whose detail is showing, drilled into from the events list - null whenever
+  /// the list itself (or any other screen) is what's showing.
+  Event? get selectedEvent => _selectedEvent;
+
+  void openRandomMemory() {
+    _screen = HubScreen.randomMemory;
+    notifyListeners();
+  }
+
+  void openEventsList() {
+    _screen = HubScreen.eventsList;
+    _selectedEvent = null;
+    notifyListeners();
+  }
+
+  void openEventDetail(Event event) {
+    _selectedEvent = event;
+    notifyListeners();
+  }
+
+  /// Steps back exactly one level (event detail -> events list -> hub, or
+  /// randomMemory -> hub) and returns true, or does nothing and returns false when already
+  /// at the hub with nothing left to pop internally - the signal callers (Android back, the
+  /// header's own back chevron) use to know whether they should instead close the whole
+  /// surface.
+  bool back() {
+    if (_selectedEvent != null) {
+      _selectedEvent = null;
+      notifyListeners();
+      return true;
+    }
+    if (_screen != HubScreen.hub) {
+      _screen = HubScreen.hub;
+      notifyListeners();
+      return true;
+    }
+    return false;
+  }
+
+  /// Jumps straight back to the hub root - called whenever the surface itself closes, so
+  /// reopening it later never shows a stale sub-screen from last time.
+  void reset() {
+    if (_screen == HubScreen.hub && _selectedEvent == null) return;
+    _screen = HubScreen.hub;
+    _selectedEvent = null;
+    notifyListeners();
   }
 }
 
@@ -531,6 +599,12 @@ class _MemoriesSurfaceState extends State<MemoriesSurface> {
   // next drag or animation.
   late bool _open = widget.controller.value > 0;
 
+  // Owned here, not by the content widgets several layers down, because PopScope (right
+  // below) is what Android back reaches first and it needs to be able to ask "is there
+  // anywhere left to step back to internally" before deciding whether to close the whole
+  // surface - see MemoriesHubController's own doc comment.
+  final _hub = MemoriesHubController();
+
   @override
   void initState() {
     super.initState();
@@ -540,12 +614,17 @@ class _MemoriesSurfaceState extends State<MemoriesSurface> {
   @override
   void dispose() {
     widget.controller.removeListener(_onValueChanged);
+    _hub.dispose();
     super.dispose();
   }
 
   void _onValueChanged() {
     final open = widget.controller.value > 0;
     if (open != _open) setState(() => _open = open);
+    // Jump back to the hub root the instant the surface starts closing - not only once it
+    // finishes - so a swipe-to-close that's cancelled partway through never leaves the
+    // surface sitting at 0 with a stale sub-screen still showing underneath.
+    if (!open) _hub.reset();
   }
 
   @override
@@ -554,7 +633,12 @@ class _MemoriesSurfaceState extends State<MemoriesSurface> {
     return PopScope(
       canPop: !_open,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) widget.onClose();
+        if (didPop) return;
+        // Step back one level within the hub first (event detail -> list -> hub, or
+        // randomMemory -> hub) if there's anywhere left to go; only once the hub is
+        // already at its root does back close the whole surface.
+        if (_hub.back()) return;
+        widget.onClose();
       },
       child: AnimatedBuilder(
         animation: widget.controller,
@@ -567,17 +651,20 @@ class _MemoriesSurfaceState extends State<MemoriesSurface> {
             child: Transform.translate(offset: Offset(-width * (1 - value), 0), child: child),
           );
         },
-        child: _MemoriesSurfaceContent(controller: widget.controller, onClose: widget.onClose),
+        child: _MemoriesSurfaceContent(
+            controller: widget.controller, onClose: widget.onClose, hub: _hub),
       ),
     );
   }
 }
 
 class _MemoriesSurfaceContent extends StatefulWidget {
-  const _MemoriesSurfaceContent({required this.controller, required this.onClose});
+  const _MemoriesSurfaceContent(
+      {required this.controller, required this.onClose, required this.hub});
 
   final AnimationController controller;
   final VoidCallback onClose;
+  final MemoriesHubController hub;
 
   @override
   State<_MemoriesSurfaceContent> createState() => _MemoriesSurfaceContentState();
@@ -585,6 +672,21 @@ class _MemoriesSurfaceContent extends StatefulWidget {
 
 class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
   late final _drag = MemoriesDragDriver(widget.controller);
+
+  Widget _body() {
+    final selected = widget.hub.selectedEvent;
+    if (selected != null) {
+      return _EventDetailView(hub: widget.hub, event: selected);
+    }
+    switch (widget.hub.screen) {
+      case HubScreen.hub:
+        return _MemoriesHubHome(hub: widget.hub);
+      case HubScreen.randomMemory:
+        return const _MemoriesBody();
+      case HubScreen.eventsList:
+        return _EventsListView(hub: widget.hub);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -602,30 +704,60 @@ class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
         ),
         child: SafeArea(
           bottom: false,
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(18, 10, 10, 6),
-                child: Row(
-                  children: [
-                    const Expanded(
-                      child: Text('Memories',
-                          style: TextStyle(
-                              color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
+          child: ListenableBuilder(
+            listenable: widget.hub,
+            builder: (context, _) {
+              // A back chevron replaces nothing and sits alongside the close X - the two
+              // are independent affordances (step back one level vs. leave entirely), not
+              // a swap of one for the other. Absent at the hub root, where there's nowhere
+              // left to step back to.
+              final atRoot = widget.hub.screen == HubScreen.hub && widget.hub.selectedEvent == null;
+              return Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(6, 10, 10, 6),
+                    child: Row(
+                      children: [
+                        if (!atRoot)
+                          Semantics(
+                            button: true,
+                            label: 'Back',
+                            child: IconButton(
+                              onPressed: widget.hub.back,
+                              icon: const Icon(Icons.arrow_back, color: _fgSecondary),
+                            ),
+                          )
+                        else
+                          const SizedBox(width: 12),
+                        const Expanded(
+                          // Excluded from semantics: this is decorative chrome, and its
+                          // own implicit "Memories" text label would otherwise merge up
+                          // into the surface's own horizontal-drag GestureDetector (which
+                          // contributes a scrollLeft/scrollRight semantics node of its
+                          // own) - colliding with the handle's OWN explicit
+                          // Semantics(label: 'Memories') button and making
+                          // find.bySemanticsLabel('Memories') ambiguous.
+                          child: ExcludeSemantics(
+                            child: Text('Memories',
+                                style: TextStyle(
+                                    color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
+                          ),
+                        ),
+                        Semantics(
+                          button: true,
+                          label: 'Close',
+                          child: IconButton(
+                            onPressed: widget.onClose,
+                            icon: const Icon(Icons.close, color: _fgSecondary),
+                          ),
+                        ),
+                      ],
                     ),
-                    Semantics(
-                      button: true,
-                      label: 'Close',
-                      child: IconButton(
-                        onPressed: widget.onClose,
-                        icon: const Icon(Icons.close, color: _fgSecondary),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const Expanded(child: _MemoriesBody()),
-            ],
+                  ),
+                  Expanded(child: _body()),
+                ],
+              );
+            },
           ),
         ),
       ),
@@ -633,9 +765,108 @@ class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
   }
 }
 
-/// The surface's own content: the "Give me a memory" action and whatever it fetches.
-/// Deliberately the only thing in v1 - see the muted "more coming" line for the future
-/// entries (Map, Timeline, You Were There) this makes room for without building them.
+/// The hub root: "Give me a memory" and "You were there", each gated on its own server
+/// capability - a group whose server has one but not the other only ever offers that one.
+class _MemoriesHubHome extends ConsumerWidget {
+  const _MemoriesHubHome({required this.hub});
+
+  final MemoriesHubController hub;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final memoriesOn =
+        ref.watch(multiSessionProvider.select((s) => s.memoriesCapableShownGroups.isNotEmpty));
+    final eventsOn =
+        ref.watch(multiSessionProvider.select((s) => s.eventsCapableShownGroups.isNotEmpty));
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (memoriesOn)
+              _HubEntry(
+                icon: Icons.auto_awesome_outlined,
+                title: 'Give me a memory',
+                subtitle: "Look back at something from your group's history.",
+                onTap: hub.openRandomMemory,
+              ),
+            if (memoriesOn && eventsOn) const SizedBox(height: 12),
+            if (eventsOn)
+              _HubEntry(
+                icon: Icons.map_outlined,
+                title: 'You were there',
+                subtitle: 'Trips and get-togethers your group shared.',
+                onTap: hub.openEventsList,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One hub entry: an icon, a title, a one-line subtitle, and a chevron - the app's
+/// existing card idiom (14 corner radius, surface fill, a border) rather than a new shape
+/// invented for this screen.
+class _HubEntry extends StatelessWidget {
+  const _HubEntry({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: title,
+      child: GestureDetector(
+        onTap: onTap,
+        child: ExcludeSemantics(
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: _bgSurface,
+              border: Border.all(color: _border),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Row(
+              children: [
+                Icon(icon, size: 26, color: context.accent),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(title,
+                          style: const TextStyle(
+                              color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 15)),
+                      const SizedBox(height: 3),
+                      Text(subtitle, style: const TextStyle(color: _fgMuted, fontSize: 12)),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.chevron_right, color: _fgMuted),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The "Give me a memory" screen: the existing single-random-post action and whatever it
+/// fetches. Pushed onto the hub rather than shown at its root - see
+/// [MemoriesHubController].
 class _MemoriesBody extends ConsumerStatefulWidget {
   const _MemoriesBody();
 
@@ -719,9 +950,6 @@ class _MemoriesBodyState extends ConsumerState<_MemoriesBody> {
             const SizedBox(height: 20),
             PrimaryButton(
                 label: 'Give me a memory', enabled: !_loading, busy: _loading, onTap: _fetch),
-            const SizedBox(height: 14),
-            const Text('More ways to look back - coming soon.',
-                style: TextStyle(color: _fgMuted, fontSize: 12)),
           ],
         ),
       ),
@@ -877,6 +1105,458 @@ class _MemoryCard extends StatelessWidget {
                 ],
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// "Aug 10" for a single day, "Aug 10 - Aug 16" (or "Aug 10 - Sep 2, 2027" across a year
+/// boundary) for a range - the compact date line an event card and its detail screen both
+/// show under the place name.
+String eventDateRangeLabel(Event event, {DateTime? now}) {
+  final start = event.startDate.toLocal();
+  final end = event.endDate.toLocal();
+  if (start.year == end.year && start.month == end.month && start.day == end.day) {
+    return DateFormat.yMMMd().format(start);
+  }
+  if (start.year == end.year) {
+    return '${DateFormat.MMMd().format(start)} - ${DateFormat.yMMMd().format(end)}';
+  }
+  return '${DateFormat.yMMMd().format(start)} - ${DateFormat.yMMMd().format(end)}';
+}
+
+/// The events list: every detected trip/gathering for one (uniformly-picked, same
+/// reasoning as _MemoriesBodyState's own memory pick) events-capable group in view,
+/// newest first exactly as the server already ranks them.
+class _EventsListView extends ConsumerStatefulWidget {
+  const _EventsListView({required this.hub});
+
+  final MemoriesHubController hub;
+
+  @override
+  ConsumerState<_EventsListView> createState() => _EventsListViewState();
+}
+
+class _EventsListViewState extends ConsumerState<_EventsListView> {
+  List<Event>? _events;
+  bool _loading = true;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  Future<void> _fetch() async {
+    final capable = ref.read(multiSessionProvider).eventsCapableShownGroups;
+    if (capable.isEmpty) {
+      setState(() {
+        _events = const [];
+        _loading = false;
+        _failed = false;
+      });
+      return;
+    }
+    // Picked once per visit, the same way _MemoriesBodyState picks a group for "Give me a
+    // memory" - events are inherently one group's own history, so there is no sensible way
+    // to merge several groups' events into one list the way the feed merges posts.
+    final group = capable[Random().nextInt(capable.length)];
+    setState(() {
+      _loading = true;
+      _failed = false;
+    });
+    try {
+      final events = await ref.read(apiForGroupProvider(group.id)).events();
+      if (!mounted) return;
+      setState(() {
+        _events = [for (final e in events) e.withGroup(group.id)];
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_failed) return _errorState(context);
+    final events = _events ?? const [];
+    if (events.isEmpty) return _emptyState(context);
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(18, 4, 18, 24),
+      itemCount: events.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (_, i) => _EventCard(
+        event: events[i],
+        onTap: () => widget.hub.openEventDetail(events[i]),
+      ),
+    );
+  }
+
+  Widget _emptyState(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.map_outlined, size: 40, color: _fgMuted),
+            SizedBox(height: 16),
+            Text('No trips or gatherings yet.',
+                style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            SizedBox(height: 6),
+            Text(
+              "Once your group checks in together from the same place, they'll show up here.",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: _fgMuted, fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _errorState(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cloud_off_outlined, size: 40, color: _fgMuted),
+            const SizedBox(height: 16),
+            const Text("Couldn't load your group's events.",
+                style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 20),
+            PrimaryButton(label: 'Try again', enabled: !_loading, busy: _loading, onTap: _fetch),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One event: a cover photo (or a plain trip/gathering icon when nothing in it has a
+/// photo), the place, the date range, who was there, and a photo count - everything the
+/// founder's brief asked the card to carry. Tapping opens the event's own photos.
+class _EventCard extends StatelessWidget {
+  const _EventCard({required this.event, required this.onTap});
+
+  final Event event;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: '${event.place}, ${event.isTrip ? 'trip' : 'gathering'}',
+      child: GestureDetector(
+        onTap: onTap,
+        // See _MemoryCard's identical guard: without this every descendant Text merges its
+        // own semantics into this node, turning one announced action into a wall of text.
+        child: ExcludeSemantics(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: _bgSurface,
+                border: Border.all(color: _border),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AspectRatio(
+                    aspectRatio: 16 / 9,
+                    child: event.coverMediaId != null
+                        ? AuthImage(mediaId: event.coverMediaId!, groupId: event.groupId)
+                        : ColoredBox(
+                            color: _bgSurfaceHover,
+                            child: Icon(
+                              event.isTrip ? Icons.flight_takeoff_outlined : Icons.groups_outlined,
+                              size: 32,
+                              color: _fgMuted,
+                            ),
+                          ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                              color: context.accentLight,
+                              borderRadius: BorderRadius.circular(9999)),
+                          child: Text(
+                            event.isTrip ? 'TRIP' : 'GATHERING',
+                            style: TextStyle(
+                                color: context.accent,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.4),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(event.place,
+                            style: const TextStyle(
+                                color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 15)),
+                        const SizedBox(height: 3),
+                        Text(eventDateRangeLabel(event),
+                            style: const TextStyle(color: _fgMuted, fontSize: 12)),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            _AvatarStack(participants: event.participants, groupId: event.groupId),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(event.participantsLabel,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(color: _fgSecondary, fontSize: 12)),
+                            ),
+                            const Icon(Icons.photo_outlined, size: 14, color: _fgMuted),
+                            const SizedBox(width: 3),
+                            Text('${event.photoCount}',
+                                style: const TextStyle(color: _fgMuted, fontSize: 12)),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A small overlapping row of participant avatars, capped at [_max] - "4 friends" reads
+/// the exact count via [Event.participantsLabel] right next to it, so the stack itself
+/// only needs to suggest "a few people", not enumerate everyone.
+class _AvatarStack extends StatelessWidget {
+  const _AvatarStack({required this.participants, this.groupId});
+
+  final List<EventParticipant> participants;
+  final String? groupId;
+
+  static const _max = 4;
+  static const _size = 22.0;
+  static const _overlap = 14.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final shown = participants.take(_max).toList();
+    if (shown.isEmpty) return const SizedBox.shrink();
+    return SizedBox(
+      width: _size + (shown.length - 1) * _overlap,
+      height: _size,
+      child: Stack(
+        children: [
+          for (var i = 0; i < shown.length; i++)
+            Positioned(
+              left: i * _overlap,
+              child: Container(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: _bgSurface, width: 2),
+                ),
+                child: UserAvatar(
+                  name: shown[i].name,
+                  size: _size,
+                  mediaId: shown[i].photoId,
+                  colorSeed: shown[i].id,
+                  groupId: groupId,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One event's own photos: fetches the full post for each of [Event.postIds] (the events
+/// endpoint only ever returns ids and a summary - see the server's db.Event) and flattens
+/// every post's images into one grid. A photo's tile remembers which post it came from, so
+/// tapping it opens the same full-screen viewer and "go to post" route a normal feed
+/// carousel does - scoped to that one post's own photos, not the whole event's, exactly
+/// like a feed card's own carousel already behaves (see post_card.dart).
+class _EventDetailView extends ConsumerStatefulWidget {
+  const _EventDetailView({required this.hub, required this.event});
+
+  final MemoriesHubController hub;
+  final Event event;
+
+  @override
+  ConsumerState<_EventDetailView> createState() => _EventDetailViewState();
+}
+
+class _EventDetailViewState extends ConsumerState<_EventDetailView> {
+  List<Post>? _posts;
+  bool _loading = true;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<Post?> _tryGetPost(ApiClient api, int id) async {
+    try {
+      return await api.getPost(id);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _load() async {
+    final groupId = widget.event.groupId;
+    if (groupId == null) {
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+      return;
+    }
+    final api = ref.read(apiForGroupProvider(groupId));
+    final posts = await Future.wait([
+      for (final id in widget.event.postIds) _tryGetPost(api, id),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _posts = [
+        for (final p in posts)
+          if (p != null) p.withGroup(groupId)
+      ];
+      _loading = false;
+    });
+  }
+
+  /// Every image on every fetched post, in event order, paired with the post it belongs
+  /// to - the flat list the grid renders and each tile's tap target reads its post/media
+  /// from.
+  List<({Post post, PostMedia media})> get _photos => [
+        for (final p in _posts ?? const <Post>[])
+          for (final m in p.imageMedia) (post: p, media: m),
+      ];
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_failed) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off_outlined, size: 40, color: _fgMuted),
+              const SizedBox(height: 16),
+              const Text("Couldn't load this event.",
+                  style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 20),
+              PrimaryButton(label: 'Try again', enabled: true, onTap: _load),
+            ],
+          ),
+        ),
+      );
+    }
+    final photos = _photos;
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(child: _header(context)),
+        if (photos.isEmpty)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 40),
+              child: Center(
+                child:
+                    Text('No photos in this one.', style: TextStyle(color: _fgMuted, fontSize: 13)),
+              ),
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+            sliver: SliverGrid(
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                mainAxisSpacing: 6,
+                crossAxisSpacing: 6,
+              ),
+              delegate: SliverChildBuilderDelegate(
+                (context, i) => _PhotoTile(post: photos[i].post, media: photos[i].media),
+                childCount: photos.length,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _header(BuildContext context) {
+    final event = widget.event;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 4, 18, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(event.place,
+              style: const TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
+          const SizedBox(height: 4),
+          Text(eventDateRangeLabel(event), style: const TextStyle(color: _fgMuted, fontSize: 13)),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              _AvatarStack(participants: event.participants, groupId: event.groupId),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(event.participantsLabel,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: _fgSecondary, fontSize: 13)),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One tile in an event's photo grid - see _EventDetailView's own doc comment for why
+/// tapping it opens the viewer scoped to just this photo's own post.
+class _PhotoTile extends StatelessWidget {
+  const _PhotoTile({required this.post, required this.media});
+
+  final Post post;
+  final PostMedia media;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: 'Open photo',
+      child: GestureDetector(
+        onTap: () =>
+            PhotoViewerScreen.open(context, media: [media], groupId: post.groupId, postId: post.id),
+        child: ExcludeSemantics(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: AuthImage(mediaId: media.id, groupId: post.groupId),
           ),
         ),
       ),
