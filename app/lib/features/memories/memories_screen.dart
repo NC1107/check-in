@@ -2036,7 +2036,7 @@ class _TimelineListViewState extends ConsumerState<_TimelineListView> {
                 style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
             SizedBox(height: 6),
             Text(
-              'Its server needs an update before its history can browse here.',
+              'Its server needs an update before you can browse its history here.',
               textAlign: TextAlign.center,
               style: TextStyle(color: _fgMuted, fontSize: 13),
             ),
