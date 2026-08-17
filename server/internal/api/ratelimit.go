@@ -84,6 +84,7 @@ type contentLimits struct {
 	gifs     *rateLimiter
 	memories *rateLimiter
 	events   *rateLimiter
+	timeline *rateLimiter
 }
 
 // mediaBurst is the media allowance, and 20 is a requirement rather than a preference: a
@@ -113,6 +114,10 @@ func newContentLimits() contentLimits {
 		// open, is a handful of reads per visit, not a script - a modest burst clears normal
 		// browsing without inviting anyone to hammer the clustering query.
 		events: newRateLimiter(20, 10),
+		// The "Your months" list plus a handful of month-detail taps while browsing - the
+		// list itself is the more expensive of the two reads (see db.Timeline's own cost
+		// comment), so this stays as modest as events' own burst rather than media's.
+		timeline: newRateLimiter(20, 10),
 	}
 }
 
