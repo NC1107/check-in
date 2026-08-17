@@ -77,6 +77,12 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		// no such route at all, so the client gates showing that entry on this being true
 		// rather than probing the endpoint and hiding it after a 404.
 		"events": true,
+		// timeline is the capability signal for GET /api/memories/timeline and
+		// /api/memories/timeline/{year}/{month}, the "Your months" hub entry. Same story
+		// as memories and events: a server predating it has no such routes at all, so the
+		// client gates showing that entry on this being true rather than probing and
+		// hiding it after a 404.
+		"timeline": true,
 	}
 	if settings, err := s.db.GetRecapSettings(r.Context()); err == nil {
 		resp["recapCadence"] = settings.Cadence

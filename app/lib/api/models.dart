@@ -19,6 +19,7 @@ class ServerInfo {
     this.titlesCapable = false,
     this.memoriesCapable = false,
     this.eventsCapable = false,
+    this.timelineCapable = false,
   });
 
   final String name;
@@ -78,6 +79,13 @@ class ServerInfo {
   /// the other.
   final bool eventsCapable;
 
+  /// Whether this server has GET /api/memories/timeline and
+  /// /api/memories/timeline/{year}/{month} - the "Your months" hub entry. Same story as
+  /// [memoriesCapable] and [eventsCapable]: a server predating it has no such routes at
+  /// all, so the client hides that hub entry rather than opening a browse that can never
+  /// load anything. Independent of the other two.
+  final bool timelineCapable;
+
   factory ServerInfo.fromJson(Map<String, dynamic> j) => ServerInfo(
         name: j['name'] as String? ?? 'Check-In',
         initialized: j['initialized'] as bool? ?? false,
@@ -94,6 +102,7 @@ class ServerInfo {
         titlesCapable: j['titles'] as bool? ?? false,
         memoriesCapable: j['memories'] as bool? ?? false,
         eventsCapable: j['events'] as bool? ?? false,
+        timelineCapable: j['timeline'] as bool? ?? false,
       );
 }
 
@@ -1023,6 +1032,69 @@ class EventParticipant {
         id: (j['id'] as num?)?.toInt() ?? 0,
         name: j['name'] as String? ?? '',
         photoId: (j['photoId'] as num?)?.toInt(),
+      );
+}
+
+/// One calendar month of a group's history for the "Your months" browse - see the server's
+/// db/timeline.go for the whole aggregation and its month-bucketing convention.
+class TimelineMonth {
+  TimelineMonth({
+    required this.year,
+    required this.month,
+    required this.postCount,
+    required this.photoCount,
+    required this.clipCount,
+    required this.placeCount,
+    required this.posterCount,
+    this.coverMediaIds = const [],
+    this.groupId,
+  });
+
+  final int year;
+  final int month; // 1-12
+
+  final int postCount;
+  final int photoCount;
+  final int clipCount;
+  final int placeCount;
+  final int posterCount;
+
+  /// Up to a handful of the month's most-liked photos, most-liked first. A cover id whose
+  /// post or media has since been deleted is not filtered out here - see _CoverStrip's own
+  /// per-tile handling in memories_screen.dart, which degrades a single missing tile rather
+  /// than failing the whole card.
+  final List<int> coverMediaIds;
+
+  /// Which connected group this month came from. Never sent by the server - the client
+  /// stamps it when fetching, the same way [Event.groupId] and [Post.groupId] are, so a
+  /// month's photos and posts route to the right server.
+  final String? groupId;
+
+  /// "August 2026" - what a month card's title and the month-detail header both read.
+  String get label => DateFormat.yMMMM().format(DateTime(year, month));
+
+  TimelineMonth withGroup(String groupId) => TimelineMonth(
+        year: year,
+        month: month,
+        postCount: postCount,
+        photoCount: photoCount,
+        clipCount: clipCount,
+        placeCount: placeCount,
+        posterCount: posterCount,
+        coverMediaIds: coverMediaIds,
+        groupId: groupId,
+      );
+
+  factory TimelineMonth.fromJson(Map<String, dynamic> j) => TimelineMonth(
+        year: (j['year'] as num?)?.toInt() ?? 0,
+        month: (j['month'] as num?)?.toInt() ?? 1,
+        postCount: (j['postCount'] as num?)?.toInt() ?? 0,
+        photoCount: (j['photoCount'] as num?)?.toInt() ?? 0,
+        clipCount: (j['clipCount'] as num?)?.toInt() ?? 0,
+        placeCount: (j['placeCount'] as num?)?.toInt() ?? 0,
+        posterCount: (j['posterCount'] as num?)?.toInt() ?? 0,
+        coverMediaIds:
+            ((j['coverMediaIds'] as List?) ?? const []).map((e) => (e as num).toInt()).toList(),
       );
 }
 
