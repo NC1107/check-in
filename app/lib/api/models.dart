@@ -971,15 +971,17 @@ class Event {
 
   bool get isTrip => kind == 'trip';
 
-  /// "4 friends" / "Ada" / "Ada & Bea" - the participant summary a card shows under the
-  /// place/date line. Mirrors [Post.peopleLabel]'s own name-list shape but without the
-  /// "with" prefix, since a card names who the EVENT belongs to, not who a post is with.
+  /// "Ada, Bea & 2 others" / "Ada" / "Ada & Bea" - the participant summary a card shows
+  /// under the place/date line. Mirrors [Post.peopleLabel]'s own name-list shape but
+  /// without the "with" prefix, since a card names who the EVENT belongs to, not who a
+  /// post is with. Names the first two rather than just a count past two, since "friends"
+  /// assumes a relationship the group may not have (family, roommates, etc).
   String get participantsLabel {
     final names = [for (final p in participants) p.name];
     if (names.isEmpty) return '';
     if (names.length == 1) return names[0];
     if (names.length == 2) return '${names[0]} & ${names[1]}';
-    return '${names.length} friends';
+    return '${names[0]}, ${names[1]} & ${names.length - 2} others';
   }
 
   Event withGroup(String groupId) => Event(

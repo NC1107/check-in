@@ -186,8 +186,8 @@ void main() {
 
       expect(find.text('Austin, USA'), findsOneWidget);
       expect(find.text('GATHERING'), findsOneWidget);
-      // The gathering's 3 participants collapse to a count rather than naming all of them.
-      expect(find.text('3 friends'), findsOneWidget);
+      // The gathering's 3 participants name the first two and count the rest.
+      expect(find.text('Ada, Bea & 1 others'), findsOneWidget);
     });
 
     testWidgets('the truthful empty state for a group with no detected events', (tester) async {

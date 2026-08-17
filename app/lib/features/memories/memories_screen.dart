@@ -673,18 +673,22 @@ class _MemoriesSurfaceContent extends StatefulWidget {
 class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
   late final _drag = MemoriesDragDriver(widget.controller);
 
+  // Keyed per screen (and per selected event) so AnimatedSwitcher below treats each as a
+  // distinct child and actually animates the swap, instead of diffing into the same
+  // widget type and skipping the transition.
   Widget _body() {
     final selected = widget.hub.selectedEvent;
     if (selected != null) {
-      return _EventDetailView(hub: widget.hub, event: selected);
+      return _EventDetailView(
+          key: ValueKey('event-${selected.postIds.join(',')}'), hub: widget.hub, event: selected);
     }
     switch (widget.hub.screen) {
       case HubScreen.hub:
-        return _MemoriesHubHome(hub: widget.hub);
+        return _MemoriesHubHome(key: const ValueKey('hub'), hub: widget.hub);
       case HubScreen.randomMemory:
-        return const _MemoriesBody();
+        return const _MemoriesBody(key: ValueKey('random'));
       case HubScreen.eventsList:
-        return _EventsListView(hub: widget.hub);
+        return _EventsListView(key: const ValueKey('events'), hub: widget.hub);
     }
   }
 
@@ -754,7 +758,24 @@ class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
                       ],
                     ),
                   ),
-                  Expanded(child: _body()),
+                  Expanded(
+                    // A lightweight fade + slide so stepping between hub/list/detail feels
+                    // like the rest of the app's pushes, without dragging in a full
+                    // Navigator (the surface already has its own back-stack in
+                    // MemoriesHubController).
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      transitionBuilder: (child, animation) => FadeTransition(
+                        opacity: animation,
+                        child: SlideTransition(
+                          position: Tween<Offset>(begin: const Offset(0.04, 0), end: Offset.zero)
+                              .animate(animation),
+                          child: child,
+                        ),
+                      ),
+                      child: _body(),
+                    ),
+                  ),
                 ],
               );
             },
@@ -768,7 +789,7 @@ class _MemoriesSurfaceContentState extends State<_MemoriesSurfaceContent> {
 /// The hub root: "Give me a memory" and "You were there", each gated on its own server
 /// capability - a group whose server has one but not the other only ever offers that one.
 class _MemoriesHubHome extends ConsumerWidget {
-  const _MemoriesHubHome({required this.hub});
+  const _MemoriesHubHome({super.key, required this.hub});
 
   final MemoriesHubController hub;
 
@@ -868,7 +889,7 @@ class _HubEntry extends StatelessWidget {
 /// fetches. Pushed onto the hub rather than shown at its root - see
 /// [MemoriesHubController].
 class _MemoriesBody extends ConsumerStatefulWidget {
-  const _MemoriesBody();
+  const _MemoriesBody({super.key});
 
   @override
   ConsumerState<_MemoriesBody> createState() => _MemoriesBodyState();
@@ -1131,7 +1152,7 @@ String eventDateRangeLabel(Event event, {DateTime? now}) {
 /// reasoning as _MemoriesBodyState's own memory pick) events-capable group in view,
 /// newest first exactly as the server already ranks them.
 class _EventsListView extends ConsumerStatefulWidget {
-  const _EventsListView({required this.hub});
+  const _EventsListView({super.key, required this.hub});
 
   final MemoriesHubController hub;
 
@@ -1186,7 +1207,7 @@ class _EventsListViewState extends ConsumerState<_EventsListView> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_loading) return Center(child: CircularProgressIndicator(color: context.accent));
     if (_failed) return _errorState(context);
     final events = _events ?? const [];
     if (events.isEmpty) return _emptyState(context);
@@ -1293,22 +1314,16 @@ class _EventCard extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                          decoration: BoxDecoration(
-                              color: context.accentLight,
-                              borderRadius: BorderRadius.circular(9999)),
-                          child: Text(
-                            event.isTrip ? 'TRIP' : 'GATHERING',
-                            style: TextStyle(
-                                color: context.accent,
-                                fontSize: 10,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 0.4),
-                          ),
+                        PillBadge(
+                          icon:
+                              event.isTrip ? Icons.flight_takeoff_outlined : Icons.groups_outlined,
+                          label: event.isTrip ? 'TRIP' : 'GATHERING',
+                          accent: context.accentPalette,
                         ),
                         const SizedBox(height: 8),
                         Text(event.place,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                                 color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 15)),
                         const SizedBox(height: 3),
@@ -1353,7 +1368,7 @@ class _AvatarStack extends StatelessWidget {
   final String? groupId;
 
   static const _max = 4;
-  static const _size = 22.0;
+  static const _size = 24.0;
   static const _overlap = 14.0;
 
   @override
@@ -1395,7 +1410,7 @@ class _AvatarStack extends StatelessWidget {
 /// carousel does - scoped to that one post's own photos, not the whole event's, exactly
 /// like a feed card's own carousel already behaves (see post_card.dart).
 class _EventDetailView extends ConsumerStatefulWidget {
-  const _EventDetailView({required this.hub, required this.event});
+  const _EventDetailView({super.key, required this.hub, required this.event});
 
   final MemoriesHubController hub;
   final Event event;
@@ -1456,7 +1471,7 @@ class _EventDetailViewState extends ConsumerState<_EventDetailView> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_loading) return Center(child: CircularProgressIndicator(color: context.accent));
     if (_failed) {
       return Center(
         child: Padding(
@@ -1495,8 +1510,8 @@ class _EventDetailViewState extends ConsumerState<_EventDetailView> {
             sliver: SliverGrid(
               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                 crossAxisCount: 3,
-                mainAxisSpacing: 6,
-                crossAxisSpacing: 6,
+                mainAxisSpacing: 8,
+                crossAxisSpacing: 8,
               ),
               delegate: SliverChildBuilderDelegate(
                 (context, i) => _PhotoTile(post: photos[i].post, media: photos[i].media),
@@ -1516,6 +1531,8 @@ class _EventDetailViewState extends ConsumerState<_EventDetailView> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(event.place,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
           const SizedBox(height: 4),
           Text(eventDateRangeLabel(event), style: const TextStyle(color: _fgMuted, fontSize: 13)),
@@ -1555,7 +1572,7 @@ class _PhotoTile extends StatelessWidget {
             PhotoViewerScreen.open(context, media: [media], groupId: post.groupId, postId: post.id),
         child: ExcludeSemantics(
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(10),
             child: AuthImage(mediaId: media.id, groupId: post.groupId),
           ),
         ),
