@@ -356,85 +356,143 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
           ),
         ],
       ),
-      floatingActionButton: SizedBox(
-        height: 58,
-        width: 58,
-        child: FloatingActionButton(
-          onPressed: _showCompose,
-          backgroundColor: context.accent,
-          foregroundColor: context.onAccent,
-          elevation: 4,
-          tooltip: 'New check-in',
-          shape: const CircleBorder(),
-          child: const Icon(Icons.add, size: 28),
+      // Faded (and, for the FAB, slid down a little) out together with the same controller
+      // that opens the Memories surface, so the two motions read as one rather than a panel
+      // sliding in over chrome that's still sitting there - the founder's own ask: "we don't
+      // need the bottom bar in the memories page as we can just swipe out of it". See
+      // _ChromeFade's own doc comment for why this is driven off _memoriesController
+      // directly rather than a second animation of its own.
+      floatingActionButton: _ChromeFade(
+        key: const Key('fabChrome'),
+        controller: _memoriesController,
+        slideDy: 24,
+        child: SizedBox(
+          height: 58,
+          width: 58,
+          child: FloatingActionButton(
+            onPressed: _showCompose,
+            backgroundColor: context.accent,
+            foregroundColor: context.onAccent,
+            elevation: 4,
+            tooltip: 'New check-in',
+            shape: const CircleBorder(),
+            child: const Icon(Icons.add, size: 28),
+          ),
         ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
-      // A Stack, not just the BottomAppBar: the handle is overlaid on top of the bar's
-      // leading edge rather than laid out as one of its Row children. Making it a Row child
-      // (even a fixed-width one, mirrored by a matching spacer on the other end to keep the
-      // FAB notch centered) still measurably shifted the Feed/You icons inward by half the
-      // handle's width - the notch stayed centered, but the tabs visibly moved, which is a
-      // regression from a feature that is supposed to be invisible. An overlay takes no
-      // layout space at all, so the Row below is exactly what it was before this feature.
-      bottomNavigationBar: Stack(
-        alignment: Alignment.centerLeft,
-        children: [
-          BottomAppBar(
-            color: _bgMain,
-            elevation: 0,
-            height: 64,
-            padding: EdgeInsets.zero,
-            shape: const CircularNotchedRectangle(),
-            notchMargin: 9,
-            child: DecoratedBox(
-              decoration: const BoxDecoration(border: Border(top: BorderSide(color: _border))),
-              child: Row(
-                children: [
-                  _NavItem(
-                    icon: Icons.home_outlined,
-                    activeIcon: Icons.home_rounded,
-                    label: 'Feed',
-                    selected: _index == 0,
-                    // Re-tapping Feed while already on it scrolls the feed back to the top.
-                    onTap: () => _index == 0
-                        ? ref.read(feedScrollToTopProvider.notifier).bump()
-                        : setState(() => _index = 0),
-                  ),
-                  const SizedBox(width: 64), // FAB notch
-                  _NavItem(
-                    icon: Icons.person_outline,
-                    activeIcon: Icons.person_rounded,
-                    label: 'You',
-                    selected: _index == 1,
-                    onTap: me != null ? () => setState(() => _index = 1) : null,
-                  ),
-                ],
+      bottomNavigationBar: _ChromeFade(
+        key: const Key('bottomBarChrome'),
+        controller: _memoriesController,
+        slideDy: 24,
+        // A Stack, not just the BottomAppBar: the handle is overlaid on top of the bar's
+        // leading edge rather than laid out as one of its Row children. Making it a Row child
+        // (even a fixed-width one, mirrored by a matching spacer on the other end to keep the
+        // FAB notch centered) still measurably shifted the Feed/You icons inward by half the
+        // handle's width - the notch stayed centered, but the tabs visibly moved, which is a
+        // regression from a feature that is supposed to be invisible. An overlay takes no
+        // layout space at all, so the Row below is exactly what it was before this feature.
+        child: Stack(
+          alignment: Alignment.centerLeft,
+          children: [
+            BottomAppBar(
+              color: _bgMain,
+              elevation: 0,
+              height: 64,
+              padding: EdgeInsets.zero,
+              shape: const CircularNotchedRectangle(),
+              notchMargin: 9,
+              child: DecoratedBox(
+                decoration: const BoxDecoration(border: Border(top: BorderSide(color: _border))),
+                child: Row(
+                  children: [
+                    _NavItem(
+                      icon: Icons.home_outlined,
+                      activeIcon: Icons.home_rounded,
+                      label: 'Feed',
+                      selected: _index == 0,
+                      // Re-tapping Feed while already on it scrolls the feed back to the top.
+                      onTap: () => _index == 0
+                          ? ref.read(feedScrollToTopProvider.notifier).bump()
+                          : setState(() => _index = 0),
+                    ),
+                    const SizedBox(width: 64), // FAB notch
+                    _NavItem(
+                      icon: Icons.person_outline,
+                      activeIcon: Icons.person_rounded,
+                      label: 'You',
+                      selected: _index == 1,
+                      onTap: me != null ? () => setState(() => _index = 1) : null,
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-          // The hidden Memories entry point: a small grab handle overlaid on the bar, not a
-          // fourth Row destination - see MemoriesHandle's doc comment. Positioned to fill the
-          // Stack's full height (top:0, bottom:0) rather than a fixed 64-tall box centered by
-          // the Stack's own `alignment: centerLeft` above: BottomAppBar wraps its content in
-          // a SafeArea *outside* a fixed-height 64 box (see Flutter's BottomAppBar.build), so
-          // the bar's real rendered height is 64 plus the device's bottom safe inset, with
-          // the Feed/You row pinned to the TOP of that box rather than centered within it. A
-          // handle sized to a flat 64 and centered by the Stack's alignment centers against
-          // that taller total height instead, which lands it visibly below the icons' actual
-          // center on any device with a bottom safe inset (the founder's own bug report).
-          // Matching the full height here and repeating BottomAppBar's exact
-          // SafeArea-then-64-box shape inside MemoriesHandle itself (see its build()) is what
-          // makes the two align pixel-for-pixel regardless of that inset.
-          Positioned(
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: kMemoriesHandleWidth,
-            child: MemoriesHandle(controller: _memoriesController, feedActive: _index == 0),
-          ),
-        ],
+            // The hidden Memories entry point: a small grab handle overlaid on the bar, not a
+            // fourth Row destination - see MemoriesHandle's doc comment. Positioned to fill the
+            // Stack's full height (top:0, bottom:0) rather than a fixed 64-tall box centered by
+            // the Stack's own `alignment: centerLeft` above: BottomAppBar wraps its content in
+            // a SafeArea *outside* a fixed-height 64 box (see Flutter's BottomAppBar.build), so
+            // the bar's real rendered height is 64 plus the device's bottom safe inset, with
+            // the Feed/You row pinned to the TOP of that box rather than centered within it. A
+            // handle sized to a flat 64 and centered by the Stack's alignment centers against
+            // that taller total height instead, which lands it visibly below the icons' actual
+            // center on any device with a bottom safe inset (the founder's own bug report).
+            // Matching the full height here and repeating BottomAppBar's exact
+            // SafeArea-then-64-box shape inside MemoriesHandle itself (see its build()) is what
+            // makes the two align pixel-for-pixel regardless of that inset.
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: kMemoriesHandleWidth,
+              child: MemoriesHandle(controller: _memoriesController, feedActive: _index == 0),
+            ),
+          ],
+        ),
       ),
+    );
+  }
+}
+
+/// Fades (and optionally slides) [child] out as [controller] goes 0 (closed) to 1 (fully
+/// open) - the bottom bar and the FAB's own exit, driven by the exact same
+/// [AnimationController] the Memories surface itself opens and closes with, rather than a
+/// second animation of their own that could ever drift out of sync with it. Deliberately not
+/// a controller [child] merely watches passively, either: because [child]'s visibility is a
+/// pure function of the SAME single value the surface's own openness is, there is no state
+/// this can independently land in where the bar is hidden while the surface reads closed (or
+/// vice versa) - the two can never disagree, since they are quite literally the same number.
+///
+/// Also stops [child] from being hit-tested once the surface is drawing over the screen at
+/// all (anywhere above fully closed, not only once fully open) - a tap landing on a nav item
+/// or the FAB while the surface is mid-transition over it would be reaching through content
+/// that is already most of the way to invisible.
+class _ChromeFade extends StatelessWidget {
+  const _ChromeFade({super.key, required this.controller, required this.child, this.slideDy = 0});
+
+  final AnimationController controller;
+  final Widget child;
+
+  /// How far to slide [child] down (in logical pixels) at full openness - 0 leaves it a
+  /// plain fade in place.
+  final double slideDy;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, child) {
+        final value = controller.value;
+        return IgnorePointer(
+          ignoring: value > 0,
+          child: Opacity(
+            opacity: 1 - value,
+            child: Transform.translate(offset: Offset(0, value * slideDy), child: child),
+          ),
+        );
+      },
+      child: child,
     );
   }
 }
