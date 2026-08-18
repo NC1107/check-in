@@ -12,7 +12,7 @@ WORKDIR /src
 # source), so an ordinary code change never invalidates this layer's Docker cache - the
 # dataset itself doesn't change from release to release, and re-downloading ~420MB on
 # every build would be a real cost otherwise.
-RUN apk add --no-cache curl unzip python3
+RUN apk add --no-cache curl python3 unzip
 COPY internal/gazetteer/data/pack_places.py internal/gazetteer/data/fetch_and_pack.sh internal/gazetteer/data/
 RUN sh internal/gazetteer/data/fetch_and_pack.sh
 

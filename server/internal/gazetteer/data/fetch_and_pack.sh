@@ -25,7 +25,11 @@ workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT
 
 echo "fetch_and_pack: downloading $GEONAMES_URL" >&2
-curl -fL -o "$workdir/allCountries.zip" "$GEONAMES_URL"
+# --proto/--proto-redir pin both the initial request and every redirect to HTTPS. -L alone
+# would happily follow a redirect down to plaintext http, and whatever came back would be
+# packed into the gazetteer that then ships inside the image - so the transport that
+# delivers this dataset has to stay authenticated end to end, not just on the first hop.
+curl --proto '=https' --proto-redir '=https' -fL -o "$workdir/allCountries.zip" "$GEONAMES_URL"
 
 zip_size=$(wc -c <"$workdir/allCountries.zip")
 if [ "$zip_size" -lt "$MIN_ZIP_BYTES" ]; then
