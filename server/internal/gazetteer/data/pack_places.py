@@ -25,6 +25,8 @@ own doc comment for exactly why that tag still has to survive even though the na
 doesn't (the Great Falls, MT / Paterson, NJ "Great Falls" alias case).
 """
 
+from __future__ import annotations
+
 import csv
 import re
 import struct
@@ -132,7 +134,7 @@ def alias_shortlist(primary: str, name: str, alt: str) -> list:
     return extras[:MAX_EXTRA_ALIASES]
 
 
-def parse_row(parts: list) -> tuple:
+def parse_row(parts: list) -> tuple | None:
     """One raw GeoNames row -> (iso, primary, lat, lng, population, aliases), or None.
 
     None means "skip this row entirely": too few columns, unparseable coordinates, or no
@@ -249,6 +251,13 @@ def build_tables(input_path: str, t0: float) -> tuple:
 
 
 def main() -> None:
+    # Both paths are taken from argv and opened unvalidated, deliberately. This is a
+    # build-time developer tool, not a service: its arguments come from whoever runs it
+    # (the Dockerfile passes fixed ones) and never from a request, a config file, or any
+    # other input a user of the app could reach. Anyone able to set this script's argv can
+    # already run any command they like, so constraining the paths would buy no safety -
+    # and it would cost real utility, since packing to an arbitrary scratch path is exactly
+    # how this packer's output gets diffed against another build of itself.
     if len(sys.argv) != 3:
         print(f"usage: {sys.argv[0]} <input allCountriesP_filtered.txt> <output places.bin>",
               file=sys.stderr)
