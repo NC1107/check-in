@@ -1017,7 +1017,10 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 		p.applyRecap(recap)
 		posts = append(posts, p)
 	}
-	return posts, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return d.applyRecapVisibility(ctx, viewerID, posts)
 }
 
 // LocationCount is a distinct place label plus how many check-ins carry it.
@@ -1096,7 +1099,10 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 		p.applyRecap(recap)
 		posts = append(posts, p)
 	}
-	return posts, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return d.applyRecapVisibility(ctx, viewerID, posts)
 }
 
 // GetPost returns a single post with engagement counts from the viewer's perspective.
@@ -1132,7 +1138,20 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 		p.applyMedia(media)
 		p.applyRecap(recap)
 	}
-	return p, err
+	if err != nil {
+		return p, err
+	}
+	if p.Recap != nil {
+		blocked, berr := d.blockedSet(ctx, viewerID)
+		if berr != nil {
+			return p, berr
+		}
+		if len(blocked) > 0 {
+			filtered := FilterRecapForViewer(*p.Recap, blocked)
+			p.Recap = &filtered
+		}
+	}
+	return p, nil
 }
 
 // DeletePost removes a post if owned by the given author. Returns ErrNotFound if no
@@ -1535,6 +1554,55 @@ func (d *DB) ListBlockedIDs(ctx context.Context, blockerID int64) ([]int64, erro
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// blockedSet returns the ids blocked by viewerID as a set. Used where a query's own SQL
+// predicate can't reach the thing that needs filtering - currently only a recap post's
+// frozen payload (see applyRecapVisibility and FilterRecapForViewer in recap.go), since its
+// collage cards and roster are document content joined in as one opaque JSON blob, not rows
+// a WHERE clause can exclude by author the way every other query's blocked-author predicate
+// does.
+func (d *DB) blockedSet(ctx context.Context, viewerID int64) (map[int64]bool, error) {
+	ids, err := d.ListBlockedIDs(ctx, viewerID)
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
+	}
+	return set, nil
+}
+
+// applyRecapVisibility filters the Recap payload of every recap post in posts down to what
+// viewerID may see (see FilterRecapForViewer), fetching the viewer's block list only if at
+// least one recap post is actually present in the page — an ordinary feed page, the common
+// case, never pays for the extra round trip.
+func (d *DB) applyRecapVisibility(ctx context.Context, viewerID int64, posts []Post) ([]Post, error) {
+	hasRecap := false
+	for i := range posts {
+		if posts[i].Recap != nil {
+			hasRecap = true
+			break
+		}
+	}
+	if !hasRecap {
+		return posts, nil
+	}
+	blocked, err := d.blockedSet(ctx, viewerID)
+	if err != nil {
+		return nil, err
+	}
+	if len(blocked) == 0 {
+		return posts, nil
+	}
+	for i := range posts {
+		if posts[i].Recap != nil {
+			filtered := FilterRecapForViewer(*posts[i].Recap, blocked)
+			posts[i].Recap = &filtered
+		}
+	}
+	return posts, nil
 }
 
 // ---- content reports ----

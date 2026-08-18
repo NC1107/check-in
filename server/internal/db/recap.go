@@ -204,6 +204,136 @@ func recapStats(candidates []recapCandidate, memberCount int) RecapStats {
 	return stats
 }
 
+// FilterRecapForViewer strips any collage card, award and roster entry authored by someone
+// viewerID has blocked out of a recap payload, and recomputes Stats.Posts and Stats.Posters
+// from what's left so the deck's own numbers never claim more posts or posters than the
+// viewer can actually see. Called by applyRecapVisibility right before a recap post reaches
+// a response (queries.go's Feed, SearchPosts and GetPost - the only three paths that ever
+// read a non-nil Recap; RandomMemory, ForgottenPhoto, Timeline and EventsForViewer all
+// exclude kind = 'recap' at the SQL level already).
+//
+// WHY FILTER HERE AND NOT AT GENERATION TIME: a recap is one shared group artifact (see
+// CreateRecapPost's doc comment) - a single row, generated once and read by every member -
+// not a per-viewer row the feed's own `p.author_id NOT IN (blocked)` predicate can gate
+// directly. There is no single "the" viewer at generation time whose block list could be
+// applied, and baking one member's blocks into everyone else's copy of the deck would be
+// wrong regardless of whose list was picked. The alternative of leaving it unfiltered was
+// rejected outright: it is exactly the leak this pass exists to close (a blocked member's
+// photo, name and like count still reaching the person who blocked them, just because they
+// happen to be riding along inside a recap instead of standing alone as a post). Filtering
+// per viewer at read/serialization time - after the shared artifact is fetched, before it's
+// handed back to a specific caller - is the one place a per-viewer decision can be applied
+// without mutating the stored artifact or needing a second generation path.
+//
+// WHAT ISN'T RECOMPUTED: Likes, Comments, Places, Photos and Clips are left exactly as
+// BuildRecap computed them across the period's WHOLE candidate set, not narrowed to what
+// survives filtering. Posts and Posters are recomputed because they are rendered directly
+// next to something identity-bearing - the cover's avatar-bubble cluster (recap.people) and
+// the stats-only fallback's "N check-ins" line (recap_card.dart's _RecapStatsFallback) both
+// read straight off these two fields, so a stale count sitting next to a visibly smaller
+// cluster (or, worse, an empty deck that still claims posts nobody can see) would be a
+// visible, immediate contradiction. The other five totals are never attributed to a specific
+// avatar or name on screen - recomputing them exactly would also require the full per-post
+// breakdown (which post contributed how many likes, from which author) that this frozen
+// payload was deliberately never designed to carry, since it's meant to be a light snapshot,
+// not a re-runnable query. A small amount of "phantom" engagement in an aggregate total is
+// judged an acceptable, non-identity-leaking gap; a wrong post/poster count next to visible
+// avatars is not.
+//
+// If a panel's cards and awards are both filtered down to nothing, the whole panel is
+// dropped rather than left in as an empty page - see filterRecapPanels. If every panel ends
+// up dropped, Panels comes back empty; the client already has a dedicated fallback for
+// exactly that shape (recap_card.dart's RecapDeckState.build: `if (panels.isEmpty) return
+// _RecapStatsFallback(...)`), so an entirely-filtered deck degrades to a plain "N check-ins
+// this period" summary instead of a broken or empty page view.
+func FilterRecapForViewer(payload RecapPayload, blocked map[int64]bool) RecapPayload {
+	if len(blocked) == 0 {
+		return payload
+	}
+
+	out := payload
+	out.People = filterRecapPeople(payload.People, blocked)
+	out.Panels = filterRecapPanels(payload.Panels, blocked)
+
+	out.Stats.Posts = 0
+	for _, p := range out.People {
+		out.Stats.Posts += p.Posts
+	}
+	out.Stats.Posters = len(out.People)
+
+	return out
+}
+
+// filterRecapPeople drops the cover's avatar-bubble entries for blocked authors.
+func filterRecapPeople(people []RecapPerson, blocked map[int64]bool) []RecapPerson {
+	if len(people) == 0 {
+		return people
+	}
+	out := make([]RecapPerson, 0, len(people))
+	for _, p := range people {
+		if blocked[p.UserID] {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// filterRecapPanels drops blocked-author cards and awards from every panel, then drops any
+// panel that comes back with nothing left in it at all - a page with a title and no content
+// is a worse experience than one fewer page, and the client's own BuildRecap contract
+// already guarantees it never has to render a panel that was empty from the start (see
+// _chunkCards' doc comment in recap_card.dart), so this preserves that same guarantee after
+// filtering.
+func filterRecapPanels(panels []RecapPanel, blocked map[int64]bool) []RecapPanel {
+	if len(panels) == 0 {
+		return panels
+	}
+	out := make([]RecapPanel, 0, len(panels))
+	for _, panel := range panels {
+		filtered := panel
+		filtered.Cards = filterRecapCards(panel.Cards, blocked)
+		filtered.Awards = filterRecapAwards(panel.Awards, blocked)
+		if len(filtered.Cards) == 0 && len(filtered.Awards) == 0 {
+			continue
+		}
+		out = append(out, filtered)
+	}
+	return out
+}
+
+// filterRecapCards drops a panel's collage cards authored by someone blocked.
+func filterRecapCards(cards []RecapCard, blocked map[int64]bool) []RecapCard {
+	if len(cards) == 0 {
+		return cards
+	}
+	out := make([]RecapCard, 0, len(cards))
+	for _, c := range cards {
+		if blocked[c.AuthorID] {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// filterRecapAwards drops a panel's superlatives won by someone blocked. "awards" is kept
+// decodable (see RecapPanel's doc comment) for recaps generated before titles replaced the
+// panel, so a pre-existing one served today is filtered the same as any other panel content.
+func filterRecapAwards(awards []RecapAward, blocked map[int64]bool) []RecapAward {
+	if len(awards) == 0 {
+		return awards
+	}
+	out := make([]RecapAward, 0, len(awards))
+	for _, a := range awards {
+		if blocked[a.UserID] {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
 // activeMemberCount is how many active members the group currently has - the everyone-
 // included guarantee's target size, and the collage cap's floor.
 func (d *DB) activeMemberCount(ctx context.Context) (int, error) {
