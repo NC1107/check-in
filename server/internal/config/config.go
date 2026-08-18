@@ -16,6 +16,14 @@ type Config struct {
 	DatabaseURL string
 	// MediaDir is the local filesystem path where uploaded media is stored.
 	MediaDir string
+	// GazetteerPath is the local filesystem path to the places gazetteer's plain,
+	// directly-seekable dataset (internal/gazetteer/data/places.bin, decompressed from its
+	// checked-in .gz sibling at Docker build time - see the Dockerfile and
+	// internal/gazetteer's own doc comment for why it's read off disk rather than embedded
+	// in the binary). The default matches where the Dockerfile bakes it into the image; a
+	// host running the binary directly (not via the published image) would need to point
+	// this at wherever they placed a decompressed copy of that same file.
+	GazetteerPath string
 	// ServerName is a human-friendly name surfaced to clients via /api/server-info.
 	ServerName string
 	// PublicURL is this server's public base URL (e.g. "https://alpha.check-in.example.com").
@@ -84,6 +92,7 @@ func Load() (Config, error) {
 		HTTPAddr:           getenv("CHECKIN_HTTP_ADDR", ":8080"),
 		DatabaseURL:        getenv("CHECKIN_DATABASE_URL", "postgres://checkin:checkin@localhost:5432/checkin?sslmode=disable"),
 		MediaDir:           getenv("CHECKIN_MEDIA_DIR", "./data/media"),
+		GazetteerPath:      getenv("CHECKIN_GAZETTEER_PATH", "/app/data/places.bin"),
 		ServerName:         getenv("CHECKIN_SERVER_NAME", "Check-In"),
 		PublicURL:          getenv("CHECKIN_PUBLIC_URL", ""),
 		SessionTTL:         getdur("CHECKIN_SESSION_TTL", 30*24*time.Hour),

@@ -335,6 +335,46 @@ class MemoriesHubController extends ChangeNotifier {
   /// the list itself (or any other screen) is what's showing.
   Place? get selectedPlace => _selectedPlace;
 
+  /// Whether the Places screen's own map view (not the list view - see _PlacesListView's
+  /// own toggle) is the one currently showing. Set by _PlacesListViewState whenever its
+  /// list/map toggle changes (and cleared on dispose, so navigating away from Places -
+  /// including into a place's own detail - never leaves this stuck true).
+  ///
+  /// This is the explicit gesture-conflict rule the map's own free pan/zoom needs: the
+  /// map view captures horizontal drags for panning (see PlacesMapView), and the Memories
+  /// surface's OWN close gesture is also a horizontal drag anywhere on the surface (see
+  /// MemoriesSurface's own doc comment) - two horizontal-drag recognizers on the same
+  /// touch would otherwise have to fight it out in the gesture arena, an outcome this app
+  /// would rather not leave to chance. So instead: _MemoriesSurfaceContentState's own
+  /// GestureDetector reads this flag and drops its horizontal-drag callbacks entirely
+  /// while it's true, ceding the gesture to the map outright rather than competing for it.
+  /// The header's close (X) button and Android back are both independent of this
+  /// GestureDetector, so the surface stays closable either way - see that state's own doc
+  /// comment for exactly where this is read.
+  bool _mapViewActive = false;
+  bool get mapViewActive => _mapViewActive;
+
+  // _PlacesListViewState.dispose() defers its own setMapViewActive(false) call to a
+  // post-frame callback (see that method's own doc comment for why it can't call it
+  // inline) - which means this controller can already be disposed by the time that
+  // callback actually runs (the whole Memories surface, this controller included, closing
+  // in the very same frame the Places screen itself unmounts). Guarding here, rather than
+  // asking every deferred caller to check ChangeNotifier's own debug-only "already
+  // disposed" assertion itself, keeps that one narrow race entirely inside this class.
+  bool _disposed = false;
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
+  void setMapViewActive(bool active) {
+    if (_disposed || _mapViewActive == active) return;
+    _mapViewActive = active;
+    notifyListeners();
+  }
+
   void openRandomMemory() {
     _screen = HubScreen.randomMemory;
     notifyListeners();
@@ -416,13 +456,15 @@ class MemoriesHubController extends ChangeNotifier {
     if (_screen == HubScreen.hub &&
         _selectedEvent == null &&
         _selectedMonth == null &&
-        _selectedPlace == null) {
+        _selectedPlace == null &&
+        !_mapViewActive) {
       return;
     }
     _screen = HubScreen.hub;
     _selectedEvent = null;
     _selectedMonth = null;
     _selectedPlace = null;
+    _mapViewActive = false;
     notifyListeners();
   }
 }
@@ -881,112 +923,131 @@ class _MemoriesSurfaceContentState extends ConsumerState<_MemoriesSurfaceContent
     final reduceMotion = MediaQuery.of(context).disableAnimations;
     final session = ref.watch(multiSessionProvider);
     final capableGroups = session.memoriesSurfaceCapableShownGroups;
-    return GestureDetector(
-      onHorizontalDragStart: (_) => _drag.start(),
-      onHorizontalDragUpdate: (d) => _drag.update(d, width, reduceMotion),
-      onHorizontalDragEnd: (d) => _drag.end(d, reduceMotion),
-      onHorizontalDragCancel: () => _drag.cancel(reduceMotion),
-      child: DecoratedBox(
-        decoration: const BoxDecoration(
-          color: _bgMain,
-          border: Border(right: BorderSide(color: _border)),
-        ),
-        child: SafeArea(
-          bottom: false,
-          child: ListenableBuilder(
-            listenable: widget.hub,
-            builder: (context, _) {
-              // A back chevron replaces nothing and sits alongside the close X - the two
-              // are independent affordances (step back one level vs. leave entirely), not
-              // a swap of one for the other. Absent at the hub root, where there's nowhere
-              // left to step back to.
-              final atRoot = widget.hub.screen == HubScreen.hub && widget.hub.selectedEvent == null;
-              // The group selector only makes sense one level up from a specific fetched
-              // event, month or place - drilling further in is already scoped to whatever
-              // group that item came from, and switching there would have nothing coherent
-              // to do.
-              final inDetail = widget.hub.selectedEvent != null ||
-                  widget.hub.selectedMonth != null ||
-                  widget.hub.selectedPlace != null;
-              final selectedGroupId = effectiveMemoriesGroupId(session, widget.hub.selectedGroupId);
-              return Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(6, 10, 10, 6),
-                    child: Row(
-                      children: [
-                        if (!atRoot)
-                          Semantics(
-                            button: true,
-                            label: 'Back',
-                            child: IconButton(
-                              onPressed: widget.hub.back,
-                              icon: const Icon(Icons.arrow_back, color: _fgSecondary),
+    // Listens to widget.hub here (not just in the inner ListenableBuilder below, which
+    // exists for the header/body content) specifically so THIS GestureDetector's own
+    // horizontal-drag callbacks - present or entirely absent - stay current with
+    // MemoriesHubController.mapViewActive. That's deliberate, not redundant: a
+    // GestureDetector with a null callback registers no recognizer for that gesture at
+    // all, which is what actually cedes a horizontal drag to the map's own pan gesture
+    // outright rather than merely making this one a no-op AFTER winning the arena against
+    // it - see mapViewActive's own doc comment for the full rule this implements.
+    return ListenableBuilder(
+      listenable: widget.hub,
+      builder: (context, _) {
+        final mapActive = widget.hub.mapViewActive;
+        return GestureDetector(
+          onHorizontalDragStart: mapActive ? null : (_) => _drag.start(),
+          onHorizontalDragUpdate: mapActive ? null : (d) => _drag.update(d, width, reduceMotion),
+          onHorizontalDragEnd: mapActive ? null : (d) => _drag.end(d, reduceMotion),
+          onHorizontalDragCancel: mapActive ? null : () => _drag.cancel(reduceMotion),
+          child: DecoratedBox(
+            decoration: const BoxDecoration(
+              color: _bgMain,
+              border: Border(right: BorderSide(color: _border)),
+            ),
+            child: SafeArea(
+              bottom: false,
+              child: ListenableBuilder(
+                listenable: widget.hub,
+                builder: (context, _) {
+                  // A back chevron replaces nothing and sits alongside the close X - the two
+                  // are independent affordances (step back one level vs. leave entirely), not
+                  // a swap of one for the other. Absent at the hub root, where there's nowhere
+                  // left to step back to.
+                  final atRoot =
+                      widget.hub.screen == HubScreen.hub && widget.hub.selectedEvent == null;
+                  // The group selector only makes sense one level up from a specific fetched
+                  // event, month or place - drilling further in is already scoped to whatever
+                  // group that item came from, and switching there would have nothing coherent
+                  // to do.
+                  final inDetail = widget.hub.selectedEvent != null ||
+                      widget.hub.selectedMonth != null ||
+                      widget.hub.selectedPlace != null;
+                  final selectedGroupId =
+                      effectiveMemoriesGroupId(session, widget.hub.selectedGroupId);
+                  return Column(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(6, 10, 10, 6),
+                        child: Row(
+                          children: [
+                            if (!atRoot)
+                              Semantics(
+                                button: true,
+                                label: 'Back',
+                                child: IconButton(
+                                  onPressed: widget.hub.back,
+                                  icon: const Icon(Icons.arrow_back, color: _fgSecondary),
+                                ),
+                              )
+                            else
+                              const SizedBox(width: 12),
+                            const Expanded(
+                              // Excluded from semantics: this is decorative chrome, and its
+                              // own implicit "Memories" text label would otherwise merge up
+                              // into the surface's own horizontal-drag GestureDetector (which
+                              // contributes a scrollLeft/scrollRight semantics node of its
+                              // own) - colliding with the handle's OWN explicit
+                              // Semantics(label: 'Memories') button and making
+                              // find.bySemanticsLabel('Memories') ambiguous.
+                              child: ExcludeSemantics(
+                                child: Text('Memories',
+                                    style: TextStyle(
+                                        color: _fgPrimary,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 18)),
+                              ),
                             ),
-                          )
-                        else
-                          const SizedBox(width: 12),
-                        const Expanded(
-                          // Excluded from semantics: this is decorative chrome, and its
-                          // own implicit "Memories" text label would otherwise merge up
-                          // into the surface's own horizontal-drag GestureDetector (which
-                          // contributes a scrollLeft/scrollRight semantics node of its
-                          // own) - colliding with the handle's OWN explicit
-                          // Semantics(label: 'Memories') button and making
-                          // find.bySemanticsLabel('Memories') ambiguous.
-                          child: ExcludeSemantics(
-                            child: Text('Memories',
-                                style: TextStyle(
-                                    color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
-                          ),
-                        ),
-                        Semantics(
-                          button: true,
-                          label: 'Close',
-                          child: IconButton(
-                            onPressed: widget.onClose,
-                            icon: const Icon(Icons.close, color: _fgSecondary),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  // Only shown with something real to choose between - a member of exactly
-                  // one capable group (by far the common case) sees nothing here at all,
-                  // same as before this feature existed.
-                  if (capableGroups.length > 1 && !inDetail)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 14, right: 14, bottom: 10),
-                      child: _MemoriesGroupSelector(
-                        groups: capableGroups,
-                        selectedGroupId: selectedGroupId,
-                        onSelect: widget.hub.selectGroup,
-                      ),
-                    ),
-                  Expanded(
-                    // A lightweight fade + slide so stepping between hub/list/detail feels
-                    // like the rest of the app's pushes, without dragging in a full
-                    // Navigator (the surface already has its own back-stack in
-                    // MemoriesHubController).
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 200),
-                      transitionBuilder: (child, animation) => FadeTransition(
-                        opacity: animation,
-                        child: SlideTransition(
-                          position: Tween<Offset>(begin: const Offset(0.04, 0), end: Offset.zero)
-                              .animate(animation),
-                          child: child,
+                            Semantics(
+                              button: true,
+                              label: 'Close',
+                              child: IconButton(
+                                onPressed: widget.onClose,
+                                icon: const Icon(Icons.close, color: _fgSecondary),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      child: _body(selectedGroupId),
-                    ),
-                  ),
-                ],
-              );
-            },
+                      // Only shown with something real to choose between - a member of exactly
+                      // one capable group (by far the common case) sees nothing here at all,
+                      // same as before this feature existed.
+                      if (capableGroups.length > 1 && !inDetail)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 14, right: 14, bottom: 10),
+                          child: _MemoriesGroupSelector(
+                            groups: capableGroups,
+                            selectedGroupId: selectedGroupId,
+                            onSelect: widget.hub.selectGroup,
+                          ),
+                        ),
+                      Expanded(
+                        // A lightweight fade + slide so stepping between hub/list/detail feels
+                        // like the rest of the app's pushes, without dragging in a full
+                        // Navigator (the surface already has its own back-stack in
+                        // MemoriesHubController).
+                        child: AnimatedSwitcher(
+                          duration: const Duration(milliseconds: 200),
+                          transitionBuilder: (child, animation) => FadeTransition(
+                            opacity: animation,
+                            child: SlideTransition(
+                              position:
+                                  Tween<Offset>(begin: const Offset(0.04, 0), end: Offset.zero)
+                                      .animate(animation),
+                              child: child,
+                            ),
+                          ),
+                          child: _body(selectedGroupId),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -2561,6 +2622,28 @@ class _PlacesListViewState extends ConsumerState<_PlacesListView> {
     _fetch();
   }
 
+  @override
+  void dispose() {
+    // Belt-and-braces alongside MemoriesHubController.reset()'s own clear on close - this
+    // also covers drilling into a place's own detail (_PlaceDetailView) or switching
+    // groups mid-visit, both of which unmount this widget without the surface itself ever
+    // closing, so reset() never runs on either path. Deferred to a post-frame callback,
+    // not called inline here: this widget is very often unmounted AS PART OF the very
+    // build/layout pass its own notifyListeners() call would need to schedule a rebuild
+    // during (Flutter's element tree is locked for the whole pass, including every
+    // widget's own dispose()) - calling it synchronously here throws exactly that
+    // "setState() called when widget tree was locked" assertion the moment this fires
+    // during a live rebuild rather than after one has already finished.
+    final hub = widget.hub;
+    WidgetsBinding.instance.addPostFrameCallback((_) => hub.setMapViewActive(false));
+    super.dispose();
+  }
+
+  void _setViewMode(_PlacesViewMode mode) {
+    setState(() => _viewMode = mode);
+    widget.hub.setMapViewActive(mode == _PlacesViewMode.map);
+  }
+
   Future<void> _fetch() async {
     final groupId = widget.groupId;
     final account = groupId == null ? null : ref.read(multiSessionProvider).byId(groupId);
@@ -2622,7 +2705,7 @@ class _PlacesListViewState extends ConsumerState<_PlacesListView> {
               alignment: Alignment.centerLeft,
               child: _PlacesViewToggle(
                 mode: _viewMode,
-                onChanged: (m) => setState(() => _viewMode = m),
+                onChanged: _setViewMode,
               ),
             ),
           ),
@@ -2631,7 +2714,16 @@ class _PlacesListViewState extends ConsumerState<_PlacesListView> {
               ? _emptyState(context)
               : switch (_viewMode) {
                   _PlacesViewMode.list => _list(places),
-                  _PlacesViewMode.map => SingleChildScrollView(
+                  // Deliberately NOT wrapped in a SingleChildScrollView the way the old
+                  // static map was: PlacesMapView now captures vertical drags for its own
+                  // pan/zoom (see its own doc comment), and an ancestor Scrollable's own
+                  // vertical drag recognizer competing for the same gesture is exactly the
+                  // "dragging up sometimes scrolls the page instead" roughness the founder
+                  // called out - PlacesMapView instead manages its own internal scrolling
+                  // (see its own build(), which keeps the map canvas itself outside any
+                  // scrollable and only lets the couldn't-place-on-map note beneath it
+                  // scroll if it doesn't fit).
+                  _PlacesViewMode.map => Padding(
                       padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
                       child: PlacesMapView(
                         places: places,
