@@ -18,6 +18,13 @@ class ReleaseNote {
 /// Curated release notes, newest first. Add an entry only when there's something members
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
+  ReleaseNote(
+    version: '1.20',
+    highlights: [
+      "Places: every spot your group has checked in from, with how many of you have been there and everything you posted while you were.",
+      'Android: photos taken on an Android phone can carry their location again. Android had been stripping it out before we ever saw it.',
+    ],
+  ),
   // One consolidated entry rather than the eleven that shipped to TestFlight between the
   // store's 1.5 and now: an App Store member last saw the 1.3 entry, so this is the whole
   // story of the update they are actually installing, and it is deliberately word for word

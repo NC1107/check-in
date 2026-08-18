@@ -21,14 +21,44 @@ void main() {
       expect(unseenReleaseNotes('0.0-before-this-feature'), [releaseNotes.first]);
     });
 
-    test('an App Store member on the last public release sees exactly one entry', () {
-      // The live store version's newest entry was 1.3, so that is the marker a member
-      // updating from it carries. They must land on the single consolidated entry whose
-      // text matches the App Store "What's New" word for word - not a wall of the internal
-      // entries that shipped to TestFlight in between.
-      final unseen = unseenReleaseNotes('1.3');
+    test('the internal TestFlight entries stay collapsed for a store member', () {
+      // A member coming from the last public release carries the 1.3 marker. What matters
+      // is not how many entries they see - later releases legitimately add more - but that
+      // the eleven internal entries which shipped only to TestFlight between 1.5 and 1.19
+      // stay collapsed into the single consolidated one, instead of becoming a wall.
+      final seen = unseenReleaseNotes('1.3').map((n) => n.version).toList();
+      const retired = [
+        '1.9',
+        '1.10',
+        '1.11',
+        '1.12',
+        '1.13',
+        '1.14',
+        '1.15',
+        '1.16',
+        '1.17',
+        '1.18',
+        '1.19'
+      ];
+      for (final r in retired) {
+        expect(seen, isNot(contains(r)), reason: '$r was collapsed and must not reappear');
+      }
+      expect(seen.last, '1.19.1', reason: 'the consolidated entry is the oldest they see');
+    });
+
+    test('the ordinary update path shows only what is new', () {
+      // Someone already on the second-newest entry sees exactly the newest one.
+      if (releaseNotes.length < 2) return;
+      final unseen = unseenReleaseNotes(releaseNotes[1].version);
       expect(unseen, hasLength(1));
       expect(unseen.single.version, releaseNotes.first.version);
+    });
+
+    test('every entry has a distinct marker', () {
+      // The marker is how "already seen" is recorded, so a duplicate would silently make
+      // one of them unreachable.
+      final versions = releaseNotes.map((n) => n.version).toList();
+      expect(versions.toSet(), hasLength(versions.length));
     });
   });
 
