@@ -585,12 +585,22 @@ func (d *DB) DigestTargets(ctx context.Context) ([]DigestDue, error) {
 	return out, rows.Err()
 }
 
-// CountPostsSince counts check-ins by everyone but [userID] since [since] - what that
-// member has missed in the window their digest covers.
+// CountPostsSince counts check-ins visible to [userID] since [since] - what that member has
+// missed in the window their digest covers. Applies the same active-author, not-blocked-by-
+// viewer predicate the feed uses, so the digest can never tell someone about a check-in they
+// couldn't actually open (a revoked member's, or one from someone they've since blocked) -
+// and excludes kind = 'recap': a recap is the group's own periodic summary of everyone
+// else's check-ins, not a check-in itself, and counting it here would both double-count the
+// activity it already tallies and could fire on a period whose only underlying posts came
+// from an author this member has blocked.
 func (d *DB) CountPostsSince(ctx context.Context, userID int64, since time.Time) (int, error) {
 	var n int
-	err := d.Pool.QueryRow(ctx,
-		`SELECT count(*) FROM posts WHERE author_id <> $1 AND created_at > $2`, userID, since,
+	err := d.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM posts p JOIN users u ON u.id = p.author_id
+		WHERE p.author_id <> $1 AND p.created_at > $2
+		  AND u.status = 'active' AND p.kind <> 'recap'
+		  AND p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)`,
+		userID, since,
 	).Scan(&n)
 	return n, err
 }
@@ -1007,7 +1017,10 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 		p.applyRecap(recap)
 		posts = append(posts, p)
 	}
-	return posts, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return d.applyRecapVisibility(ctx, viewerID, posts)
 }
 
 // LocationCount is a distinct place label plus how many check-ins carry it.
@@ -1086,7 +1099,10 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 		p.applyRecap(recap)
 		posts = append(posts, p)
 	}
-	return posts, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return d.applyRecapVisibility(ctx, viewerID, posts)
 }
 
 // GetPost returns a single post with engagement counts from the viewer's perspective.
@@ -1122,7 +1138,20 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 		p.applyMedia(media)
 		p.applyRecap(recap)
 	}
-	return p, err
+	if err != nil {
+		return p, err
+	}
+	if p.Recap != nil {
+		blocked, berr := d.blockedSet(ctx, viewerID)
+		if berr != nil {
+			return p, berr
+		}
+		if len(blocked) > 0 {
+			filtered := FilterRecapForViewer(*p.Recap, blocked)
+			p.Recap = &filtered
+		}
+	}
+	return p, nil
 }
 
 // DeletePost removes a post if owned by the given author. Returns ErrNotFound if no
@@ -1296,11 +1325,39 @@ func (d *DB) RecentComments(ctx context.Context, limit int) ([]Comment, error) {
 
 // ---- likes ----
 
-// PostVisible reports whether a post exists and is visible to members — i.e. its author
-// is still active. Used to reject likes/comments on missing or hidden posts with a clean
-// 404 instead of leaking a foreign-key 500 or letting members interact with content the
-// feed hides.
-func (d *DB) PostVisible(ctx context.Context, postID int64) (bool, error) {
+// PostVisible reports whether a post exists and is visible to a specific viewer for
+// ordinary interaction: its author is still active AND the viewer hasn't blocked them - the
+// same predicate the feed already applies. Used by handleLike and handleAddComment (and
+// handleListComments) to refuse the action on a missing or hidden post with a clean 404
+// instead of leaking a foreign-key 500 or, just as important, letting a member like,
+// comment on, or read the comments of a post from someone they've specifically blocked just
+// because they still know (or can guess) its id. Viewer-scoped for the same reason
+// GetVisibleMedia is: "visible" has to mean visible to *someone*, and a blocked author's
+// posts are exactly the case where that differs per caller.
+//
+// Deliberately NOT used by handleReportPost - see ReportablePost below for why reporting
+// gets its own, viewer-independent check instead of this one.
+func (d *DB) PostVisible(ctx context.Context, postID, viewerID int64) (bool, error) {
+	var ok bool
+	err := d.Pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM posts p JOIN users u ON u.id = p.author_id
+			WHERE p.id = $1 AND u.status = 'active'
+			  AND p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $2))`,
+		postID, viewerID).Scan(&ok)
+	return ok, err
+}
+
+// ReportablePost reports whether a post exists and its author's account is still active -
+// deliberately independent of the reporter's own block list, unlike PostVisible. Reporting
+// abusive content to the host must not get harder, or start silently 404ing, the moment a
+// member protects themselves by blocking that content's author: "I blocked them AND
+// reported this" is the expected pair of actions a safety feature should support, and a
+// member who already blocked someone specifically because of a post is exactly who most
+// needs to still be able to flag it. A revoked author's post still 404s here, same as
+// PostVisible - there's no host left to receive a report about content whose author the
+// host already removed.
+func (d *DB) ReportablePost(ctx context.Context, postID int64) (bool, error) {
 	var ok bool
 	err := d.Pool.QueryRow(ctx, `
 		SELECT EXISTS (
@@ -1497,6 +1554,55 @@ func (d *DB) ListBlockedIDs(ctx context.Context, blockerID int64) ([]int64, erro
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+// blockedSet returns the ids blocked by viewerID as a set. Used where a query's own SQL
+// predicate can't reach the thing that needs filtering - currently only a recap post's
+// frozen payload (see applyRecapVisibility and FilterRecapForViewer in recap.go), since its
+// collage cards and roster are document content joined in as one opaque JSON blob, not rows
+// a WHERE clause can exclude by author the way every other query's blocked-author predicate
+// does.
+func (d *DB) blockedSet(ctx context.Context, viewerID int64) (map[int64]bool, error) {
+	ids, err := d.ListBlockedIDs(ctx, viewerID)
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
+	}
+	return set, nil
+}
+
+// applyRecapVisibility filters the Recap payload of every recap post in posts down to what
+// viewerID may see (see FilterRecapForViewer), fetching the viewer's block list only if at
+// least one recap post is actually present in the page — an ordinary feed page, the common
+// case, never pays for the extra round trip.
+func (d *DB) applyRecapVisibility(ctx context.Context, viewerID int64, posts []Post) ([]Post, error) {
+	hasRecap := false
+	for i := range posts {
+		if posts[i].Recap != nil {
+			hasRecap = true
+			break
+		}
+	}
+	if !hasRecap {
+		return posts, nil
+	}
+	blocked, err := d.blockedSet(ctx, viewerID)
+	if err != nil {
+		return nil, err
+	}
+	if len(blocked) == 0 {
+		return posts, nil
+	}
+	for i := range posts {
+		if posts[i].Recap != nil {
+			filtered := FilterRecapForViewer(*posts[i].Recap, blocked)
+			posts[i].Recap = &filtered
+		}
+	}
+	return posts, nil
 }
 
 // ---- content reports ----

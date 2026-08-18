@@ -354,14 +354,14 @@ func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	if visible, err := s.db.PostVisible(r.Context(), id); err != nil {
+	me := userFrom(r)
+	if visible, err := s.db.PostVisible(r.Context(), id, me.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	} else if !visible {
 		writeErr(w, http.StatusNotFound, "post not found")
 		return
 	}
-	me := userFrom(r)
 	inserted, err := s.db.LikePost(r.Context(), id, me.ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
@@ -422,7 +422,20 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	comments, err := s.db.ListComments(r.Context(), id, userFrom(r).ID)
+	viewerID := userFrom(r).ID
+	// Gate on the post itself the same way handleLike and handleAddComment do - without
+	// this, a post hidden from the viewer's feed (its author blocked or revoked) still
+	// served its whole comment thread to anyone who knew or guessed the post id, even though
+	// GET /api/posts/{id} correctly 404s for that same post. ListComments' own predicate only
+	// ever excluded blocked *commenters*, never checked the post's own author.
+	if visible, err := s.db.PostVisible(r.Context(), id, viewerID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	} else if !visible {
+		writeErr(w, http.StatusNotFound, "post not found")
+		return
+	}
+	comments, err := s.db.ListComments(r.Context(), id, viewerID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
@@ -461,7 +474,8 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "comment must be 1-2000 characters")
 		return
 	}
-	if visible, err := s.db.PostVisible(r.Context(), id); err != nil {
+	me := userFrom(r)
+	if visible, err := s.db.PostVisible(r.Context(), id, me.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	} else if !visible {
@@ -480,7 +494,6 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	me := userFrom(r)
 	comment, err := s.db.AddComment(r.Context(), id, me.ID, req.Body, req.ParentCommentID, req.MediaID)
 	if errors.Is(err, db.ErrNotOwned) {
 		writeErr(w, http.StatusBadRequest, "that attachment is not yours")
