@@ -18,7 +18,7 @@ import sys
 
 from shapely.geometry import shape
 
-from outline_codec import SCALE, write_varint, zigzag_encode
+from outline_codec import pack_group, rings_of
 
 # Degrees of Douglas-Peucker simplification tolerance (preserve_topology=True, so no ring
 # collapses to nothing). Chosen empirically: it roughly halves the raw point count while the
@@ -34,21 +34,6 @@ def usable_ring(points):
     return len(points) >= 3
 
 
-def rings_of(geom):
-    """Yields every linear ring (exterior and interior alike) of a Polygon/MultiPolygon as a
-    plain list of (lng, lat) tuples with the redundant closing point dropped - a hole is
-    just another closed ring here, not tagged as such: painting every ring from every
-    country into one Path with an even-odd fill rule reproduces holes for free without this
-    format needing to know which rings are holes (see world_outlines.dart)."""
-    if geom.geom_type == "Polygon":
-        yield list(geom.exterior.coords)
-        for interior in geom.interiors:
-            yield list(interior.coords)
-    elif geom.geom_type == "MultiPolygon":
-        for part in geom.geoms:
-            yield from rings_of(part)
-
-
 def pack(features, tolerance_deg: float) -> bytes:
     all_rings = []
     for feature in features:
@@ -61,16 +46,7 @@ def pack(features, tolerance_deg: float) -> bytes:
                 all_rings.append(points)
 
     buf = bytearray()
-    write_varint(buf, len(all_rings))
-    for points in all_rings:
-        write_varint(buf, len(points))
-        prev_x, prev_y = 0, 0
-        for lng, lat in points:
-            x = round(lng * SCALE)
-            y = round(lat * SCALE)
-            write_varint(buf, zigzag_encode(x - prev_x))
-            write_varint(buf, zigzag_encode(y - prev_y))
-            prev_x, prev_y = x, y
+    pack_group(buf, all_rings)
     return bytes(buf)
 
 

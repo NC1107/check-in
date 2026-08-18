@@ -176,6 +176,30 @@ void main() {
     addTearDown(() => tester.pumpWidget(const SizedBox.shrink()));
   }
 
+  /// Opens Places and switches to the LIST view.
+  ///
+  /// Places opens on the map now (see _PlacesListViewState._viewMode), and every test in
+  /// this file is about the list. The toggle is only present when there are places to show
+  /// two ways at all, so the loading/empty/unsupported/error states - which have no list to
+  /// switch to either - fall through untouched.
+  /// Switches to the list when the toggle is on screen, and does nothing when it isn't.
+  ///
+  /// Also needed after a group switch: the screen remounts on the new group's key and lands
+  /// back on its own default view, which is the map.
+  Future<void> switchToListIfOffered(WidgetTester tester) async {
+    final toList = find.bySemanticsLabel('List view');
+    if (toList.evaluate().isNotEmpty) {
+      await tester.tap(toList);
+      await settle(tester);
+    }
+  }
+
+  Future<void> openPlacesList(WidgetTester tester) async {
+    await tester.tap(find.text('Places'));
+    await settle(tester);
+    await switchToListIfOffered(tester);
+  }
+
   group('hub capability gate', () {
     testWidgets('offers "Places" when the group advertises the places capability', (tester) async {
       await pumpOpenSurface(tester,
@@ -202,8 +226,7 @@ void main() {
           serverAccount: account('a.invalid', placesCapable: true),
           api: _FakePlacesApi(places: [lisbon, denver]));
 
-      await tester.tap(find.text('Places'));
-      await settle(tester);
+      await openPlacesList(tester);
 
       expect(find.text('Lisbon, Portugal'), findsOneWidget);
       expect(find.text('5 check-ins'), findsOneWidget);
@@ -230,8 +253,7 @@ void main() {
           serverAccount: account('a.invalid', placesCapable: true),
           api: _FakePlacesApi(places: [unresolved]));
 
-      await tester.tap(find.text('Places'));
-      await settle(tester);
+      await openPlacesList(tester);
 
       expect(find.text('Ocean City, United States'), findsOneWidget);
       expect(find.text('3 check-ins'), findsOneWidget);
@@ -242,8 +264,7 @@ void main() {
           serverAccount: account('a.invalid', placesCapable: true),
           api: _FakePlacesApi(places: const []));
 
-      await tester.tap(find.text('Places'));
-      await settle(tester);
+      await openPlacesList(tester);
 
       expect(find.text('No places yet.'), findsOneWidget);
       expect(find.byType(CircularProgressIndicator), findsNothing);
@@ -254,8 +275,7 @@ void main() {
           serverAccount: account('a.invalid', placesCapable: true),
           api: _FakePlacesApi(failPlaces: true));
 
-      await tester.tap(find.text('Places'));
-      await settle(tester);
+      await openPlacesList(tester);
 
       expect(find.text("Couldn't load your group's places."), findsOneWidget);
       expect(find.text('Try again'), findsOneWidget);
@@ -266,8 +286,7 @@ void main() {
           serverAccount: account('a.invalid', placesCapable: true),
           api: _FakePlacesApi(places: [place()]));
 
-      await tester.tap(find.text('Places'));
-      await settle(tester);
+      await openPlacesList(tester);
       expect(find.bySemanticsLabel('Back'), findsOneWidget);
 
       await tester.tap(find.bySemanticsLabel('Back'));
@@ -283,8 +302,7 @@ void main() {
           serverAccount: account('a.invalid', placesCapable: true),
           api: _FakePlacesApi(places: [place()]));
 
-      await tester.tap(find.text('Places'));
-      await settle(tester);
+      await openPlacesList(tester);
 
       expect(find.textContaining('GeoNames'), findsOneWidget);
     });
@@ -306,8 +324,7 @@ void main() {
       await pumpOpenSurface(tester,
           serverAccount: account('a.invalid', placesCapable: true), api: api);
 
-      await tester.tap(find.text('Places'));
-      await settle(tester);
+      await openPlacesList(tester);
       await tester.tap(find.text('Lisbon, Portugal'));
       await settle(tester);
 
@@ -335,8 +352,7 @@ void main() {
       await pumpOpenSurface(tester,
           serverAccount: account('a.invalid', placesCapable: true), api: api);
 
-      await tester.tap(find.text('Places'));
-      await settle(tester);
+      await openPlacesList(tester);
       await tester.tap(find.text('Lisbon, Portugal'));
       await settle(tester);
       await tester.tap(find.bySemanticsLabel('Open photo'));
@@ -372,8 +388,7 @@ void main() {
       await pumpOpenSurface(tester,
           serverAccount: account('a.invalid', placesCapable: true), api: api);
 
-      await tester.tap(find.text('Places'));
-      await settle(tester);
+      await openPlacesList(tester);
       await tester.tap(find.text('Lisbon, Portugal'));
       await settle(tester);
 
@@ -392,8 +407,7 @@ void main() {
       await pumpOpenSurface(tester,
           serverAccount: account('a.invalid', placesCapable: true), api: api);
 
-      await tester.tap(find.text('Places'));
-      await settle(tester);
+      await openPlacesList(tester);
       await tester.tap(find.text('Lisbon, Portugal'));
       await settle(tester);
 
@@ -413,8 +427,7 @@ void main() {
       await pumpOpenSurface(tester,
           serverAccount: account('a.invalid', placesCapable: true), api: api);
 
-      await tester.tap(find.text('Places'));
-      await settle(tester);
+      await openPlacesList(tester);
       await tester.tap(find.text('Lisbon, Portugal'));
       await settle(tester);
       expect(find.text('Lisbon, Portugal'), findsOneWidget);
@@ -451,8 +464,7 @@ void main() {
           groups: [groupA, groupB],
           apiFor: (id) => _FakePlacesApi(places: id == 'a.invalid' ? [place()] : const []));
 
-      await tester.tap(find.text('Places'));
-      await settle(tester);
+      await openPlacesList(tester);
       expect(find.text('Lisbon, Portugal'), findsOneWidget);
 
       await tester.tap(find.text('b.invalid')); // the header's own group selector pill
@@ -477,14 +489,14 @@ void main() {
         return _FakePlacesApi(places: [placeB]);
       });
 
-      await tester.tap(find.text('Places'));
-      await settle(tester);
+      await openPlacesList(tester);
       // A's fetch is still in flight (the completer hasn't resolved) - the list view keys
       // off the group id, so switching to B remounts it fresh rather than waiting on A.
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
 
       await tester.tap(find.text('b.invalid'));
       await settle(tester);
+      await switchToListIfOffered(tester);
 
       expect(find.text('Denver, United States'), findsOneWidget,
           reason: "B's own places must render once its fetch lands");
