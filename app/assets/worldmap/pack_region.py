@@ -21,7 +21,7 @@ import sys
 
 from shapely.geometry import shape
 
-from outline_codec import SCALE, write_varint, zigzag_encode
+from outline_codec import pack_group, rings_of, write_varint
 
 # Degrees of Douglas-Peucker simplification tolerance (preserve_topology=True). Far finer
 # than pack_world.py's 0.1 - this asset is what the map actually renders at region/local
@@ -37,21 +37,6 @@ def usable_ring(points):
     return len(points) >= 3
 
 
-def rings_of(geom):
-    """Yields every linear ring of a Polygon/MultiPolygon, exterior and interior (hole)
-    alike, as a plain list of (lng, lat) tuples with the redundant closing point dropped -
-    same convention as pack_world.py's own rings_of, and for the same reason: neither
-    layer this writes needs to know which of its own rings are holes at render time (see
-    region_outlines.dart)."""
-    if geom.geom_type == "Polygon":
-        yield list(geom.exterior.coords)
-        for interior in geom.interiors:
-            yield list(interior.coords)
-    elif geom.geom_type == "MultiPolygon":
-        for part in geom.geoms:
-            yield from rings_of(part)
-
-
 def simplified_rings(features, tolerance_deg):
     out = []
     for feature in features:
@@ -61,19 +46,6 @@ def simplified_rings(features, tolerance_deg):
             if usable_ring(points):
                 out.append(points)
     return out
-
-
-def pack_group(buf: bytearray, rings) -> None:
-    write_varint(buf, len(rings))
-    for points in rings:
-        write_varint(buf, len(points))
-        prev_x, prev_y = 0, 0
-        for lng, lat in points:
-            x = round(lng * SCALE)
-            y = round(lat * SCALE)
-            write_varint(buf, zigzag_encode(x - prev_x))
-            write_varint(buf, zigzag_encode(y - prev_y))
-            prev_x, prev_y = x, y
 
 
 def main() -> None:

@@ -29,7 +29,7 @@ import sys
 
 from shapely.geometry import shape
 
-from outline_codec import SCALE, write_varint, zigzag_encode
+from outline_codec import lines_of, pack_group, rings_of, write_varint
 
 # Matches pack_region.py's own tolerance: this asset is drawn at the same region/local zoom
 # its admin-0/admin-1 layers are, so a coarser one here would read as obviously blockier
@@ -40,26 +40,6 @@ SIMPLIFY_TOLERANCE_DEG = 0.005
 # feature, unlike an area ring which needs 3 to enclose anything.
 MIN_AREA_POINTS = 3
 MIN_LINE_POINTS = 2
-
-
-def rings_of(geom):
-    """Every linear ring of a Polygon/MultiPolygon, exterior and interior alike."""
-    if geom.geom_type == "Polygon":
-        yield list(geom.exterior.coords)
-        for interior in geom.interiors:
-            yield list(interior.coords)
-    elif geom.geom_type == "MultiPolygon":
-        for part in geom.geoms:
-            yield from rings_of(part)
-
-
-def lines_of(geom):
-    """Every path of a LineString/MultiLineString - what the river layer is made of."""
-    if geom.geom_type == "LineString":
-        yield list(geom.coords)
-    elif geom.geom_type == "MultiLineString":
-        for part in geom.geoms:
-            yield from lines_of(part)
 
 
 def simplified(features, tolerance_deg, *, areas: bool):
@@ -78,19 +58,6 @@ def simplified(features, tolerance_deg, *, areas: bool):
             if len(points) >= minimum:
                 out.append(points)
     return out
-
-
-def pack_group(buf: bytearray, rings) -> None:
-    write_varint(buf, len(rings))
-    for points in rings:
-        write_varint(buf, len(points))
-        prev_x, prev_y = 0, 0
-        for lng, lat in points:
-            x = round(lng * SCALE)
-            y = round(lat * SCALE)
-            write_varint(buf, zigzag_encode(x - prev_x))
-            write_varint(buf, zigzag_encode(y - prev_y))
-            prev_x, prev_y = x, y
 
 
 def load(path):
