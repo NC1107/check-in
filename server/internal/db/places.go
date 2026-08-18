@@ -294,36 +294,56 @@ func (d *DB) candidatesCached(ctx context.Context, normalizedKey, rawLocation st
 // convention eventOutranks documents for events).
 func buildPlaces(rows []eventPostRow, now time.Time, candidatesByLocation map[string][]gazetteer.Candidate) []Place {
 	homeArea := computeHomeArea(rows, now)
-
-	type group struct {
-		rows []eventPostRow
-	}
-	groups := make(map[string]*group)
-	var order []string // first-seen order of each normalized key; sorted properly below
-	for _, r := range rows {
-		key := normalizeLocation(r.Location)
-		g := groups[key]
-		if g == nil {
-			g = &group{}
-			groups[key] = g
-			order = append(order, key)
-		}
-		g.rows = append(g.rows, r)
-	}
-
-	// pendingPlace is one place whose resolution depends on the anchor centroid - not
-	// knowable until every OTHER place's own (anchor-eligible) resolution is in.
-	type pendingPlace struct {
-		index      int
-		candidates []gazetteer.Candidate
-	}
+	order, groups := groupPlaceRows(rows)
 
 	places := make([]Place, len(order))
-	var anchors []placeCoord
-	var pending []pendingPlace
+	anchors, pending := resolvePlacesPassOne(places, order, groups, homeArea, candidatesByLocation)
+	anchors, pending = resolvePlacesPassTwo(places, anchors, pending)
+	resolvePlacesPassThree(places, anchors, pending)
 
+	sort.Slice(places, func(i, j int) bool { return placeOutranks(places[i], places[j]) })
+	return places
+}
+
+// groupPlaceRows groups rows by normalizeLocation (the same case/whitespace fold
+// detectEvents uses, so the two features never fragment the same real place differently),
+// returning each distinct key in first-seen order - the order buildPlaces' resulting
+// places slice is built in, before the final sort - alongside every row that normalized
+// to it.
+func groupPlaceRows(rows []eventPostRow) (order []string, groups map[string][]eventPostRow) {
+	groups = make(map[string][]eventPostRow)
+	for _, r := range rows {
+		key := normalizeLocation(r.Location)
+		if _, ok := groups[key]; !ok {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], r)
+	}
+	return order, groups
+}
+
+// pendingPlace is one place whose resolution depends on the anchor centroid - not knowable
+// until every OTHER place's own (anchor-eligible) resolution is in.
+type pendingPlace struct {
+	index      int
+	candidates []gazetteer.Candidate
+}
+
+// resolvePlacesPassOne is buildPlaces' first pass over each distinct place (see that
+// function's own doc comment, priority steps 1-2): a post's own STORED coordinates
+// (posts.lat/lng, captured from the poster's device at the moment of a real check-in) are
+// ground truth - see averageStoredCoords. Any place with at least one such post uses their
+// average and never touches the gazetteer at all. For a place with no stored coordinates,
+// the gazetteer is asked for every candidate city sharing that name in that country
+// (gazetteer.Candidates). A name with exactly one real candidate is unambiguous - there's
+// nothing to disambiguate - and that candidate's coordinates are used directly. Every
+// place resolved either way becomes an ANCHOR: real evidence of roughly where this group's
+// places actually are. places must already be sized to len(order); this fills in every
+// index's Place (stats always, coordinates when resolvable here) and reports every place
+// still unresolved as pending, for resolvePlacesPassTwo and resolvePlacesPassThree.
+func resolvePlacesPassOne(places []Place, order []string, groups map[string][]eventPostRow, homeArea map[string]bool, candidatesByLocation map[string][]gazetteer.Candidate) (anchors []placeCoord, pending []pendingPlace) {
 	for i, key := range order {
-		groupRows := groups[key].rows
+		groupRows := groups[key]
 		p := buildPlaceStats(groupRows, homeArea[key])
 
 		if lat, lng, ok := averageStoredCoords(groupRows); ok {
@@ -347,79 +367,87 @@ func buildPlaces(rows []eventPostRow, now time.Time, candidatesByLocation map[st
 		places[i] = p
 		pending = append(pending, pendingPlace{index: i, candidates: candidates})
 	}
+	return anchors, pending
+}
 
-	// Pass two: a place whose candidates dominance-qualify (anchorCandidate) is trusted as
-	// an anchor too, on top of pass one's stored-coordinate and unambiguous-match anchors -
-	// but only once checked against them, not unconditionally. Every real GeoNames place
-	// sharing that name in that country is a genuine candidate for what a DOMINANCE-only
-	// check can't tell apart on its own: Washington, DC (dominant among US "Washington"s by
-	// ~28x) is also close to a DC-anchored group's other places, but White Plains, NEW YORK
-	// (dominant among US "White Plains" by more than that) is not close to THIS group's -
-	// population dominance alone can't distinguish the two shapes, only checking the
-	// candidate against real anchor evidence already in hand can. So: when pass one already
-	// produced at least one anchor, a dominance-qualified candidate is trusted only when
-	// it's also within kAnchorDominanceMaxDistanceKm of pass one's own centroid - close
-	// enough to read as "the same regional area this group is actually in", not merely "the
-	// biggest place with this name anywhere in the country". A dominance-qualified
-	// candidate that fails that check, or a place that never dominance-qualifies at all,
-	// stays pending for pass three's ordinary nearest-to-the-FULL-centroid disambiguation
-	// instead - which is what correctly sends White Plains to Maryland once Washington's
-	// own anchor (added here) has made that fuller centroid available.
-	//
-	// When pass one produced NO anchor at all yet, there is nothing to check a dominant
-	// candidate against - it's trusted outright, exactly as an unambiguous match would be
-	// (see TestBuildPlacesUnambiguousGazetteerMatchBecomesAnchor's own Baltimore/Arlington
-	// pair, where Baltimore's dominant match must anchor Arlington's resolution with no
-	// other anchor anywhere in the group's history).
-	if len(pending) > 0 {
-		center, haveCenter := placeCoord{}, len(anchors) > 0
-		if haveCenter {
-			center = centroidOf(anchors)
-		}
-		var stillPending []pendingPlace
-		for _, pl := range pending {
-			dominant, ok := anchorCandidate(pl.candidates)
-			if ok && haveCenter {
-				ok = haversineKm(placeCoord{lat: dominant.Lat, lng: dominant.Lng}, center) <= kAnchorDominanceMaxDistanceKm
-			}
-			if !ok {
-				stillPending = append(stillPending, pl)
-				continue
-			}
-			places[pl.index].Lat = floatPtr(dominant.Lat)
-			places[pl.index].Lng = floatPtr(dominant.Lng)
-			anchors = append(anchors, placeCoord{lat: dominant.Lat, lng: dominant.Lng})
-		}
-		pending = stillPending
+// resolvePlacesPassTwo is buildPlaces' second pass (see that function's own doc comment,
+// priority step 3): a place whose candidates dominance-qualify (anchorCandidate) is
+// trusted as an anchor too, on top of pass one's stored-coordinate and unambiguous-match
+// anchors - but only once checked against them, not unconditionally. Every real GeoNames
+// place sharing that name in that country is a genuine candidate for what a DOMINANCE-only
+// check can't tell apart on its own: Washington, DC (dominant among US "Washington"s by
+// ~28x) is also close to a DC-anchored group's other places, but White Plains, NEW YORK
+// (dominant among US "White Plains" by more than that) is not close to THIS group's -
+// population dominance alone can't distinguish the two shapes, only checking the candidate
+// against real anchor evidence already in hand can. So: when pass one already produced at
+// least one anchor, a dominance-qualified candidate is trusted only when it's also within
+// kAnchorDominanceMaxDistanceKm of pass one's own centroid - close enough to read as "the
+// same regional area this group is actually in", not merely "the biggest place with this
+// name anywhere in the country". A dominance-qualified candidate that fails that check, or
+// a place that never dominance-qualifies at all, stays pending for pass three's ordinary
+// nearest-to-the-FULL-centroid disambiguation instead - which is what correctly sends
+// White Plains to Maryland once Washington's own anchor (added here) has made that fuller
+// centroid available.
+//
+// When pass one produced NO anchor at all yet, there is nothing to check a dominant
+// candidate against - it's trusted outright, exactly as an unambiguous match would be (see
+// TestBuildPlacesUnambiguousGazetteerMatchBecomesAnchor's own Baltimore/Arlington pair,
+// where Baltimore's dominant match must anchor Arlington's resolution with no other anchor
+// anywhere in the group's history).
+func resolvePlacesPassTwo(places []Place, anchors []placeCoord, pending []pendingPlace) ([]placeCoord, []pendingPlace) {
+	if len(pending) == 0 {
+		return anchors, pending
 	}
+	center, haveCenter := placeCoord{}, len(anchors) > 0
+	if haveCenter {
+		center = centroidOf(anchors)
+	}
+	var stillPending []pendingPlace
+	for _, pl := range pending {
+		dominant, ok := anchorCandidate(pl.candidates)
+		if ok && haveCenter {
+			ok = haversineKm(placeCoord{lat: dominant.Lat, lng: dominant.Lng}, center) <= kAnchorDominanceMaxDistanceKm
+		}
+		if !ok {
+			stillPending = append(stillPending, pl)
+			continue
+		}
+		places[pl.index].Lat = floatPtr(dominant.Lat)
+		places[pl.index].Lng = floatPtr(dominant.Lng)
+		anchors = append(anchors, placeCoord{lat: dominant.Lat, lng: dominant.Lng})
+	}
+	return anchors, stillPending
+}
 
-	// Pass three: whatever remains - genuinely ambiguous names with no single candidate
-	// either unique or dominant enough for passes one/two - resolved by proximity to
-	// whatever anchor centroid those two passes produced between them, or (if they produced
-	// none at all) by population alone as the documented last resort.
-	if len(pending) > 0 {
-		haveAnchor := len(anchors) > 0
-		var center placeCoord
+// resolvePlacesPassThree is buildPlaces' third and final pass (see that function's own doc
+// comment, priority steps 4-5): whatever remains - genuinely ambiguous names with no
+// single candidate either unique or dominant enough for passes one/two - resolved by
+// proximity to whatever anchor centroid those two passes produced between them, or (if
+// they produced none at all) by population alone as the documented last resort, marking
+// that place CoordsGuessed so a caller can tell "the group told us" from "we had nothing
+// to go on and guessed".
+func resolvePlacesPassThree(places []Place, anchors []placeCoord, pending []pendingPlace) {
+	if len(pending) == 0 {
+		return
+	}
+	haveAnchor := len(anchors) > 0
+	var center placeCoord
+	if haveAnchor {
+		center = centroidOf(anchors)
+	}
+	for _, pl := range pending {
+		var chosen gazetteer.Candidate
+		guessed := false
 		if haveAnchor {
-			center = centroidOf(anchors)
+			chosen = nearestCandidate(pl.candidates, center)
+		} else {
+			chosen = mostPopulousCandidate(pl.candidates)
+			guessed = true
 		}
-		for _, pl := range pending {
-			var chosen gazetteer.Candidate
-			guessed := false
-			if haveAnchor {
-				chosen = nearestCandidate(pl.candidates, center)
-			} else {
-				chosen = mostPopulousCandidate(pl.candidates)
-				guessed = true
-			}
-			places[pl.index].Lat = floatPtr(chosen.Lat)
-			places[pl.index].Lng = floatPtr(chosen.Lng)
-			places[pl.index].CoordsGuessed = guessed
-		}
+		places[pl.index].Lat = floatPtr(chosen.Lat)
+		places[pl.index].Lng = floatPtr(chosen.Lng)
+		places[pl.index].CoordsGuessed = guessed
 	}
-
-	sort.Slice(places, func(i, j int) bool { return placeOutranks(places[i], places[j]) })
-	return places
 }
 
 // buildPlaceStats aggregates one place's own rows into everything EXCEPT its

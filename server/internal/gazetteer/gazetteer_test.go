@@ -240,7 +240,7 @@ func TestCandidatesReturnsAllMatchesNotJustOne(t *testing.T) {
 // back nil under cities15000's population floor; this dataset has no such floor (see
 // data/SOURCE.md) and returns real candidates instead.
 func TestCandidatesNoLongerReturnsNilForSmallRealTowns(t *testing.T) {
-	if got := Candidates("Ocean City, United States"); got == nil {
+	if Candidates("Ocean City, United States") == nil {
 		t.Error("got nil, want real candidates - this dataset no longer has a population floor that drops real small towns")
 	}
 }

@@ -507,13 +507,17 @@ func TestBuildPlacesEmptyInputReturnsEmptyNotNilPanic(t *testing.T) {
 // corrected state) the real GeoNames coordinate for the actual Maryland/West Virginia town
 // - see gazetteer_test.go's own TestCandidatesResolvesTheFounderGroupsRealPlaces for the
 // same ten strings pinned one level down, against the gazetteer alone.
-func TestBuildPlacesResolvesTheFounderGroupsRealPlaces(t *testing.T) {
-	type wantPlace struct {
-		location         string
-		postCount        int
-		wantLat, wantLng float64
-	}
-	want := []wantPlace{
+// plFounderGroupWant is the ten real locations (and post counts) TestBuildPlacesResolves
+// TheFounderGroupsRealPlaces replays, and the real coordinate each must resolve to - see
+// that test's own doc comment.
+type plFounderGroupWant struct {
+	location         string
+	postCount        int
+	wantLat, wantLng float64
+}
+
+func plFounderGroupWants() []plFounderGroupWant {
+	return []plFounderGroupWant{
 		{"Gaithersburg, United States", 25, 39.14344, -77.20137},
 		{"Mathias, United States", 9, 38.87789, -78.86614},
 		{"Washington, United States", 3, 38.89511, -77.03637},
@@ -527,7 +531,11 @@ func TestBuildPlacesResolvesTheFounderGroupsRealPlaces(t *testing.T) {
 		// wrong dot this exact group used to get; see this test's own doc comment.
 		{"White Plains, United States", 1, 38.5904, -76.94025},
 	}
+}
 
+// plFounderGroupRows expands want into postCount rows per location, oldest-location-first,
+// mirroring one real self-hosted group's own posting history.
+func plFounderGroupRows(want []plFounderGroupWant) []eventPostRow {
 	var rows []eventPostRow
 	postID := int64(1)
 	for _, w := range want {
@@ -536,23 +544,37 @@ func TestBuildPlacesResolvesTheFounderGroupsRealPlaces(t *testing.T) {
 			postID++
 		}
 	}
+	return rows
+}
+
+// assertFounderPlace pins one want entry against buildPlaces' actual output for it - the
+// per-place assertions TestBuildPlacesResolvesTheFounderGroupsRealPlaces runs inside its
+// own t.Run subtests.
+func assertFounderPlace(t *testing.T, byLoc map[string]Place, w plFounderGroupWant) {
+	t.Helper()
+	p, ok := byLoc[w.location]
+	if !ok {
+		t.Fatalf("place %q missing from buildPlaces output entirely", w.location)
+	}
+	if p.PostCount != w.postCount {
+		t.Errorf("postCount = %d, want %d", p.PostCount, w.postCount)
+	}
+	if p.Lat == nil || p.Lng == nil {
+		t.Fatalf("lat/lng = nil, want (%v, %v) - this place must now resolve", w.wantLat, w.wantLng)
+	}
+	if !nearlyEqual(*p.Lat, w.wantLat) || !nearlyEqual(*p.Lng, w.wantLng) {
+		t.Errorf("resolved to (%v, %v), want (%v, %v)", *p.Lat, *p.Lng, w.wantLat, w.wantLng)
+	}
+}
+
+func TestBuildPlacesResolvesTheFounderGroupsRealPlaces(t *testing.T) {
+	want := plFounderGroupWants()
+	rows := plFounderGroupRows(want)
 
 	byLoc := placesByLocation(buildPlaces(rows, plNow, plCandidates(rows)))
 	for _, w := range want {
 		t.Run(w.location, func(t *testing.T) {
-			p, ok := byLoc[w.location]
-			if !ok {
-				t.Fatalf("place %q missing from buildPlaces output entirely", w.location)
-			}
-			if p.PostCount != w.postCount {
-				t.Errorf("postCount = %d, want %d", p.PostCount, w.postCount)
-			}
-			if p.Lat == nil || p.Lng == nil {
-				t.Fatalf("lat/lng = nil, want (%v, %v) - this place must now resolve", w.wantLat, w.wantLng)
-			}
-			if !nearlyEqual(*p.Lat, w.wantLat) || !nearlyEqual(*p.Lng, w.wantLng) {
-				t.Errorf("resolved to (%v, %v), want (%v, %v)", *p.Lat, *p.Lng, w.wantLat, w.wantLng)
-			}
+			assertFounderPlace(t, byLoc, w)
 		})
 	}
 }
