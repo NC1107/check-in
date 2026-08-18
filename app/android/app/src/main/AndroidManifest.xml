@@ -7,6 +7,16 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- Media access for image picker -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+    <!-- Android 10+ redacts a gallery photo's GPS from the byte stream the picker hands the
+         app unless this is held; declaring it only allows asking, the runtime request lives
+         in MainActivity.ensureMediaLocationPermission, called from compose the first time a
+         picked photo's location is actually needed. It only works for the LEGACY gallery
+         picker (ACTION_GET_CONTENT) that image_picker_android takes while
+         ImagePickerAndroid.useAndroidPhotoPicker stays false - the modern Android 13+ photo
+         picker enforces its own redaction this permission does not reach. If that flag is
+         ever turned on, gallery locations silently go back to missing; see the Dart-side
+         regression test guarding it. -->
+    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
