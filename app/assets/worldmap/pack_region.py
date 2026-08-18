@@ -21,7 +21,7 @@ import sys
 
 from shapely.geometry import shape
 
-from outline_codec import write_varint, zigzag_encode
+from outline_codec import SCALE, write_varint, zigzag_encode
 
 # Degrees of Douglas-Peucker simplification tolerance (preserve_topology=True). Far finer
 # than pack_world.py's 0.1 - this asset is what the map actually renders at region/local
@@ -31,7 +31,6 @@ from outline_codec import write_varint, zigzag_encode
 # byte counts at nearby tolerances this was chosen against.
 SIMPLIFY_TOLERANCE_DEG = 0.005
 
-SCALE = 100  # same quantization as pack_world.py - see its own doc comment.
 
 
 def usable_ring(points):
