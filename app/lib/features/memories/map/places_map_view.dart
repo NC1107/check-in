@@ -8,6 +8,7 @@ import 'package:latlong2/latlong.dart';
 import '../../../api/models.dart';
 import '../../../theme/accent.dart';
 import '../../../theme/tokens.dart';
+import 'detail_outlines.dart';
 import 'map_outline_layers.dart';
 import 'map_tier.dart';
 import 'place_marker.dart';
@@ -23,6 +24,18 @@ const _mapOutline = Color(0xFF3A4C58);
 /// Admin-1 (state/province) boundary color - a step brighter than [_mapOutline] so a
 /// state line reads as its own distinct layer rather than blending into the coastline.
 const _mapBorder = Color(0xFF52707E);
+
+/// Detail-layer colours (lakes, rivers, built-up areas - see detail_outlines.dart).
+///
+/// Lakes sit a touch lighter than the open ocean rather than matching it exactly: an inland
+/// lake painted in the identical colour reads as a hole punched through the land, where a
+/// slightly lifted one reads as water sitting in it. Rivers are lighter again so a
+/// single-pixel line stays visible against the land it crosses, and built-up areas are a
+/// very low-alpha warm tint - enough that "a town is here" registers without competing with
+/// the place nodes, which are the actual subject of this map.
+const _mapLake = Color(0xFF14232E);
+const _mapRiver = Color(0xFF35566B);
+const _mapUrban = Color(0x1FE8B981);
 
 /// The fixed height of the inline map card - short enough that it (plus the toggle row
 /// above it and the couldn't-place note below) fits comfortably above the fold on a small
@@ -62,10 +75,37 @@ const double _kMaxFitZoom = 9.0;
 /// here. The header's close (X) button and the Android back button are unaffected, so the
 /// surface always stays closable.
 class PlacesMapView extends StatelessWidget {
-  const PlacesMapView({super.key, required this.places, required this.onOpenPlace});
+  const PlacesMapView({
+    super.key,
+    required this.places,
+    required this.onOpenPlace,
+    this.fullBleed = false,
+    this.overlay,
+    this.ringColorFor,
+  });
 
   final List<Place> places;
   final ValueChanged<Place> onOpenPlace;
+
+  /// Fills the space it is given, edge to edge, instead of rendering as a fixed-height
+  /// rounded card.
+  ///
+  /// This is how Places opens: the map is the point of the screen, and a map big enough to
+  /// read is worth more than a card with room for a toggle above it. The list is still one
+  /// tap away from [overlay].
+  final bool fullBleed;
+
+  /// Chrome to float over the map in full-bleed mode - the view toggle and the group
+  /// scope pill. Passed in rather than built here so this widget stays a rendering of
+  /// places and knows nothing about the screen that hosts it.
+  final Widget? overlay;
+
+  /// The colour to ring each node with, or null for the default white.
+  ///
+  /// Only set when the map is showing several groups at once, where the ring is what says
+  /// which group a place came from. With one group it would be a constant, and a constant
+  /// coloured ring on every node is just a worse white one.
+  final Color? Function(Place place)? ringColorFor;
 
   List<Place> get _located => [
         for (final p in places)
@@ -82,6 +122,41 @@ class PlacesMapView extends StatelessWidget {
     final located = _located;
     final unlocated = _unlocated;
     final tier = decideMapTier([for (final p in located) (lat: p.lat!, lng: p.lng!)]);
+
+    // The map proper, or the honest stand-in for a group that has nothing to plot yet.
+    // Built once and placed by whichever layout branch runs below, so the two states are
+    // never reachable in one mode and missing from the other.
+    final bool plottable = located.isNotEmpty && tier != MapTier.singlePlace;
+
+    if (fullBleed) {
+      final Widget body = plottable
+          ? PlacesMapCanvas(
+              located: located,
+              tier: tier,
+              onOpenPlace: onOpenPlace,
+              ringColorFor: ringColorFor,
+              onExpand: () => _openFullScreen(context, located, tier),
+            )
+          : Center(
+              child: located.isEmpty
+                  ? const _MapEmptyState(
+                      icon: Icons.public_off_outlined,
+                      message: "None of your group's places could be placed on a map yet.",
+                    )
+                  : _SinglePlaceState(located: located),
+            );
+      return Stack(
+        children: [
+          Positioned.fill(child: body),
+          // The chrome rides above EVERY state, not just the plottable one: the toggle is
+          // the only way back to the list, and a group with one place or none is exactly
+          // the group whose owner most needs it.
+          if (overlay != null) Positioned(left: 12, top: 10, right: 12, child: overlay!),
+          if (unlocated.isNotEmpty)
+            Positioned(left: 12, right: 12, bottom: 10, child: _unlocatedPill(unlocated)),
+        ],
+      );
+    }
 
     final Widget mapOrState;
     if (located.isEmpty) {
@@ -100,6 +175,7 @@ class PlacesMapView extends StatelessWidget {
             located: located,
             tier: tier,
             onOpenPlace: onOpenPlace,
+            ringColorFor: ringColorFor,
             onExpand: () => _openFullScreen(context, located, tier),
           ),
         ),
@@ -129,6 +205,31 @@ class PlacesMapView extends StatelessWidget {
           located: located,
           tier: tier,
           onOpenPlace: onOpenPlace,
+        ),
+      ),
+    );
+  }
+
+  /// The full-bleed equivalent of [_unlocatedNote] - the same honesty in the space a map
+  /// overlay actually has. Names them where there are few enough to name, and counts them
+  /// otherwise, rather than letting a long list cover the map it is annotating.
+  Widget _unlocatedPill(List<Place> unlocated) {
+    final text = unlocated.length <= 2
+        ? "Couldn't place on the map: ${unlocated.map((p) => p.location).join(', ')}"
+        : "Couldn't place on the map: ${unlocated.length} places";
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(9999),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          child: Text(text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: kFgSecondary, fontSize: 11)),
         ),
       ),
     );
@@ -202,6 +303,7 @@ class PlacesMapCanvas extends StatefulWidget {
     required this.tier,
     required this.onOpenPlace,
     this.onExpand,
+    this.ringColorFor,
   });
 
   final List<Place> located;
@@ -212,6 +314,9 @@ class PlacesMapCanvas extends StatefulWidget {
   /// itself passes null, since it is already full screen.
   final VoidCallback? onExpand;
 
+  /// See PlacesMapView.ringColorFor.
+  final Color? Function(Place place)? ringColorFor;
+
   @override
   State<PlacesMapCanvas> createState() => _PlacesMapCanvasState();
 }
@@ -221,10 +326,36 @@ class _PlacesMapCanvasState extends State<PlacesMapCanvas> {
 
   final Future<WorldOutlines> _worldFuture = WorldOutlines.load();
   final Future<RegionOutlines> _regionFuture = RegionOutlines.load();
+  final Future<DetailOutlines> _detailFuture = DetailOutlines.load();
 
   late bool _fineDetail = widget.tier != MapTier.world;
 
-  late final CameraFit _initialFit = _buildFit();
+  late CameraFit _initialFit = _buildFit();
+
+  @override
+  void didUpdateWidget(PlacesMapCanvas oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The set of places can change under a live map - switching the scope pill to "all
+    // groups" is exactly that. Without refitting, the camera stays where the first group's
+    // own bounds put it and the newly-arrived places sit outside the viewport, culled and
+    // invisible, which reads as the switch having done nothing.
+    if (!identical(oldWidget.located, widget.located) &&
+        !_sameCoords(oldWidget.located, widget.located)) {
+      _initialFit = _buildFit();
+      _fineDetail = widget.tier != MapTier.world;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _mapController.fitCamera(_initialFit);
+      });
+    }
+  }
+
+  static bool _sameCoords(List<Place> a, List<Place> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i].lat != b[i].lat || a[i].lng != b[i].lng) return false;
+    }
+    return true;
+  }
 
   CameraFit _buildFit() {
     if (widget.tier == MapTier.world) {
@@ -270,19 +401,21 @@ class _PlacesMapCanvasState extends State<PlacesMapCanvas> {
         // result, so waiting on both up front regardless of the starting tier is simpler
         // and just as fast as fetching one conditionally: a world-tier view needs the
         // finer asset the moment someone zooms in past the threshold.
-        future: Future.wait([_worldFuture, _regionFuture]),
+        future: Future.wait([_worldFuture, _regionFuture, _detailFuture]),
         builder: (context, snapshot) {
           final data = snapshot.data;
           if (data == null) {
             return Center(child: CircularProgressIndicator(color: context.accent));
           }
-          return _buildMap(context, data[0] as WorldOutlines, data[1] as RegionOutlines);
+          return _buildMap(context, data[0] as WorldOutlines, data[1] as RegionOutlines,
+              data[2] as DetailOutlines);
         },
       ),
     );
   }
 
-  Widget _buildMap(BuildContext context, WorldOutlines world, RegionOutlines region) {
+  Widget _buildMap(
+      BuildContext context, WorldOutlines world, RegionOutlines region, DetailOutlines detail) {
     final accent = context.accent;
     final maxPostCount = widget.located.map((p) => p.postCount).fold(1, math.max);
 
@@ -314,7 +447,34 @@ class _PlacesMapCanvasState extends State<PlacesMapCanvas> {
                   strokeWidth: 0.8,
                 ),
               ),
-              if (_fineDetail)
+              if (_fineDetail) ...[
+                // Paint order matters: built-up tint first so water drawn after it reads as
+                // being ON the land rather than under a haze, then lakes, then rivers, and
+                // the administrative boundary last so a state line stays legible where it
+                // runs along a river - which, often enough, is exactly where it runs.
+                PolygonLayer(
+                  polygons: landPolygons(
+                    detail.urbanRings,
+                    fill: _mapUrban,
+                    border: _mapUrban,
+                    strokeWidth: 0,
+                  ),
+                ),
+                PolygonLayer(
+                  polygons: landPolygons(
+                    detail.lakeRings,
+                    fill: _mapLake,
+                    border: _mapRiver,
+                    strokeWidth: 0.4,
+                  ),
+                ),
+                PolylineLayer(
+                  polylines: borderPolylines(
+                    detail.riverLines,
+                    color: _mapRiver,
+                    strokeWidth: 0.9,
+                  ),
+                ),
                 PolylineLayer(
                   polylines: borderPolylines(
                     region.admin1Rings,
@@ -322,6 +482,7 @@ class _PlacesMapCanvasState extends State<PlacesMapCanvas> {
                     strokeWidth: 0.7,
                   ),
                 ),
+              ],
               MarkerClusterLayerWidget(
                 options: MarkerClusterLayerOptions(
                   maxClusterRadius: 42,
@@ -337,6 +498,7 @@ class _PlacesMapCanvasState extends State<PlacesMapCanvas> {
                         place: p,
                         diameter: placeNodeDiameter(p.postCount, maxPostCount),
                         accent: accent,
+                        ringColor: widget.ringColorFor?.call(p),
                         onTap: () => widget.onOpenPlace(p),
                       ),
                   ],
@@ -388,6 +550,7 @@ class _PlaceMarker extends Marker {
     required double diameter,
     required Color accent,
     required VoidCallback onTap,
+    Color? ringColor,
   }) : super(
           point: LatLng(place.lat!, place.lng!),
           width: diameter,
@@ -397,6 +560,7 @@ class _PlaceMarker extends Marker {
             place: place,
             diameter: diameter,
             accent: accent,
+            ringColor: ringColor,
             onTap: onTap,
           ),
         );

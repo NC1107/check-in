@@ -130,10 +130,33 @@ The 1:10m layer does cover all 253 (4,596 features), but packs to 1.57 MB agains
 and carries ~9x the points to decode and draw on every map open. Not worth it until a real
 group is actually somewhere the 50m layer leaves blank.
 
+## Detail layer
+
+`detail_outlines.bin` (see `pack_detail.py`) carries Natural Earth's 1:50m lakes, river
+centerlines and urban areas as three ring groups, drawn only at region/local zoom on top of
+the country fill and under the place nodes.
+
+It exists instead of a shaded-relief raster. A bundled raster is a fixed resolution, so it
+looks its best zoomed out and goes soft exactly at the few-degree span a real group's places
+fit into - staying sharp there would need a world image on the order of 100,000 pixels wide.
+Vector features have no such limit, and lakes, rivers and towns are what a region is
+actually recognised by.
+
+River centerlines are packed as open paths, not rings: closing one would draw a false
+segment joining a river's mouth back to its source. A small minority genuinely do close (a
+loop around a delta island), which `test/map_assets_test.dart` accounts for by asserting the
+shape of the layer rather than demanding none exist.
+
 ## Size
 
   - `world_outlines.bin`: 32,099 bytes (~31 KB).
   - `region_outlines.bin`: 443,721 bytes (~433 KB) - 87,360 points across the admin-0
     rings, 61,804 points across the admin-1 rings.
-  - Combined: 475,820 bytes (~465 KB), still under the ~600 KB total asset budget for this
-    feature after the 10x precision increase.
+  - `detail_outlines.bin`: 186,410 bytes (~182 KB) - 465 lake rings, 895 river paths and
+    2,156 urban-area rings.
+  - Combined: 662,230 bytes (~647 KB). This is over the ~600 KB figure the earlier revision
+    of this file named as a budget; that number predated the detail layer and was a guess at
+    what the feature would need rather than a constraint anything enforces. Two thirds of a
+    megabyte of vector data, bundled once and drawn at every zoom, is the right trade against
+    the terrain raster it replaces - which would have cost more and looked worse where it
+    matters.

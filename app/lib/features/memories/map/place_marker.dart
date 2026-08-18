@@ -39,11 +39,16 @@ class PlacePhotoNode extends StatelessWidget {
     required this.diameter,
     required this.accent,
     required this.onTap,
+    this.ringColor,
   });
 
   final Place place;
   final double diameter;
   final Color accent;
+
+  /// The ring around the photo. Defaults to white, which reads on any thumbnail; a group
+  /// colour is passed instead when the map is showing several groups at once.
+  final Color? ringColor;
 
   /// Handled by the node itself rather than by the cluster layer's own onMarkerTap: the
   /// layer's hit-testing works off the marker's declared box, so a circular node reports
