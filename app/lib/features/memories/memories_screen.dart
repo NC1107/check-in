@@ -995,20 +995,45 @@ class _MemoriesSurfaceContentState extends ConsumerState<_MemoriesSurfaceContent
                               )
                             else
                               const SizedBox(width: 12),
-                            const Expanded(
-                              // Excluded from semantics: this is decorative chrome, and its
-                              // own implicit "Memories" text label would otherwise merge up
-                              // into the surface's own horizontal-drag GestureDetector (which
-                              // contributes a scrollLeft/scrollRight semantics node of its
-                              // own) - colliding with the handle's OWN explicit
-                              // Semantics(label: 'Memories') button and making
-                              // find.bySemanticsLabel('Memories') ambiguous.
-                              child: ExcludeSemantics(
-                                child: Text('Memories',
-                                    style: TextStyle(
-                                        color: _fgPrimary,
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 18)),
+                            // Excluded from semantics: this is decorative chrome, and its
+                            // own implicit "Memories" text label would otherwise merge up
+                            // into the surface's own horizontal-drag GestureDetector (which
+                            // contributes a scrollLeft/scrollRight semantics node of its
+                            // own) - colliding with the handle's OWN explicit
+                            // Semantics(label: 'Memories') button and making
+                            // find.bySemanticsLabel('Memories') ambiguous.
+                            // Title and filter share one Expanded so the filter sits right
+                            // after the word rather than out by the close button, while the
+                            // title itself stays Flexible - at 320px and textScale 1.6 a
+                            // rigid "Memories" plus two icon buttons overflows the row, which
+                            // sheet_layout_smoke_test.dart catches.
+                            Expanded(
+                              child: Row(
+                                children: [
+                                  const Flexible(
+                                    child: ExcludeSemantics(
+                                      child: Text('Memories',
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                              color: _fgPrimary,
+                                              fontWeight: FontWeight.w700,
+                                              fontSize: 18)),
+                                    ),
+                                  ),
+                                  // Sits directly after the title rather than in a bar of its
+                                  // own below it: which group you are looking at is a
+                                  // qualifier on "Memories", and a whole strip of chrome was
+                                  // more furniture than a one-in-N choice needs. Only shown
+                                  // with something real to choose between - a member of
+                                  // exactly one capable group (by far the common case) sees
+                                  // nothing here at all.
+                                  if (capableGroups.length > 1 && !inDetail)
+                                    _MemoriesGroupFilter(
+                                      groups: capableGroups,
+                                      selectedGroupId: selectedGroupId,
+                                      onSelect: widget.hub.selectGroup,
+                                    ),
+                                ],
                               ),
                             ),
                             Semantics(
@@ -1022,32 +1047,6 @@ class _MemoriesSurfaceContentState extends ConsumerState<_MemoriesSurfaceContent
                           ],
                         ),
                       ),
-                      // Only shown with something real to choose between - a member of exactly
-                      // one capable group (by far the common case) sees nothing here at all,
-                      // same as before this feature existed.
-                      if (capableGroups.length > 1 && !inDetail)
-                        // Its own band, not just a row of pills floating under the title:
-                        // it governs everything below it (see _MemoriesGroupSelector), so it
-                        // reads better as a distinct strip the content hangs off than as
-                        // more header. A recessed fill plus one hairline is enough to say
-                        // that without adding chrome that competes with the pills.
-                        DecoratedBox(
-                          decoration: const BoxDecoration(
-                            color: Color(0xFF10161B),
-                            border: Border(
-                              top: BorderSide(color: _border, width: 0.5),
-                              bottom: BorderSide(color: _border, width: 0.5),
-                            ),
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.fromLTRB(14, 9, 14, 9),
-                            child: _MemoriesGroupSelector(
-                              groups: capableGroups,
-                              selectedGroupId: selectedGroupId,
-                              onSelect: widget.hub.selectGroup,
-                            ),
-                          ),
-                        ),
                       Expanded(
                         // A lightweight fade + slide so stepping between hub/list/detail feels
                         // like the rest of the app's pushes, without dragging in a full
@@ -1079,73 +1078,19 @@ class _MemoriesSurfaceContentState extends ConsumerState<_MemoriesSurfaceContent
   }
 }
 
-/// One group in the Memories surface's own header selector (see
-/// [_MemoriesGroupSelector]) - the same pill idiom the feed's own filter sheet uses for its
-/// GROUPS row (a color dot, a border pill, a checkmark and accent fill once selected), so
-/// switching groups here reads as the app's existing multi-group affordance rather than a
-/// new one invented for this screen.
-class _MemoriesGroupPill extends StatelessWidget {
-  const _MemoriesGroupPill({required this.account, required this.selected, required this.onTap});
-
-  final ServerAccount account;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final groupColor = account.displayColor;
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: account.displayName,
-      child: GestureDetector(
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
-          decoration: BoxDecoration(
-            // The GROUP's own colour, not the app accent. Every pill filling with the same
-            // accent made the row read as one control with a cursor on it; letting each
-            // group light up in the colour it already has everywhere else (its dot, its
-            // avatar ring, its cross-post tag) makes the row read as the groups themselves.
-            // A tint plus a full-strength border rather than a solid fill, because these
-            // colours are member-chosen and an arbitrary one cannot be trusted to carry
-            // legible text on top of it.
-            color: selected ? groupColor.withValues(alpha: 0.20) : Colors.transparent,
-            border: Border.all(color: selected ? groupColor : _border, width: selected ? 1.5 : 1),
-            borderRadius: BorderRadius.circular(9999),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (selected)
-                Icon(Icons.check, size: 14, color: groupColor)
-              else
-                Container(
-                  width: 10,
-                  height: 10,
-                  decoration: BoxDecoration(color: groupColor, shape: BoxShape.circle),
-                ),
-              const SizedBox(width: 6),
-              Text(account.displayName,
-                  style: TextStyle(
-                      color: selected ? _fgPrimary : _fgSecondary,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The Memories surface header's own group switcher: one [_MemoriesGroupPill] per capable
-/// shown group, horizontally scrollable so it never wraps the header taller. Governs all
-/// three of the surface's views at once (see [effectiveMemoriesGroupId]) - picking a group
-/// here is the one place that selection changes.
-class _MemoriesGroupSelector extends StatelessWidget {
-  const _MemoriesGroupSelector({
+/// The Memories surface's own group filter: an icon beside the title that opens a menu of
+/// the capable groups.
+///
+/// Replaces the row of pills this used to be. A pill per group cost a whole strip of header
+/// and scaled badly past two or three, while the choice itself is one-in-N and changes
+/// rarely - a menu is the honest shape for that. The selected group's own colour rides on
+/// the icon so the current scope is still readable without opening anything, which is the
+/// one thing the pills did better.
+///
+/// Governs all four of the surface's views at once (see [effectiveMemoriesGroupId]) -
+/// picking a group here is the one place that selection changes.
+class _MemoriesGroupFilter extends StatelessWidget {
+  const _MemoriesGroupFilter({
     required this.groups,
     required this.selectedGroupId,
     required this.onSelect,
@@ -1157,23 +1102,53 @@ class _MemoriesGroupSelector extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // A SingleChildScrollView, not a ListView, deliberately: it sizes itself to its child's
-    // own height rather than needing one handed down from a fixed-height box tuned to match
-    // the pills' current metrics - a future tweak to the pill's own padding or icon size can
-    // never leave it clipped again.
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          for (var i = 0; i < groups.length; i++) ...[
-            if (i > 0) const SizedBox(width: 8),
-            _MemoriesGroupPill(
-              account: groups[i],
-              selected: groups[i].id == selectedGroupId,
-              onTap: () => onSelect(groups[i].id),
-            ),
+    final selected = groups.where((g) => g.id == selectedGroupId).firstOrNull;
+    return Semantics(
+      button: true,
+      label: selected == null ? 'Filter by group' : 'Filter by group, ${selected.displayName}',
+      child: ExcludeSemantics(
+        child: PopupMenuButton<String>(
+          tooltip: 'Filter by group',
+          color: _bgSurface,
+          position: PopupMenuPosition.under,
+          onSelected: onSelect,
+          itemBuilder: (context) => [
+            for (final g in groups)
+              PopupMenuItem<String>(
+                value: g.id,
+                child: Row(
+                  children: [
+                    Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(color: g.displayColor, shape: BoxShape.circle),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(g.displayName,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              color: g.id == selectedGroupId ? _fgPrimary : _fgSecondary,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14)),
+                    ),
+                    if (g.id == selectedGroupId) Icon(Icons.check, size: 16, color: g.displayColor),
+                  ],
+                ),
+              ),
           ],
-        ],
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.filter_list, size: 18, color: selected?.displayColor ?? _fgSecondary),
+                const SizedBox(width: 4),
+                const Icon(Icons.arrow_drop_down, size: 16, color: _fgMuted),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

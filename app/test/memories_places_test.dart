@@ -467,7 +467,11 @@ void main() {
       await openPlacesList(tester);
       expect(find.text('Lisbon, Portugal'), findsOneWidget);
 
-      await tester.tap(find.text('b.invalid')); // the header's own group selector pill
+      // The group filter is a menu in the header now, so switching is two steps:
+      // open it, then pick.
+      await tester.tap(find.bySemanticsLabel(RegExp(r'^Filter by group')));
+      await settle(tester);
+      await tester.tap(find.text('b.invalid').last);
       await settle(tester);
 
       expect(find.text("This group doesn't support Places."), findsOneWidget);
@@ -494,7 +498,11 @@ void main() {
       // off the group id, so switching to B remounts it fresh rather than waiting on A.
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
 
-      await tester.tap(find.text('b.invalid'));
+      // The group filter is a menu in the header now, so switching is two steps:
+      // open it, then pick.
+      await tester.tap(find.bySemanticsLabel(RegExp(r'^Filter by group')));
+      await settle(tester);
+      await tester.tap(find.text('b.invalid').last);
       await settle(tester);
       await switchToListIfOffered(tester);
 

@@ -43,6 +43,29 @@ bool needsReencodeBeforeUpload(String path) => fileExtension(path) != 'gif';
 /// for images, and it takes the video pipeline (trim/encode/poster) rather than the photo
 /// one. Checking the extension here is cheaper than per-platform picker filtering and
 /// behaves the same everywhere.
+/// The most attachments one post may carry - the same cap the server enforces in its own
+/// handleCreatePost.
+const int kMaxAttachments = 10;
+
+/// Attachment slots left for photos.
+///
+/// A clip occupies one of the same slots photos do rather than sitting outside the cap: the
+/// server counts attachments, not kinds, so a post of ten photos plus a clip is eleven
+/// attachments and would be refused.
+int photoCapacity({required bool hasClip, required int photos, int max = kMaxAttachments}) {
+  final left = max - (hasClip ? 1 : 0) - photos;
+  return left < 0 ? 0 : left;
+}
+
+/// The order one post's attachments are uploaded and stored in: the clip first, then the
+/// photos in the order they were added.
+///
+/// Clip-first so a mixed post's cover - which is simply the first attachment - is the clip,
+/// and so that cover is stable regardless of whether the member happened to add the video
+/// before or after the photos.
+List<T> orderedAttachments<T extends Object>({T? clip, required List<T> photos}) =>
+    <T>[if (clip != null) clip, ...photos];
+
 bool isVideoPick(String path) =>
     const {'mp4', 'mov', 'm4v', '3gp', 'avi', 'webm', 'mkv'}.contains(fileExtension(path));
 
@@ -630,12 +653,15 @@ class ComposeSheet extends ConsumerStatefulWidget {
 }
 
 class _ComposeSheetState extends ConsumerState<ComposeSheet> {
-  static const _maxImages = 10;
+  int get _photoCapacity => photoCapacity(hasClip: _clip != null, photos: _images.length);
   final _bodyCtrl = TextEditingController();
   final List<XFile> _images = [];
-  // A single clip is exclusive with photos: a post is either a set of photos or one clip.
-  // Held pre-encode (already trimmed to <=10s if it needed it); the size encode and poster
-  // are computed once at submit and memoized for reuse across cross-post targets.
+  // At most one clip, alongside any photos. One clip rather than several because each costs
+  // a trim, a size encode and a poster extraction - real seconds of device work - while the
+  // server has always been happy to store whatever is attached (its kindFor labels a post
+  // "video" if ANY attachment is one). Held pre-encode (already trimmed to <=10s if it
+  // needed it); the size encode and poster are computed once at submit and memoized for
+  // reuse across cross-post targets.
   XFile? _clip;
   int _clipDurationMs = 0;
   String? _clipEncodedPath;
@@ -733,26 +759,28 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
         photos.add(x);
       }
     }
-    // A post is one clip OR a set of photos, never both. When the pick mixes them (or photos
-    // are already attached), keep the photos and skip the clip with a clear note.
-    if (video != null && (photos.isNotEmpty || _images.isNotEmpty)) {
-      _toast('Add photos or one video, not both.');
+    // Photos and a clip can ride in one post. Only the SECOND clip is refused: see _clip's
+    // own doc comment for why one is the limit.
+    if (video != null && _clip != null) {
+      _toast('One video per post.');
       video = null;
     }
     if (video != null && !_clipAllowed) {
       _toast('The selected group can\'t receive clips yet.');
       video = null;
     }
+    if (photos.isNotEmpty) {
+      setState(() {
+        for (final x in photos) {
+          if (_photoCapacity > 0) _images.add(x);
+        }
+      });
+    }
     if (video != null) {
       await _handlePickedClip(video.path);
       return;
     }
     if (photos.isEmpty) return;
-    setState(() {
-      for (final x in photos) {
-        if (_images.length < _maxImages) _images.add(x);
-      }
-    });
     // Gallery photos are the ones Android 10+ can redact GPS from - see _resolveLocation.
     await _resolveLocation(fromGallery: true);
   }
@@ -783,7 +811,7 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
         _clipEncodedPath = null;
         _clipPoster = null;
         _clipPosterPreview = null;
-        if (_images.length < _maxImages) _images.add(XFile(file.path));
+        if (_photoCapacity > 0) _images.add(XFile(file.path));
         _attachingGif = false;
       });
     } catch (_) {
@@ -812,7 +840,7 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
               title: const Text('Take Photo', style: TextStyle(color: _fgPrimary)),
               onTap: () => Navigator.of(context).pop(false),
             ),
-            if (_clipAllowed && _images.isEmpty)
+            if (_clipAllowed && _clip == null)
               ListTile(
                 leading: Icon(Icons.videocam_outlined, color: context.accent),
                 title: const Text('Record Video', style: TextStyle(color: _fgPrimary)),
@@ -836,7 +864,7 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
     if (x == null || !mounted) return;
     if (isVideoPick(x.path)) return; // camera handed back a clip: not this button's job
     setState(() {
-      if (_images.length < _maxImages) _images.add(x);
+      if (_photoCapacity > 0) _images.add(x);
     });
     // Not fromGallery: a camera shot lands in an app-private file Android never redacts, so
     // its GPS needs no permission - see _resolveLocation.
@@ -877,7 +905,6 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
         _clipEncodedPath = null;
         _clipPoster = null;
         _clipPosterPreview = null;
-        _images.clear(); // a clip replaces any photos: a post is one or the other
         _processingClip = false;
       });
       // GPS must be read from the trimmed source, before the size encode strips it.
@@ -1249,30 +1276,30 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
             if (t.idIn(g.id) case final id?) id
         ];
         final coords = recapCoordsFor(g, _lat, _lng);
-        if (_clip != null) {
-          final mediaId = await api.uploadImage(_clipEncodedPath ?? _clip!.path);
-          final poster = _clipPoster;
-          if (poster != null) {
-            // Best-effort: a clip with no stored poster still renders and plays fine, so a
-            // failed poster upload must never fail the post.
-            await attachPosterBestEffort(() => api.setMediaPoster(mediaId, poster));
+        if (_clip != null || _images.isNotEmpty) {
+          // One ordered list, clip first. A mixed post's cover is therefore the clip, which
+          // is what the feed card shows with its play badge - the more informative cover of
+          // the two, and stable regardless of what order the member happened to attach
+          // things in.
+          int? clipMediaId;
+          if (_clip != null) {
+            clipMediaId = await api.uploadImage(_clipEncodedPath ?? _clip!.path);
+            final poster = _clipPoster;
+            if (poster != null) {
+              // Best-effort: a clip with no stored poster still renders and plays fine, so a
+              // failed poster upload must never fail the post.
+              await attachPosterBestEffort(() => api.setMediaPoster(clipMediaId!, poster));
+            }
           }
-          // Server derives the 'video' kind from the stored media; sending a new createPost
-          // field would 400 an old server (DisallowUnknownFields), so kind stays 'image'.
-          await api.createPost(
-              kind: 'image',
-              body: _bodyCtrl.text.trim(),
-              mediaIds: [mediaId],
-              location: _location,
-              peopleIds: peopleIds,
-              crossPostId: crossPostId,
-              lat: coords.lat,
-              lng: coords.lng);
-        } else if (_images.isNotEmpty) {
-          final ids = <int>[];
+          final photoIds = <int>[];
           for (final x in _images) {
-            ids.add(await _uploadCompressed(api, x));
+            photoIds.add(await _uploadCompressed(api, x));
           }
+          final ids = orderedAttachments<int>(clip: clipMediaId, photos: photoIds);
+          // Server derives the stored kind from what is actually attached (its kindFor), so
+          // a mixed post lands as 'video' without this having to say so. Sending a new
+          // createPost field would 400 an old server (DisallowUnknownFields), so the claimed
+          // kind stays 'image' exactly as it did when a post could only be one or the other.
           await api.createPost(
               kind: 'image',
               body: _bodyCtrl.text.trim(),
