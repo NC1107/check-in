@@ -133,11 +133,12 @@ void main() {
           eventsCapable: true,
           timelineCapable: true,
           forgottenCapable: true,
+          placesCapable: true,
         );
 
     for (final size in sizes) {
       for (final scale in textScales) {
-        testWidgets('fits at $size, textScale $scale (all four entries)', (tester) async {
+        testWidgets('fits at $size, textScale $scale (all five entries)', (tester) async {
           await setSurface(tester, size);
           final controller = AnimationController(
               vsync: tester, duration: const Duration(milliseconds: 1), value: 1);
@@ -158,7 +159,7 @@ void main() {
 
           expect(tester.takeException(), isNull,
               reason: 'Memories hub root must fit or scroll at $size / $scale with all '
-                  'four entries showing');
+                  'five entries showing');
         });
       }
     }
