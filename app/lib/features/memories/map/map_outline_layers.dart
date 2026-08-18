@@ -15,6 +15,12 @@ import 'package:latlong2/latlong.dart';
 /// RegionOutlines), so the same list object comes back on every rebuild, and rebuilding
 /// tens of thousands of [LatLng]s during a pan would be pure waste. An [Expando] rather
 /// than a plain map so the derived geometry is collected if the asset ever is.
+///
+/// The cache is keyed on the ring list ALONE, not on the colours it is drawn with, so each
+/// ring list must have exactly one style: passing the same list twice with different
+/// colours would silently return the first call's geometry. That holds by construction here
+/// - every list is a distinct layer of a distinct asset (land, admin-1 borders, lakes,
+/// rivers, urban areas) with one appearance each.
 final Expando<List<Polygon>> _landCache = Expando<List<Polygon>>('landPolygons');
 final Expando<List<Polyline>> _borderCache = Expando<List<Polyline>>('borderPolylines');
 

@@ -132,7 +132,7 @@ void main() {
   }
 
   group('list/map toggle', () {
-    testWidgets('is offered once places have loaded, defaults to the list', (tester) async {
+    testWidgets('is offered once places have loaded, and opens on the map', (tester) async {
       await pumpOpenSurface(tester,
           serverAccount: account('a.invalid'),
           api: _FakePlacesApi(places: [place(location: 'Lisbon, Portugal', lat: 38.7, lng: -9.1)]));
@@ -142,7 +142,11 @@ void main() {
 
       expect(find.bySemanticsLabel('List view'), findsOneWidget);
       expect(find.bySemanticsLabel('Map view'), findsOneWidget);
-      expect(find.text('Lisbon, Portugal'), findsOneWidget);
+      // The map is the starting view, not the list - and the toggle rides over it in every
+      // state, including this one, since it is the only way back to the list. A lone place
+      // still renders the no-map state rather than a single-node map, so the place is named
+      // there instead of on a list card.
+      expect(find.textContaining('Lisbon, Portugal'), findsOneWidget);
     });
 
     testWidgets(
@@ -303,6 +307,63 @@ void main() {
     });
   });
 
+  group('all-groups scope', () {
+    // All UK on purpose: places far enough apart to stay separate nodes at the fitted zoom,
+    // rather than collapsing into clusters the way a London/Tokyo spread does - clustering
+    // is correct behaviour there, but it hides the per-place labels this asserts on.
+    final londonAndManchester = [
+      place(location: 'London, United Kingdom', lat: 51.5074, lng: -0.1278),
+      place(location: 'Manchester, United Kingdom', lat: 53.4808, lng: -2.2426),
+    ];
+
+    testWidgets('the map can show every group at once, and goes back to one', (tester) async {
+      await pumpOpenSurfaceMulti(tester,
+          groups: [account('a.invalid'), account('b.invalid')],
+          apiFor: (id) => _FakePlacesApi(
+              places: id == 'a.invalid'
+                  ? londonAndManchester
+                  : [place(location: 'Bristol, United Kingdom', lat: 51.4545, lng: -2.5879)]));
+
+      await openPlacesInMapMode(tester);
+      expect(find.bySemanticsLabel('London, United Kingdom'), findsOneWidget);
+      expect(find.bySemanticsLabel('Bristol, United Kingdom'), findsNothing,
+          reason: 'the map starts scoped to the selected group only');
+
+      await tester.tap(find.bySemanticsLabel('Showing this group only'));
+      await settle(tester);
+
+      expect(tester.takeException(), isNull);
+      expect(find.bySemanticsLabel('Bristol, United Kingdom'), findsOneWidget,
+          reason: "the other group's places must join the map");
+      expect(find.bySemanticsLabel('London, United Kingdom'), findsOneWidget,
+          reason: 'and must join it rather than replacing what was already there');
+
+      await tester.tap(find.bySemanticsLabel('Showing all groups'));
+      await settle(tester);
+
+      expect(find.bySemanticsLabel('Bristol, United Kingdom'), findsNothing,
+          reason: 'switching back must drop the other group again');
+      expect(find.bySemanticsLabel('London, United Kingdom'), findsOneWidget);
+    });
+
+    testWidgets('one group failing does not take the whole all-groups map down', (tester) async {
+      await pumpOpenSurfaceMulti(tester,
+          groups: [account('a.invalid'), account('b.invalid')],
+          apiFor: (id) => id == 'a.invalid'
+              ? _FakePlacesApi(places: londonAndManchester)
+              : _FakePlacesApi(failPlaces: true));
+
+      await openPlacesInMapMode(tester);
+      await tester.tap(find.bySemanticsLabel('Showing this group only'));
+      await settle(tester);
+
+      // Several servers are involved, so one being unreachable is ordinary. Showing the
+      // groups that answered beats an error covering all of them.
+      expect(tester.takeException(), isNull);
+      expect(find.bySemanticsLabel('London, United Kingdom'), findsOneWidget);
+    });
+  });
+
   group('group selector', () {
     testWidgets(
         'switching groups while in map mode is clean: the new group\'s own places '
@@ -333,9 +394,10 @@ void main() {
           reason: "the left group's markers must not linger");
       expect(find.bySemanticsLabel('Manchester, United Kingdom'), findsNothing);
       // The screen remounts fresh for the new group (a new ValueKey - the same convention
-      // every other Memories list view already uses on a group switch), so it starts back
-      // on the list view rather than carrying map mode over from the group that was left.
-      expect(find.text('Tokyo, Japan'), findsOneWidget);
+      // every other Memories list view already uses on a group switch), which lands it back
+      // on its own default view. That default is the map, so the new group's places arrive
+      // as map nodes rather than list rows.
+      expect(find.bySemanticsLabel('Tokyo, Japan'), findsOneWidget);
     });
   });
 }

@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:checkin/api/models.dart';
+import 'package:checkin/features/memories/map/detail_outlines.dart';
 import 'package:checkin/features/memories/map/place_marker.dart';
 import 'package:checkin/features/memories/map/region_outlines.dart';
 import 'package:checkin/features/memories/map/world_outlines.dart';
@@ -46,6 +47,29 @@ void main() {
     final region = await RegionOutlines.load();
     expectSaneDegrees(region.admin0Rings, "region_outlines.bin's admin-0 group");
     expectSaneDegrees(region.admin1Rings, "region_outlines.bin's admin-1 group");
+  });
+
+  testWidgets('the bundled detail asset decodes to real degrees', (tester) async {
+    final detail = await DetailOutlines.load();
+    expectSaneDegrees(detail.lakeRings, "detail_outlines.bin's lakes");
+    expectSaneDegrees(detail.riverLines, "detail_outlines.bin's rivers");
+    expectSaneDegrees(detail.urbanRings, "detail_outlines.bin's urban areas");
+  });
+
+  testWidgets('rivers are packed as open paths, not as rings', (tester) async {
+    // The packer trims a repeated closing point from AREA rings only - doing it to a line
+    // would open a genuinely closed one, and treating a line as a ring would draw a false
+    // segment joining a river's mouth back to its source across whatever lies between.
+    //
+    // A handful of centerlines really do close on themselves (a loop around a delta
+    // island), so this asserts the shape of the layer rather than demanding none exist: if
+    // lines were ever run through the ring path, essentially all of them would come back
+    // closed instead of a small minority.
+    final detail = await DetailOutlines.load();
+    final closed = detail.riverLines.where((r) => r.length > 2 && r.first == r.last).length;
+    expect(closed / detail.riverLines.length, lessThan(0.1),
+        reason: '$closed of ${detail.riverLines.length} river paths are closed - lines have '
+            'probably been packed through the ring path');
   });
 
   testWidgets('the region asset actually covers the founder group\'s own corner of the map',

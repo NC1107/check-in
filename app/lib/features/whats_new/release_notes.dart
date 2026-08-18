@@ -19,6 +19,14 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.23',
+    highlights: [
+      'Places opens straight onto the map now, full screen, with the map and list toggle in the top left corner.',
+      'The map has lakes, rivers and towns on it, so you can tell where somewhere is without needing labels.',
+      "If you're in more than one group there's an all groups button on the map, so you can see everywhere you've been at once. Each place is ringed in its own group's colour.",
+    ],
+  ),
+  ReleaseNote(
     version: '1.22',
     highlights: [
       'The places map pans and zooms properly now, and every place shows one of its own photos instead of a plain dot. Places close together collapse into one until you zoom in.',

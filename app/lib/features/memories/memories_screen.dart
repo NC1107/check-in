@@ -354,6 +354,17 @@ class MemoriesHubController extends ChangeNotifier {
   bool _mapViewActive = false;
   bool get mapViewActive => _mapViewActive;
 
+  /// Which of the two Places views the member is looking at, and whether that map is scoped
+  /// to one group or all of them.
+  ///
+  /// Held here rather than on _PlacesListViewState because that state is destroyed by the
+  /// very navigation this has to survive: drilling into a place's own detail unmounts the
+  /// list/map screen entirely (see its dispose()), so a view choice kept there would be
+  /// forgotten on the way in and the member would come back out somewhere they never chose.
+  /// Cleared by [reset] so each fresh visit to Memories still starts on the map.
+  PlacesViewMode placesViewMode = PlacesViewMode.map;
+  bool placesAllGroups = false;
+
   // _PlacesListViewState.dispose() defers its own setMapViewActive(false) call to a
   // post-frame callback (see that method's own doc comment for why it can't call it
   // inline) - which means this controller can already be disposed by the time that
@@ -465,6 +476,8 @@ class MemoriesHubController extends ChangeNotifier {
     _selectedMonth = null;
     _selectedPlace = null;
     _mapViewActive = false;
+    placesViewMode = PlacesViewMode.map;
+    placesAllGroups = false;
     notifyListeners();
   }
 }
@@ -1013,12 +1026,26 @@ class _MemoriesSurfaceContentState extends ConsumerState<_MemoriesSurfaceContent
                       // one capable group (by far the common case) sees nothing here at all,
                       // same as before this feature existed.
                       if (capableGroups.length > 1 && !inDetail)
-                        Padding(
-                          padding: const EdgeInsets.only(left: 14, right: 14, bottom: 10),
-                          child: _MemoriesGroupSelector(
-                            groups: capableGroups,
-                            selectedGroupId: selectedGroupId,
-                            onSelect: widget.hub.selectGroup,
+                        // Its own band, not just a row of pills floating under the title:
+                        // it governs everything below it (see _MemoriesGroupSelector), so it
+                        // reads better as a distinct strip the content hangs off than as
+                        // more header. A recessed fill plus one hairline is enough to say
+                        // that without adding chrome that competes with the pills.
+                        DecoratedBox(
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF10161B),
+                            border: Border(
+                              top: BorderSide(color: _border, width: 0.5),
+                              bottom: BorderSide(color: _border, width: 0.5),
+                            ),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(14, 9, 14, 9),
+                            child: _MemoriesGroupSelector(
+                              groups: capableGroups,
+                              selectedGroupId: selectedGroupId,
+                              onSelect: widget.hub.selectGroup,
+                            ),
                           ),
                         ),
                       Expanded(
@@ -1066,35 +1093,43 @@ class _MemoriesGroupPill extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final groupColor = account.displayColor;
     return Semantics(
       button: true,
       selected: selected,
       label: account.displayName,
       child: GestureDetector(
         onTap: onTap,
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
           padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
           decoration: BoxDecoration(
-            color: selected ? context.accent : Colors.transparent,
-            border: Border.all(color: selected ? context.accent : _border),
+            // The GROUP's own colour, not the app accent. Every pill filling with the same
+            // accent made the row read as one control with a cursor on it; letting each
+            // group light up in the colour it already has everywhere else (its dot, its
+            // avatar ring, its cross-post tag) makes the row read as the groups themselves.
+            // A tint plus a full-strength border rather than a solid fill, because these
+            // colours are member-chosen and an arbitrary one cannot be trusted to carry
+            // legible text on top of it.
+            color: selected ? groupColor.withValues(alpha: 0.20) : Colors.transparent,
+            border: Border.all(color: selected ? groupColor : _border, width: selected ? 1.5 : 1),
             borderRadius: BorderRadius.circular(9999),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(color: account.displayColor, shape: BoxShape.circle),
-              ),
+              if (selected)
+                Icon(Icons.check, size: 14, color: groupColor)
+              else
+                Container(
+                  width: 10,
+                  height: 10,
+                  decoration: BoxDecoration(color: groupColor, shape: BoxShape.circle),
+                ),
               const SizedBox(width: 6),
-              if (selected) ...[
-                Icon(Icons.check, size: 14, color: context.onAccent),
-                const SizedBox(width: 4),
-              ],
               Text(account.displayName,
                   style: TextStyle(
-                      color: selected ? context.onAccent : _fgSecondary,
+                      color: selected ? _fgPrimary : _fgSecondary,
                       fontWeight: FontWeight.w600,
                       fontSize: 13)),
             ],
@@ -2607,18 +2642,40 @@ class _PlacesListView extends ConsumerStatefulWidget {
 /// second hub entry: Places already exists as one screen with two views onto the same
 /// [Place] list this state already fetches, per the founder's brief for the map (phase 2 of
 /// this feature - see PlacesMapView's own doc comment for what it renders).
-enum _PlacesViewMode { list, map }
+enum PlacesViewMode { list, map }
 
 class _PlacesListViewState extends ConsumerState<_PlacesListView> {
   List<Place>? _places;
   bool _loading = true;
   bool _failed = false;
   bool _unsupported = false;
-  _PlacesViewMode _viewMode = _PlacesViewMode.list;
+  // Opens on the map, not the list. The map is what this screen is for - a list of place
+  // names is the fallback view, not the headline - and it is full-bleed rather than a card
+  // so it is big enough to actually read. The toggle floats over its top-left corner.
+  // Backed by the hub controller so it survives drilling into a place and coming back.
+  PlacesViewMode get _viewMode => widget.hub.placesViewMode;
+
+  /// Whether the map is showing every capable group at once rather than just the selected
+  /// one.
+  ///
+  /// Scoped to this screen on purpose, rather than being an "All" entry in the surface's own
+  /// group bar: the bar governs all four memories views, and "a random check-in from all
+  /// groups" or "month by month across all groups" are separate questions with their own
+  /// answers. Places is where combining is unambiguous - a map of everywhere you have been
+  /// is just a bigger map - so it gets the option locally and the rest stay single-group.
+  bool get _allGroups => widget.hub.placesAllGroups;
 
   @override
   void initState() {
     super.initState();
+    // The surface's own drag-to-close has to be suppressed from the moment this opens, not
+    // from the first toggle tap, now that the map is the starting view. Deferred to a
+    // post-frame callback for exactly the reason dispose() documents below: notifying
+    // listeners during a build pass trips the locked-tree assertion.
+    final hub = widget.hub;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _viewMode == PlacesViewMode.map) hub.setMapViewActive(true);
+    });
     _fetch();
   }
 
@@ -2639,14 +2696,67 @@ class _PlacesListViewState extends ConsumerState<_PlacesListView> {
     super.dispose();
   }
 
-  void _setViewMode(_PlacesViewMode mode) {
-    setState(() => _viewMode = mode);
-    widget.hub.setMapViewActive(mode == _PlacesViewMode.map);
+  void _setViewMode(PlacesViewMode mode) {
+    setState(() => widget.hub.placesViewMode = mode);
+    widget.hub.setMapViewActive(mode == PlacesViewMode.map);
+  }
+
+  /// The colour to ring a node with when the map is showing every group at once - the
+  /// same colour that group carries in the bar above, so a node's own group is readable
+  /// off the map without tapping it.
+  Color? _groupRingColor(Place place) {
+    final id = place.groupId;
+    if (id == null) return null;
+    return ref.read(multiSessionProvider).byId(id)?.displayColor;
+  }
+
+  void _setAllGroups(bool value) {
+    if (_allGroups == value) return;
+    setState(() => widget.hub.placesAllGroups = value);
+    _fetch();
+  }
+
+  /// Every capable group's places at once, merged.
+  ///
+  /// Fetched concurrently and tagged with the group each came from ([Place.withGroup]) so
+  /// the map can ring each node in its own group's colour. A group whose fetch fails is
+  /// dropped rather than failing the whole map: with several servers involved, one being
+  /// unreachable is an ordinary condition, and showing the rest beats showing an error over
+  /// all of them.
+  Future<List<Place>> _fetchAllGroups(List<ServerAccount> groups) async {
+    final results = await Future.wait([
+      for (final g in groups)
+        ref
+            .read(apiForGroupProvider(g.id))
+            .places()
+            .then((places) => [for (final p in places) p.withGroup(g.id)])
+            .catchError((_) => <Place>[]),
+    ]);
+    return [for (final list in results) ...list];
   }
 
   Future<void> _fetch() async {
+    final session = ref.read(multiSessionProvider);
+    if (_allGroups) {
+      final groups = [
+        for (final g in session.memoriesSurfaceCapableShownGroups)
+          if (g.placesCapable) g,
+      ];
+      setState(() {
+        _loading = true;
+        _failed = false;
+        _unsupported = false;
+      });
+      final places = await _fetchAllGroups(groups);
+      if (!mounted) return;
+      setState(() {
+        _places = places;
+        _loading = false;
+      });
+      return;
+    }
     final groupId = widget.groupId;
-    final account = groupId == null ? null : ref.read(multiSessionProvider).byId(groupId);
+    final account = groupId == null ? null : session.byId(groupId);
     if (account == null) {
       setState(() {
         _places = const [];
@@ -2692,6 +2802,36 @@ class _PlacesListViewState extends ConsumerState<_PlacesListView> {
     if (_failed) return _errorState(context);
     if (_unsupported) return _unsupportedState(context);
     final places = _places ?? const [];
+    final multiGroup = ref
+            .watch(multiSessionProvider)
+            .memoriesSurfaceCapableShownGroups
+            .where((g) => g.placesCapable)
+            .length >
+        1;
+    // Map mode takes the whole screen with its chrome floating on top, so it gets its own
+    // branch rather than a slot in the column the list mode below builds.
+    if (_viewMode == PlacesViewMode.map && places.isNotEmpty) {
+      return Stack(
+        children: [
+          Positioned.fill(
+            child: PlacesMapView(
+              places: places,
+              onOpenPlace: widget.hub.openPlaceDetail,
+              fullBleed: true,
+              ringColorFor: _allGroups ? _groupRingColor : null,
+              overlay: Row(
+                children: [
+                  _PlacesViewToggle(mode: _viewMode, onChanged: _setViewMode, onMap: true),
+                  const Spacer(),
+                  if (multiGroup) _MapScopePill(allGroups: _allGroups, onChanged: _setAllGroups),
+                ],
+              ),
+            ),
+          ),
+          Positioned(left: 0, right: 0, bottom: 0, child: Center(child: _attribution())),
+        ],
+      );
+    }
     return Column(
       children: [
         // The toggle only makes sense with real places to look at two ways - loading,
@@ -2713,7 +2853,7 @@ class _PlacesListViewState extends ConsumerState<_PlacesListView> {
           child: places.isEmpty
               ? _emptyState(context)
               : switch (_viewMode) {
-                  _PlacesViewMode.list => _list(places),
+                  PlacesViewMode.list => _list(places),
                   // Deliberately NOT wrapped in a SingleChildScrollView the way the old
                   // static map was: PlacesMapView now captures vertical drags for its own
                   // pan/zoom (see its own doc comment), and an ancestor Scrollable's own
@@ -2723,7 +2863,7 @@ class _PlacesListViewState extends ConsumerState<_PlacesListView> {
                   // (see its own build(), which keeps the map canvas itself outside any
                   // scrollable and only lets the couldn't-place-on-map note beneath it
                   // scroll if it doesn't fit).
-                  _PlacesViewMode.map => Padding(
+                  PlacesViewMode.map => Padding(
                       padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
                       child: PlacesMapView(
                         places: places,
@@ -2829,29 +2969,35 @@ class _PlacesListViewState extends ConsumerState<_PlacesListView> {
 /// comment). The same two-state pill idiom _MemoriesGroupPill uses elsewhere in this file,
 /// scaled down to an icon-only pair since "List"/"Map" need no label to be legible.
 class _PlacesViewToggle extends StatelessWidget {
-  const _PlacesViewToggle({required this.mode, required this.onChanged});
+  const _PlacesViewToggle({required this.mode, required this.onChanged, this.onMap = false});
 
-  final _PlacesViewMode mode;
-  final ValueChanged<_PlacesViewMode> onChanged;
+  final PlacesViewMode mode;
+  final ValueChanged<PlacesViewMode> onChanged;
+
+  /// Floating over the map rather than sitting on the screen's own background, which needs
+  /// a backdrop of its own: a bordered-but-transparent pill is legible over a flat surface
+  /// and disappears over coastlines and photo nodes.
+  final bool onMap;
 
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        border: Border.all(color: _border),
+        color: onMap ? Colors.black.withValues(alpha: 0.55) : Colors.transparent,
+        border: Border.all(color: onMap ? Colors.white24 : _border),
         borderRadius: BorderRadius.circular(9999),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          _segment(context, _PlacesViewMode.list, Icons.view_list_outlined, 'List view'),
-          _segment(context, _PlacesViewMode.map, Icons.map_outlined, 'Map view'),
+          _segment(context, PlacesViewMode.map, Icons.map_outlined, 'Map view'),
+          _segment(context, PlacesViewMode.list, Icons.view_list_outlined, 'List view'),
         ],
       ),
     );
   }
 
-  Widget _segment(BuildContext context, _PlacesViewMode value, IconData icon, String label) {
+  Widget _segment(BuildContext context, PlacesViewMode value, IconData icon, String label) {
     final selected = value == mode;
     return Semantics(
       button: true,
@@ -2867,6 +3013,56 @@ class _PlacesViewToggle extends StatelessWidget {
               borderRadius: BorderRadius.circular(9999),
             ),
             child: Icon(icon, size: 18, color: selected ? context.onAccent : _fgSecondary),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The map's own "just this group" / "every group" switch.
+///
+/// Lives on the map rather than in the surface's group bar because it only makes sense
+/// here - see _PlacesListViewState._allGroups for why the other memories views stay
+/// single-group. Labelled rather than icon-only: unlike list-vs-map, there is no icon that
+/// says "all of your groups at once" without a word.
+class _MapScopePill extends StatelessWidget {
+  const _MapScopePill({required this.allGroups, required this.onChanged});
+
+  final bool allGroups;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      selected: allGroups,
+      label: allGroups ? 'Showing all groups' : 'Showing this group only',
+      child: GestureDetector(
+        onTap: () => onChanged(!allGroups),
+        child: ExcludeSemantics(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.55),
+              border: Border.all(color: allGroups ? context.accent : Colors.white24),
+              borderRadius: BorderRadius.circular(9999),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(allGroups ? Icons.workspaces : Icons.workspaces_outlined,
+                      size: 14, color: allGroups ? context.accent : _fgSecondary),
+                  const SizedBox(width: 5),
+                  Text(allGroups ? 'All groups' : 'This group',
+                      style: TextStyle(
+                          color: allGroups ? _fgPrimary : _fgSecondary,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 12)),
+                ],
+              ),
+            ),
           ),
         ),
       ),
