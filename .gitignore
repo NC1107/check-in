@@ -18,6 +18,7 @@ server/check-in-server*
 # (server/internal/gazetteer/data/fetch_and_pack.sh) or locally on demand - never committed
 # to the repo at all (see server/internal/gazetteer/data/SOURCE.md for why). ~180MB.
 server/internal/gazetteer/data/places.bin
+__pycache__/
 
 # Credentials — defense-in-depth; these must never be committed. (The committed
 # google-services.json / GoogleService-Info.plist are client config, not secrets,

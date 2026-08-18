@@ -33,8 +33,8 @@ for the exact thresholds.
 
 ### Building it locally
 
-For local development and `go test` (which need a real `places.bin` at
-`internal/gazetteer/data/places.bin` - gitignored, never committed):
+For local development, or to poke at the real dataset directly (`go test ./...` itself does
+NOT need this - see "Testing" below):
 
 ```
 cd internal/gazetteer/data
@@ -42,13 +42,49 @@ sh fetch_and_pack.sh
 ```
 
 This is the exact same script and pinned URL the Docker build itself runs; it takes a few
-minutes (a ~420MB download, then packing ~5 million rows) and only needs to be run once
-per checkout - every `go test` afterward finds the already-built file.
+minutes (a ~420MB download, then packing ~5 million rows), writes `places.bin` next to
+this file (gitignored, never committed), and only needs to be run once per checkout.
 
 `countries.tsv` is derived from GeoNames' `countryInfo.txt` - trimmed to just the ISO
 alpha-2 code and the full English country name (252 rows), which is what turns a post's
 "City, Country" string into a country to search within. Small enough (3.5KB) that it stays
 `go:embed`'d, unlike `places.bin` - see `gazetteer.go`'s own doc comment.
+
+## Testing
+
+`go test ./...` never needs the real dataset - not in local dev, not in CI, which checks
+out a clean tree with no network access at all. `internal/gazetteer/gazetteertest` points
+every test in `internal/gazetteer`, `internal/db`, and `internal/api` (every package whose
+tests exercise gazetteer resolution, directly or through `db.PlacesForViewer`) at
+`testdata/fixture.bin` instead - a small, hand-curated dataset in this exact same on-disk
+format, committed to the repo (1,486 bytes, 56 real GeoNames rows), covering exactly the
+cases this package's own resolution RULES need to keep being exercised regardless of
+whether anyone has run `fetch_and_pack.sh` locally: proximity disambiguation (Arlington,
+Great Falls), population dominance both by ratio and by absolute floor (Washington,
+Baltimore, Bethesda, Silver Spring), primary/alias tiering (the Great Falls/Paterson
+case), the merge-when-every-primary-candidate-is-zero-population rule (New York), and all
+ten of one real self-hosted group's own historical location strings this whole dataset
+rework was built to fix (Mathias, Poolesville, Boyds, Dickerson, Moorefield, and White
+Plains resolving to Maryland rather than New York, among them) - see
+`testdata/make_fixture.py`'s own doc comment for the full list and exactly why each row is
+there. Every coordinate and population in it is a real value from the real dataset;
+what's curated is which real rows are included.
+
+This was a real bug fixed alongside this fixture's own introduction: before it, these
+tests only passed on a machine that happened to have a full `places.bin` sitting around
+locally (gitignored, so invisible to `git status`) - a clean CI checkout has no such file,
+the loader correctly degrades to "no match" (see `gazetteer.go`'s own `load`), and every
+test asserting a real coordinate failed. Verified directly, not just reasoned about: move
+`internal/gazetteer/data/places.bin` out of the way and `go test ./...` (with or without
+`TESTDB_URL`) still passes, using only the fixture.
+
+A test that genuinely needs the FULL, several-million-row dataset - a coverage claim, a
+size or performance assertion against the real production artifact - would skip cleanly
+when it's absent, the same idiom `internal/api`'s own `TESTDB_URL`-gated integration tests
+already use for "no database here" (see `harness_test.go`). There is no such test today:
+`fetch_and_pack.sh` itself already fails the build loudly on an implausibly small packed
+output (see "Data source" above), and the real pipeline has been verified end to end via a
+real `docker build`, not merely assumed to work.
 
 ## Why no population floor
 
