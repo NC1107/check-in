@@ -1,6 +1,14 @@
 import 'package:flutter/material.dart' show Offset;
 import 'package:flutter/services.dart' show ByteData;
 
+/// Fixed-point units per degree that every coordinate in both outline assets is quantized
+/// to.
+///
+/// Must equal assets/worldmap/outline_codec.py's own SCALE exactly - see its doc comment
+/// for why a mismatch is quiet rather than loud: it draws every coastline in the world at
+/// the wrong size instead of failing to parse.
+const double kOutlineCoordinateScale = 1000.0;
+
 /// The zigzag-varint delta-encoded ring format shared by world_outlines.dart (a single
 /// flat list of rings) and region_outlines.dart (several ring GROUPS in one file) - see
 /// assets/worldmap/SOURCE.md for the exact byte layout each one wraps this in, and
@@ -11,6 +19,8 @@ import 'package:flutter/services.dart' show ByteData;
 /// and threading an integer offset through each read (bumping it by however many bytes a
 /// varint happened to take) is exactly the kind of easy-to-get-wrong bookkeeping a tiny
 /// stateful cursor removes.
+///
+/// [kOutlineCoordinateScale] below has to match the encoder's own SCALE exactly.
 class OutlineReader {
   OutlineReader(this._data);
 
@@ -45,7 +55,7 @@ class OutlineReader {
     for (var p = 0; p < pointCount; p++) {
       x += _readZigzag();
       y += _readZigzag();
-      points.add(Offset(x / 100.0, y / 100.0));
+      points.add(Offset(x / kOutlineCoordinateScale, y / kOutlineCoordinateScale));
     }
     return points;
   }

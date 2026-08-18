@@ -63,7 +63,7 @@ keep only the geometry itself:
   - every ring (exterior boundary and interior hole alike, e.g. Lesotho's hole in South
     Africa, San Marino's and the Vatican's in Italy) of every polygon, simplified with
     Douglas-Peucker at each layer's own tolerance (see above)
-  - each ring's points, quantized to 0.01° (~1.1 km at the equator) and delta-encoded as
+  - each ring's points, quantized to 0.001° (~110 m at the equator) and delta-encoded as
     zigzag varints against the previous point, since consecutive points on a simplified
     boundary are almost always close together - the shared codec both pack scripts use is
     `outline_codec.py`
@@ -89,7 +89,7 @@ outline_codec.py):
 ring:
   pointCount: varint
   for each point:
-    dx: zigzag-varint  (delta from the previous point's x, in 0.01° units; first point's
+    dx: zigzag-varint  (delta from the previous point's x, in 0.001° units; first point's
                          delta is from (0, 0))
     dy: zigzag-varint  (delta from the previous point's y, same units)
 
@@ -103,15 +103,37 @@ ringGroup:
 admin-1 - which is what lets `region_outlines.dart`'s parser hand the painter two
 independently-styled ring lists from one file instead of needing two separate assets.
 
-`x` is longitude, `y` is latitude, both scaled by 100 and rounded to the nearest integer
-before delta-encoding. A ring's first and last point are the same location but only
-stored once - every ring is implicitly closed.
+`x` is longitude, `y` is latitude, both scaled by `outline_codec.py`'s own `SCALE` and
+rounded to the nearest integer before delta-encoding. A ring's first and last point are the
+same location but only stored once - every ring is implicitly closed.
+
+That scale is defined in exactly two places - `outline_codec.py` and `outline_codec.dart`'s
+`kOutlineCoordinateScale` - and they must agree. A mismatch does not fail to parse; it
+draws every coastline in the world at the wrong size. `test/map_assets_test.dart` guards
+that by range-checking the real shipped assets rather than an in-memory buffer.
+
+It was originally 100 (0.01°, ~1.1 km). Both layers are simplified at a finer tolerance
+than that, so the coarser grid was discarding detail already paid for and snapping every
+coastline onto a ~1.1 km lattice - which read as visibly angular, wrong-looking geometry
+once the map became zoomable. 1000 costs about 40% more bytes for 10x the precision.
+
+## Admin-1 coverage
+
+Natural Earth's 1:50m admin-1 layer covers only **9 countries**: the United States, Russia,
+China, India, Canada, Brazil, Australia, Indonesia and South Africa. A group anywhere else
+sees country outlines with no internal state/province lines, which degrades cleanly - those
+nine are the geographically large countries where an internal boundary is what tells you
+where you are; a country small enough to be missing from the layer is small enough to
+recognise from its own outline.
+
+The 1:10m layer does cover all 253 (4,596 features), but packs to 1.57 MB against 444 KB
+and carries ~9x the points to decode and draw on every map open. Not worth it until a real
+group is actually somewhere the 50m layer leaves blank.
 
 ## Size
 
-  - `world_outlines.bin`: 22,868 bytes (~22.3 KB), unchanged by this rework.
-  - `region_outlines.bin`: 309,443 bytes (~302 KB) - 87,360 points across 1,632 admin-0
-    rings, 61,804 points across 858 admin-1 rings.
-  - Combined: 332,311 bytes (~324.5 KB), comfortably under the ~600 KB total asset
-    budget for this feature, with about 46% headroom to spare for a future re-pack at a
-    finer tolerance if it's ever needed.
+  - `world_outlines.bin`: 32,099 bytes (~31 KB).
+  - `region_outlines.bin`: 443,721 bytes (~433 KB) - 87,360 points across the admin-0
+    rings, 61,804 points across the admin-1 rings.
+  - Combined: 475,820 bytes (~465 KB), still under the ~600 KB total asset budget for this
+    feature after the 10x precision increase.
