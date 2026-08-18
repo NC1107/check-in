@@ -1,13 +1,18 @@
+import 'dart:io';
+
 import 'package:flutter/services.dart';
 
-/// The two native operations a clip needs before it can be posted, behind one method
-/// channel so the Dart compose flow can be tested against a fake without a device.
+/// The native operations a check-in needs before it can be posted, behind one method channel
+/// so the Dart compose flow can be tested against a fake without a device.
 ///
-/// Both are things no maintained Flutter package covers well: a lossless range cut that
-/// keeps the rotation matrix (so a portrait clip does not post sideways), and reading the
-/// MP4 location atom that `native_exif` (photo-only) cannot. Everything around them - the
-/// trim window math, the encode, the upload - stays pure Dart on the other side of this
-/// seam.
+/// The clip pair - a lossless range cut that keeps the rotation matrix (so a portrait clip
+/// does not post sideways), and reading the MP4 location atom that `native_exif` (photo-only)
+/// cannot - is things no maintained Flutter package covers well. The permission call sits
+/// alongside them because it is answered by the same Activity: Android 10+ redacts a gallery
+/// photo's GPS unless the app holds ACCESS_MEDIA_LOCATION, and that is a runtime ask, not a
+/// static capability, so it cannot be a plain manifest declaration alone. Everything around
+/// these - the trim window math, the encode, the upload, deciding when to ask - stays pure
+/// Dart on the other side of this seam.
 class VideoNative {
   const VideoNative();
 
@@ -51,6 +56,21 @@ class VideoNative {
     } catch (_) {
       // No native handler: the platform's own default already respects the silent switch.
     }
+  }
+
+  /// Whether the app may read a gallery photo's un-redacted GPS: already granted, granted
+  /// just now, or nothing to grant because the OS never redacts it here. That last case
+  /// covers both Android below API 29 and every non-Android platform - iOS carries no such
+  /// gate, so this returns true without ever reaching the channel, and there is no iOS
+  /// handler for it to reach.
+  ///
+  /// Android only: only ever call this before reading a photo picked from the gallery. A
+  /// photo taken with the in-app camera lands in an app-private file the OS never redacts,
+  /// so it needs no permission and asking for one there would be a pointless prompt.
+  Future<bool> ensureMediaLocationPermission() async {
+    if (!Platform.isAndroid) return true;
+    final granted = await _channel.invokeMethod<bool>('ensureMediaLocationPermission');
+    return granted ?? false;
   }
 }
 

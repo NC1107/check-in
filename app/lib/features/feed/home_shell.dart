@@ -143,6 +143,60 @@ bool gifComposeAllowed(ServerAccount? active, Iterable<ServerAccount> selectedTa
 /// exercised without a device.
 final videoNativeProvider = Provider<VideoNative>((ref) => const VideoNative());
 
+/// What resolving a picked photo's location can end in - reported back to
+/// [_ComposeSheetState._resolveLocation], which decides what (if anything) to show the
+/// member for each. Where it lands matters: [permissionRefused] is a standing choice the
+/// member should be told about (and can act on in Settings); [none] is nothing to say - a
+/// photo just didn't carry GPS, or the geocoder found nothing for it. Before this, every one
+/// of these collapsed into the same silent nothing.
+enum PhotoLocationOutcome { found, permissionRefused, none }
+
+/// Resolves a place from the first of [paths] that carries GPS - exactly what
+/// [_ComposeSheetState._resolveLocation] shows in the compose sheet, pulled out as its own
+/// function so the decision is unit-testable without a device, a real picker, or a real
+/// image file.
+///
+/// [fromGallery] gates the Android media-location permission ask via [ensurePermission]:
+/// only a gallery photo can have had its GPS redacted by the OS (see
+/// [VideoNative.ensureMediaLocationPermission]) - a photo taken with the in-app camera lands
+/// in an app-private file Android never redacts, so [ensurePermission] is never even called
+/// for one. Asked at most once here, before the loop over [paths], rather than per photo -
+/// otherwise a refusal would re-prompt for every photo in a multi-photo pick instead of once
+/// for the whole pick.
+///
+/// [placeForPhoto] reads one photo's GPS and reverse-geocodes it (production always passes
+/// [_ComposeSheetState._photoPlace], wrapped to shed its private [_PlaceFix] return type).
+Future<({PhotoLocationOutcome outcome, String? place, double? lat, double? lng, String? source})>
+    resolvePhotoLocation({
+  required List<String> paths,
+  required bool fromGallery,
+  required Future<bool> Function() ensurePermission,
+  required Future<({String place, double lat, double lng})?> Function(String path) placeForPhoto,
+}) async {
+  if (fromGallery && !await ensurePermission()) {
+    return (
+      outcome: PhotoLocationOutcome.permissionRefused,
+      place: null,
+      lat: null,
+      lng: null,
+      source: null,
+    );
+  }
+  for (final path in paths) {
+    final fix = await placeForPhoto(path);
+    if (fix != null) {
+      return (
+        outcome: PhotoLocationOutcome.found,
+        place: fix.place,
+        lat: fix.lat,
+        lng: fix.lng,
+        source: path,
+      );
+    }
+  }
+  return (outcome: PhotoLocationOutcome.none, place: null, lat: null, lng: null, source: null);
+}
+
 /// Runs a clip's poster upload, swallowing any failure. A poster is only the pre-play still;
 /// the feed renders and plays a posterless clip fine, so attaching it must never be able to
 /// fail the post it belongs to.
@@ -599,6 +653,9 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
   String? _locationSource; // path of the photo that supplied _location
   bool _locationCleared = false; // user removed the location manually; don't auto-refill
   bool _resolvingLocation = false;
+  // Shown once per compose if the member refuses media-location permission, so a batch of
+  // gallery picks (or several composes with the permission still off) doesn't repeat it.
+  bool _locationPermissionWarned = false;
   // The coordinates behind _location, rounded to 2dp - see _roundCoord. Always cleared
   // alongside _location, and only ever sent to a server that advertises recapCapable.
   double? _lat;
@@ -696,7 +753,8 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
         if (_images.length < _maxImages) _images.add(x);
       }
     });
-    await _resolveLocation();
+    // Gallery photos are the ones Android 10+ can redact GPS from - see _resolveLocation.
+    await _resolveLocation(fromGallery: true);
   }
 
   /// Opens the gif picker against [active]'s server and, on a pick, downloads the gif and
@@ -780,6 +838,8 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
     setState(() {
       if (_images.length < _maxImages) _images.add(x);
     });
+    // Not fromGallery: a camera shot lands in an app-private file Android never redacts, so
+    // its GPS needs no permission - see _resolveLocation.
     await _resolveLocation();
   }
 
@@ -868,33 +928,54 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
   /// Read a place label (and its coordinates) from the first image that carries GPS,
   /// remembering which photo it came from. Skips if we already have one or the user
   /// cleared it manually.
-  Future<void> _resolveLocation() async {
+  ///
+  /// The actual decision - ask permission or not, which photo (if any) wins - lives in
+  /// [resolvePhotoLocation], a plain function taking the native calls as arguments rather
+  /// than reaching for them itself, so that decision is unit-testable without a device, a
+  /// real picker, or a real image file. This method is just its wiring: the real
+  /// [VideoNative] and [_photoPlace], and translating the outcome into compose's state.
+  Future<void> _resolveLocation({bool fromGallery = false}) async {
     if (_locationCleared || _location != null || _images.isEmpty) return;
     setState(() => _resolvingLocation = true);
-    _PlaceFix? fix;
-    String? source;
-    for (final x in _images) {
-      fix = await _photoPlace(x.path);
-      if (fix != null) {
-        source = x.path;
-        break;
-      }
+    final resolved = await resolvePhotoLocation(
+      paths: [for (final x in _images) x.path],
+      fromGallery: fromGallery,
+      ensurePermission: () => ref.read(videoNativeProvider).ensureMediaLocationPermission(),
+      placeForPhoto: (path) async {
+        final fix = await _photoPlace(path);
+        return fix == null ? null : (place: fix.place, lat: fix.lat, lng: fix.lng);
+      },
+    );
+    if (!mounted) return;
+    if (resolved.outcome == PhotoLocationOutcome.permissionRefused) {
+      setState(() => _resolvingLocation = false);
+      _warnLocationPermissionRefused();
+      return;
     }
-    if (mounted) {
-      setState(() {
-        _location = fix?.place;
-        _lat = fix?.lat;
-        _lng = fix?.lng;
-        _locationSource = source;
-        _resolvingLocation = false;
-      });
-    }
+    setState(() {
+      _location = resolved.place;
+      _lat = resolved.lat;
+      _lng = resolved.lng;
+      _locationSource = resolved.source;
+      _resolvingLocation = false;
+    });
+  }
+
+  /// Tells the member why photo locations aren't showing up, once per compose - a refusal is
+  /// a standing choice, not a per-photo event, so repeating this on every subsequent pick
+  /// would be noise.
+  void _warnLocationPermissionRefused() {
+    if (_locationPermissionWarned) return;
+    _locationPermissionWarned = true;
+    _toast("Check-In doesn't have permission to read photo locations. "
+        'Enable it in Settings to tag where this was taken.');
   }
 
   /// Reads the photo's GPS on-device and reverse-geocodes it to a coarse "City, Country",
   /// alongside the coordinates behind it (rounded to 2 decimal places for [_submit] to
-  /// send - see [_PlaceFix]). Returns null when there's no location data. Raw
-  /// full-precision coordinates never leave the phone.
+  /// send - see [_PlaceFix]). Returns null when there's no location data. Permission is
+  /// already settled by the time this runs (see [_resolveLocation]); what's left to be
+  /// silent about is genuine - this photo has no GPS, or the geocoder found nothing.
   Future<_PlaceFix?> _photoPlace(String path) async {
     try {
       final exif = await Exif.fromPath(path);
@@ -903,7 +984,7 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
       if (coords == null) return null;
       return await _placeFix(coords.latitude, coords.longitude);
     } catch (_) {
-      return null; // no permission, no GPS, or geocoder unavailable → just skip it
+      return null; // no GPS in this photo, or the geocoder is unavailable → just skip it
     }
   }
 
