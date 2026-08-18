@@ -22,19 +22,13 @@ populations, never on how many additional zero-population rivals also exist - se
 place's own comment below for what it's proving).
 """
 
-import struct
 import sys
 
 sys.path.insert(0, "..")
 from pack_places import (  # noqa: E402 - see the sys.path.insert above
     COORD_SCALE,
-    FLAG_ALIAS,
-    FLAG_PRIMARY,
-    HEADER_FORMAT,
-    HEADER_SIZE,
-    MAGIC,
-    fnv1a64,
-    normalize_key,
+    key_rows_for,
+    serialize,
 )
 
 # Each entry is (name, iso, lat, lng, population, extra_alias_names) - "name" becomes a
@@ -173,44 +167,8 @@ def build() -> bytes:
     for name, iso, lat, lng, population, aliases in ENTRIES:
         idx = len(entries)
         entries.append((round(lat * COORD_SCALE), round(lng * COORD_SCALE), population))
-        key_rows.append((fnv1a64(iso + "\x00" + normalize_key(name)), idx, FLAG_PRIMARY))
-        for alias in aliases:
-            key_rows.append((fnv1a64(iso + "\x00" + normalize_key(alias)), idx, FLAG_ALIAS))
-
-    key_rows.sort(key=lambda r: r[0])
-
-    key_count = len(key_rows)
-    hashes = struct.pack(f"<{key_count}Q", *(r[0] for r in key_rows))
-    entry_indices = struct.pack(f"<{key_count}I", *(r[1] for r in key_rows))
-    flags = struct.pack(f"<{key_count}B", *(r[2] for r in key_rows))
-
-    entry_count = len(entries)
-    lat_bytes = struct.pack(f"<{entry_count}i", *(e[0] for e in entries))
-    lng_bytes = struct.pack(f"<{entry_count}i", *(e[1] for e in entries))
-    pop_bytes = struct.pack(f"<{entry_count}i", *(e[2] for e in entries))
-
-    hashes_offset = HEADER_SIZE
-    entry_indices_offset = hashes_offset + len(hashes)
-    flags_offset = entry_indices_offset + len(entry_indices)
-    lat_offset = flags_offset + len(flags)
-    lng_offset = lat_offset + len(lat_bytes)
-    pop_offset = lng_offset + len(lng_bytes)
-
-    header = struct.pack(
-        HEADER_FORMAT,
-        MAGIC,
-        key_count,
-        hashes_offset,
-        entry_indices_offset,
-        flags_offset,
-        entry_count,
-        lat_offset,
-        lng_offset,
-        pop_offset,
-    )
-    assert len(header) == HEADER_SIZE
-
-    return header + hashes + entry_indices + flags + lat_bytes + lng_bytes + pop_bytes
+        key_rows.extend(key_rows_for(iso, name, aliases, idx))
+    return serialize(entries, key_rows)
 
 
 def main() -> None:

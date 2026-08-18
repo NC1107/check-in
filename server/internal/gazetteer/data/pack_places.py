@@ -108,76 +108,91 @@ HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 MAGIC = b"PLC3"
 
 
-def main() -> None:
-    if len(sys.argv) != 3:
-        print(f"usage: {sys.argv[0]} <input allCountriesP_filtered.txt> <output places.bin>",
-              file=sys.stderr)
-        sys.exit(2)
-    input_path, output_path = sys.argv[1], sys.argv[2]
+def alias_shortlist(primary: str, name: str, alt: str) -> list:
+    """The extra names, besides `primary`, that this row should also be findable under.
 
-    t0 = time.time()
-    entries: list = []  # (lat_fixed, lng_fixed, population) - one per real GeoNames row
-    key_rows: list = []  # (hash, entry_idx, flag) - one per (row, name-or-alias) pair
+    Shortest-first, capped at MAX_EXTRA_ALIASES: GeoNames' alternatenames column runs to
+    hundreds of entries for a major city (every language's exonym, plus transliterations),
+    and packing them all would multiply the table's row count for names no phone's reverse
+    geocoder will ever emit. Shortest-first is what keeps the genuinely common exonyms
+    ("New York" for New York City) ahead of the long ceremonial ones inside that cap.
+    """
+    seen = {primary.lower()}
+    extras = []
+    if name and name.lower() not in seen:
+        extras.append(name)
+        seen.add(name.lower())
+    for a in alt.split(",") if alt else []:
+        a = a.strip()
+        if not usable_alias(a) or a.lower() in seen:
+            continue
+        seen.add(a.lower())
+        extras.append(a)
+    extras.sort(key=lambda n: (len(n), n))
+    return extras[:MAX_EXTRA_ALIASES]
 
-    with open(input_path, encoding="utf-8") as f:
-        reader = csv.reader(f, delimiter="\t")
-        for i, parts in enumerate(reader):
-            if len(parts) < 15:
-                continue
-            name = parts[1].strip()
-            asciiname = parts[2].strip()
-            alt = parts[3]
-            try:
-                lat = round(float(parts[4]) * COORD_SCALE)
-                lng = round(float(parts[5]) * COORD_SCALE)
-            except ValueError:
-                continue
-            iso = parts[8].strip()
-            try:
-                population = int(parts[14]) if parts[14] else 0
-            except ValueError:
-                population = 0
 
-            primary = asciiname if asciiname else name
-            if not primary or not iso:
-                continue
+def parse_row(parts: list) -> tuple:
+    """One raw GeoNames row -> (iso, primary, lat, lng, population, aliases), or None.
 
-            idx = len(entries)
-            entries.append((lat, lng, population))
+    None means "skip this row entirely": too few columns, unparseable coordinates, or no
+    name/country to key it by. A row whose POPULATION alone fails to parse is kept at
+    population 0 rather than dropped - an unparseable population is a blank or malformed
+    field on a place that is otherwise perfectly real, and this dataset's whole reason for
+    existing is that population-0 places must still resolve (see SOURCE.md).
+    """
+    if len(parts) < 15:
+        return None
+    name = parts[1].strip()
+    asciiname = parts[2].strip()
+    try:
+        lat = round(float(parts[4]) * COORD_SCALE)
+        lng = round(float(parts[5]) * COORD_SCALE)
+    except ValueError:
+        return None
+    iso = parts[8].strip()
+    primary = asciiname if asciiname else name
+    if not primary or not iso:
+        return None
+    try:
+        population = int(parts[14]) if parts[14] else 0
+    except ValueError:
+        population = 0
+    return iso, primary, lat, lng, population, alias_shortlist(primary, name, parts[3])
 
-            primary_key = iso + "\x00" + normalize_key(primary)
-            key_rows.append((fnv1a64(primary_key), idx, FLAG_PRIMARY))
 
-            seen = {primary.lower()}
-            extras = []
-            if name and name.lower() not in seen:
-                extras.append(name)
-                seen.add(name.lower())
-            if alt:
-                for a in alt.split(","):
-                    a = a.strip()
-                    if not usable_alias(a):
-                        continue
-                    key = a.lower()
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    extras.append(a)
-            extras.sort(key=lambda n: (len(n), n))
-            for a in extras[:MAX_EXTRA_ALIASES]:
-                akey = iso + "\x00" + normalize_key(a)
-                if akey == primary_key:
-                    continue
-                key_rows.append((fnv1a64(akey), idx, FLAG_ALIAS))
+def key_rows_for(iso: str, primary: str, aliases: list, idx: int) -> list:
+    """Every (hash, entry index, flag) row one place contributes to the key table.
 
-            if i % 1_000_000 == 0:
-                print(f"{i} rows, {time.time() - t0:.1f}s", file=sys.stderr)
+    An alias that folds to the same key as the primary name is dropped rather than packed
+    twice: the two rows would be indistinguishable at lookup time except for their flag,
+    and the ALIAS one would then make a name look merely-aliased when it is in fact this
+    place's real primary name (which is exactly the distinction the Great Falls, MT /
+    Paterson, NJ tiering depends on - see this module's own doc comment).
+    """
+    primary_key = iso + "\x00" + normalize_key(primary)
+    rows = [(fnv1a64(primary_key), idx, FLAG_PRIMARY)]
+    for a in aliases:
+        alias_key = iso + "\x00" + normalize_key(a)
+        if alias_key == primary_key:
+            continue
+        rows.append((fnv1a64(alias_key), idx, FLAG_ALIAS))
+    return rows
 
-    print(f"entries: {len(entries)}, key rows: {len(key_rows)}, {time.time() - t0:.1f}s",
-          file=sys.stderr)
 
+def serialize(entries: list, key_rows: list) -> bytes:
+    """Packs the entries and key-row tables into the on-disk format gazetteer.go reads.
+
+    Sorting the key rows by hash happens HERE rather than in a caller because that order is
+    part of the format itself, not a caller's choice: gazetteer.go locates a key by binary
+    search over this section and would silently miss rows in an unsorted file.
+
+    This is the single definition of the format's byte layout. The fixture generator
+    (testdata/make_fixture.py) calls it too rather than keeping its own copy, so a fixture
+    can never be built in a layout the real packer no longer emits - which would leave the
+    tests passing against a format that no longer exists.
+    """
     key_rows.sort(key=lambda r: r[0])
-    print(f"sorted, {time.time() - t0:.1f}s", file=sys.stderr)
 
     key_count = len(key_rows)
     hashes = struct.pack(f"<{key_count}Q", *(r[0] for r in key_rows))
@@ -210,17 +225,46 @@ def main() -> None:
     )
     assert len(header) == HEADER_SIZE
 
-    with open(output_path, "wb") as f:
-        f.write(header)
-        f.write(hashes)
-        f.write(entry_indices)
-        f.write(flags)
-        f.write(lat_bytes)
-        f.write(lng_bytes)
-        f.write(pop_bytes)
+    return header + hashes + entry_indices + flags + lat_bytes + lng_bytes + pop_bytes
 
-    total = pop_offset + len(pop_bytes)
-    print(f"wrote {output_path}: {total} bytes, {time.time() - t0:.1f}s", file=sys.stderr)
+
+def build_tables(input_path: str, t0: float) -> tuple:
+    entries: list = []  # (lat_fixed, lng_fixed, population) - one per real GeoNames row
+    key_rows: list = []  # (hash, entry_idx, flag) - one per (row, name-or-alias) pair
+
+    with open(input_path, encoding="utf-8") as f:
+        for i, parts in enumerate(csv.reader(f, delimiter="\t")):
+            row = parse_row(parts)
+            if row is not None:
+                iso, primary, lat, lng, population, aliases = row
+                idx = len(entries)
+                entries.append((lat, lng, population))
+                key_rows.extend(key_rows_for(iso, primary, aliases, idx))
+            # Counts every raw row read, skipped ones included - this is a progress meter
+            # over the input file, not over what survived it.
+            if i % 1_000_000 == 0:
+                print(f"{i} rows, {time.time() - t0:.1f}s", file=sys.stderr)
+
+    return entries, key_rows
+
+
+def main() -> None:
+    if len(sys.argv) != 3:
+        print(f"usage: {sys.argv[0]} <input allCountriesP_filtered.txt> <output places.bin>",
+              file=sys.stderr)
+        sys.exit(2)
+    input_path, output_path = sys.argv[1], sys.argv[2]
+
+    t0 = time.time()
+    entries, key_rows = build_tables(input_path, t0)
+    print(f"entries: {len(entries)}, key rows: {len(key_rows)}, {time.time() - t0:.1f}s",
+          file=sys.stderr)
+
+    data = serialize(entries, key_rows)
+    with open(output_path, "wb") as f:
+        f.write(data)
+
+    print(f"wrote {output_path}: {len(data)} bytes, {time.time() - t0:.1f}s", file=sys.stderr)
 
 
 if __name__ == "__main__":
