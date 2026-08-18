@@ -19,6 +19,13 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.24',
+    highlights: [
+      'You can put photos and a video in the same check-in now. It used to be one or the other for no particular reason.',
+      'Memories has a filter next to the title for picking which group you are looking at, instead of the row of group buttons.',
+    ],
+  ),
+  ReleaseNote(
     version: '1.23',
     highlights: [
       'Places opens straight onto the map now, full screen, with the map and list toggle in the top left corner.',

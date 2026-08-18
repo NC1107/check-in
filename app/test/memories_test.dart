@@ -276,7 +276,7 @@ void main() {
       expect(find.text('a.invalid'), findsNothing);
     });
 
-    testWidgets('the group selector appears with more than one capable group', (tester) async {
+    testWidgets('the group filter appears with more than one capable group', (tester) async {
       await pumpHost(tester,
           groups: [
             account('a.invalid', memoriesCapable: true),
@@ -285,6 +285,15 @@ void main() {
           api: (id) => _FakeMemoriesApi([null]));
 
       await tester.tap(find.bySemanticsLabel('Memories'));
+      await tester.pumpAndSettle();
+
+      // The groups live behind a filter menu now rather than a row of pills, so the header
+      // itself only carries the control - the names appear once it is opened.
+      final filter = find.bySemanticsLabel(RegExp(r'^Filter by group'));
+      expect(filter, findsOneWidget);
+      expect(find.text('b.invalid'), findsNothing);
+
+      await tester.tap(filter);
       await tester.pumpAndSettle();
 
       expect(find.text('a.invalid'), findsOneWidget);
@@ -791,8 +800,15 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('from A'), findsOneWidget);
 
-      await tester.tap(find.text('b.invalid')); // the selector pill
-      await tester.pumpAndSettle();
+      // The group filter is a menu in the header now, so switching is two steps: open it,
+      // then pick. Pumped by hand rather than settled - A's fetch is deliberately still in
+      // flight, so its spinner animates forever and pumpAndSettle would never return.
+      await tester.tap(find.bySemanticsLabel(RegExp(r'^Filter by group')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400)); // menu open animation
+      await tester.tap(find.text('b.invalid').last);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400)); // menu dismiss + B's fetch
 
       expect(find.text('from B'), findsOneWidget,
           reason: 'switching the selector must refetch the currently-showing view from the '
@@ -832,8 +848,15 @@ void main() {
           .tap(find.text('Random check-in')); // action button - starts the first fetch, against A
       await tester.pump(); // leaves it pending on completerA; _fetched is still false here
 
-      await tester.tap(find.text('b.invalid')); // the selector pill
-      await tester.pumpAndSettle();
+      // The group filter is a menu in the header now, so switching is two steps: open it,
+      // then pick. Pumped by hand rather than settled - A's fetch is deliberately still in
+      // flight, so its spinner animates forever and pumpAndSettle would never return.
+      await tester.tap(find.bySemanticsLabel(RegExp(r'^Filter by group')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400)); // menu open animation
+      await tester.tap(find.text('b.invalid').last);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400)); // menu dismiss + B's fetch
 
       expect(find.text('from B'), findsOneWidget,
           reason: 'switching mid-fetch must still refetch from the newly selected group, even '
