@@ -15,6 +15,7 @@ import (
 	"github.com/nc1107/check-in/server/internal/api"
 	"github.com/nc1107/check-in/server/internal/config"
 	"github.com/nc1107/check-in/server/internal/db"
+	"github.com/nc1107/check-in/server/internal/gazetteer"
 	"github.com/nc1107/check-in/server/internal/push"
 	"github.com/nc1107/check-in/server/internal/storage"
 )
@@ -30,6 +31,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	// Must happen before anything could possibly trigger a places lookup (the gazetteer
+	// package's own lazy sync.Once init means a later call would silently do nothing) -
+	// see gazetteer.SetDataPath's own doc comment.
+	gazetteer.SetDataPath(cfg.GazetteerPath)
 
 	ctx := context.Background()
 	database, err := db.Connect(ctx, cfg.DatabaseURL)

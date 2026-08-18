@@ -46,3 +46,4 @@ flutter:
   assets:
     - assets/logo/
     - assets/worldmap/world_outlines.bin
+    - assets/worldmap/region_outlines.bin

@@ -18,6 +18,8 @@ import sys
 
 from shapely.geometry import shape
 
+from outline_codec import write_varint, zigzag_encode
+
 # Degrees of Douglas-Peucker simplification tolerance (preserve_topology=True, so no ring
 # collapses to nothing). Chosen empirically: it roughly halves the raw point count while the
 # quantization below (0.01 degree) is already the real precision floor, so most of what
@@ -49,21 +51,6 @@ def rings_of(geom):
     elif geom.geom_type == "MultiPolygon":
         for part in geom.geoms:
             yield from rings_of(part)
-
-
-def zigzag_encode(n: int) -> int:
-    return (n << 1) if n >= 0 else (((-n) << 1) - 1)
-
-
-def write_varint(buf: bytearray, value: int) -> None:
-    while True:
-        b = value & 0x7F
-        value >>= 7
-        if value:
-            buf.append(b | 0x80)
-        else:
-            buf.append(b)
-            return
 
 
 def pack(features, tolerance_deg: float) -> bytes:

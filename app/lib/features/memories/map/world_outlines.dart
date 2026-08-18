@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart' show Offset;
 import 'package:flutter/services.dart' show ByteData, rootBundle;
 
-/// The bundled world map outline asset: every ring (country boundary or hole alike) of
-/// Natural Earth's 1:110m admin-0-countries layer, packed by
+import 'outline_codec.dart';
+
+/// The bundled WORLD-tier map outline asset: every ring (country boundary or hole alike)
+/// of Natural Earth's 1:110m admin-0-countries layer, packed by
 /// assets/worldmap/pack_world.py into a compact varint binary - see
 /// assets/worldmap/SOURCE.md for the exact format, license, and why holes need no special
-/// handling here.
+/// handling here. Deliberately much coarser than region_outlines.dart's own asset: at
+/// world scale a country's exact coastline shape barely matters, and the tolerance this
+/// was simplified at would read as an angular blob at region/local zoom - see
+/// region_outlines.dart's own doc comment for the finer layer used there instead.
 class WorldOutlines {
   const WorldOutlines._(this.rings);
 
@@ -36,43 +41,9 @@ class WorldOutlines {
   }
 }
 
-/// Parses the packed binary format documented in assets/worldmap/SOURCE.md into a flat list
-/// of rings. Pure (no asset I/O) so it's directly testable against an in-memory buffer built
-/// the same way pack_world.py builds the real file, without needing Flutter's asset bundle
-/// machinery in a plain unit test.
-List<List<Offset>> parseWorldOutlines(ByteData data) {
-  var offset = 0;
-
-  int readByte() => data.getUint8(offset++);
-
-  int readVarint() {
-    var result = 0;
-    var shift = 0;
-    while (true) {
-      final b = readByte();
-      result |= (b & 0x7F) << shift;
-      if (b & 0x80 == 0) return result;
-      shift += 7;
-    }
-  }
-
-  int readZigzag() {
-    final v = readVarint();
-    return (v & 1) == 0 ? (v >> 1) : -((v + 1) >> 1);
-  }
-
-  final ringCount = readVarint();
-  final rings = <List<Offset>>[];
-  for (var r = 0; r < ringCount; r++) {
-    final pointCount = readVarint();
-    final points = <Offset>[];
-    var x = 0, y = 0;
-    for (var p = 0; p < pointCount; p++) {
-      x += readZigzag();
-      y += readZigzag();
-      points.add(Offset(x / 100.0, y / 100.0));
-    }
-    rings.add(points);
-  }
-  return rings;
-}
+/// Parses the packed binary format documented in assets/worldmap/SOURCE.md into a flat
+/// list of rings - a single [OutlineReader.readRingGroup] call, since this asset is just
+/// one group (unlike region_outlines.dart's two). Pure (no asset I/O) so it's directly
+/// testable against an in-memory buffer built the same way pack_world.py builds the real
+/// file, without needing Flutter's asset bundle machinery in a plain unit test.
+List<List<Offset>> parseWorldOutlines(ByteData data) => OutlineReader(data).readRingGroup();

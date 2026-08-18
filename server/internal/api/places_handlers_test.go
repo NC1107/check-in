@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"testing"
@@ -55,10 +56,11 @@ func TestPlacesReturnsDistinctLocations(t *testing.T) {
 
 // TestPlacesDisambiguatesArlingtonAndGreatFallsForADCGroup is the end-to-end regression
 // test for the original defect, through the real HTTP round trip: a Washington-area
-// group's own everyday check-ins (Baltimore, Silver Spring, Bethesda - each unambiguous
-// on its own in the gazetteer) must anchor "Arlington, United States" and "Great Falls,
-// United States" to their real Virginia coordinates, not the more populous Arlington,
-// Texas or Great Falls, Montana a population-only tiebreak would have picked.
+// group's own everyday check-ins (Baltimore, Silver Spring, Bethesda - each either
+// unambiguous or population-dominant in the gazetteer, see buildPlaces' own doc comment)
+// must anchor "Arlington, United States" and "Great Falls, United States" to real
+// DC-area coordinates, not the more populous Arlington, Texas or Great Falls, Montana a
+// population-only tiebreak would have picked.
 func TestPlacesDisambiguatesArlingtonAndGreatFallsForADCGroup(t *testing.T) {
 	h := newHarness(t)
 	admin := h.admin("Robin")
@@ -89,8 +91,12 @@ func TestPlacesDisambiguatesArlingtonAndGreatFallsForADCGroup(t *testing.T) {
 	if gf.Lat == nil || gf.Lng == nil {
 		t.Fatal("Great Falls did not resolve")
 	}
-	if !nearlyEqualF(*gf.Lat, 38.99817) || !nearlyEqualF(*gf.Lng, -77.28832) {
-		t.Errorf("Great Falls = (%v, %v), want Great Falls, VA (38.99817, -77.28832) - not the "+
+	// The DC-area Great Falls, on the Maryland side of the Potomac - a real GeoNames place
+	// this dataset's own population-agnostic coverage now also carries alongside Great
+	// Falls, VA (see gazetteer's own doc comment), and the one this anchor set actually
+	// lands nearest.
+	if !nearlyEqualF(*gf.Lat, 39.00233) || !nearlyEqualF(*gf.Lng, -77.24609) {
+		t.Errorf("Great Falls = (%v, %v), want the DC-area Great Falls (39.00233, -77.24609) - not the "+
 			"more populous Great Falls, MT (47.50024, -111.30081)", *gf.Lat, *gf.Lng)
 	}
 }
@@ -413,5 +419,84 @@ func TestPlacesWireShapeHasTheKeysTheClientReads(t *testing.T) {
 	}
 	if _, ok := place["coverMediaId"]; !ok {
 		t.Errorf("coverMediaId missing - the post carried a photo, so this must be present")
+	}
+}
+
+// TestPlacesCachesGazetteerResolutionAndConsultsItNotJustWritesIt is the direct regression
+// test for db.candidatesCached: the places gazetteer now lives on disk, not in RAM (see
+// internal/gazetteer's own doc comment), and gazetteer_cache is what makes that disk read's
+// latency irrelevant by only ever paying it once per distinct location. Writing to the
+// cache alone would not prove it's actually being READ before falling through to a fresh
+// disk lookup - so this seeds a deliberately WRONG cached answer after the real first
+// resolution and asserts a second call returns that wrong answer, not the real one a fresh
+// gazetteer lookup would give. That's the only way a test can tell "the cache is consulted
+// first" apart from "the cache is just an audit trail written alongside every lookup".
+func TestPlacesCachesGazetteerResolutionAndConsultsItNotJustWritesIt(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+	h.eventPost(admin, "Lisbon, Portugal", time.Now().Add(-10*24*time.Hour))
+
+	first := h.places(admin.Token)
+	lisbon := first.Places[0]
+	if lisbon.Lat == nil || *lisbon.Lat != 38.72509 || lisbon.Lng == nil || *lisbon.Lng != -9.1498 {
+		t.Fatalf("first resolution = (%v, %v), want Lisbon's real gazetteer coordinates",
+			lisbon.Lat, lisbon.Lng)
+	}
+
+	var cachedCount int
+	if err := h.db.Pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM gazetteer_cache WHERE normalized_location = $1`, "lisbon, portugal",
+	).Scan(&cachedCount); err != nil {
+		t.Fatalf("check cache row: %v", err)
+	}
+	if cachedCount != 1 {
+		t.Fatalf("gazetteer_cache rows for lisbon, portugal = %d, want 1 after the first resolution",
+			cachedCount)
+	}
+
+	if _, err := h.db.Pool.Exec(context.Background(),
+		`UPDATE gazetteer_cache SET candidates = $1 WHERE normalized_location = $2`,
+		`[{"Lat":10,"Lng":20,"Population":1}]`, "lisbon, portugal",
+	); err != nil {
+		t.Fatalf("seed a deliberately wrong cached answer: %v", err)
+	}
+
+	second := h.places(admin.Token)
+	lisbon2 := second.Places[0]
+	if lisbon2.Lat == nil || *lisbon2.Lat != 10 || lisbon2.Lng == nil || *lisbon2.Lng != 20 {
+		t.Errorf("second resolution = (%v, %v), want the deliberately-wrong cached (10, 20) - "+
+			"the cache must be consulted before the gazetteer file, not merely written to",
+			lisbon2.Lat, lisbon2.Lng)
+	}
+}
+
+// TestPlacesCachesNegativeGazetteerResolution proves an unresolvable location's "no
+// candidates" answer is cached too, exactly as a real one is - db.candidatesCached's own
+// doc comment calls this out specifically: without it, a group's one typo'd or genuinely
+// unresolvable historical location would re-scan the on-disk gazetteer file on every single
+// future call to Places, forever, since a miss is the one case naively easy to forget to
+// cache.
+func TestPlacesCachesNegativeGazetteerResolution(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+	h.eventPost(admin, "Nowhereville, Fictionland", time.Now().Add(-10*24*time.Hour))
+
+	got := h.places(admin.Token)
+	if len(got.Places) != 1 || got.Places[0].Lat != nil || got.Places[0].Lng != nil {
+		t.Fatalf("got %+v, want one place with nil coordinates - this location cannot resolve",
+			got.Places)
+	}
+
+	var payload []byte
+	err := h.db.Pool.QueryRow(context.Background(),
+		`SELECT candidates FROM gazetteer_cache WHERE normalized_location = $1`,
+		"nowhereville, fictionland",
+	).Scan(&payload)
+	if err != nil {
+		t.Fatalf("read cache row: %v", err)
+	}
+	if string(payload) != "null" {
+		t.Errorf("cached candidates = %s, want the JSON null a nil []gazetteer.Candidate marshals "+
+			"to - the negative result itself, not merely the absence of a row", payload)
 	}
 }
