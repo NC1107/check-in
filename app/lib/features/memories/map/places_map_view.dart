@@ -1,15 +1,16 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_map_marker_cluster/flutter_map_marker_cluster.dart';
+import 'package:latlong2/latlong.dart';
 
 import '../../../api/models.dart';
 import '../../../theme/accent.dart';
 import '../../../theme/tokens.dart';
-import 'geo.dart';
-import 'map_projection.dart';
+import 'map_outline_layers.dart';
 import 'map_tier.dart';
-import 'map_transform.dart';
-import 'places_map_painter.dart';
+import 'place_marker.dart';
 import 'region_outlines.dart';
 import 'world_outlines.dart';
 
@@ -23,151 +24,89 @@ const _mapOutline = Color(0xFF3A4C58);
 /// state line reads as its own distinct layer rather than blending into the coastline.
 const _mapBorder = Color(0xFF52707E);
 
-const _mapLabelColor = Color(0xFFE9F1F4);
-
-/// The fixed height of the map canvas - short enough that it (plus the toggle row above it
-/// and the couldn't-place note below) fits comfortably above the fold on a small phone,
-/// tall enough that a world map's own aspect ratio (2:1) doesn't get too cramped.
+/// The fixed height of the inline map card - short enough that it (plus the toggle row
+/// above it and the couldn't-place note below) fits comfortably above the fold on a small
+/// phone, tall enough that a world map's own aspect ratio (2:1) doesn't get too cramped.
 const double kPlacesMapHeight = 240.0;
 
-/// How far a fit-to-points window is padded beyond the group's own tightest bounding
-/// window, as a fraction of that window's own larger span - enough that a marker right at
-/// the edge of the group's spread isn't drawn flush against the canvas edge.
-const double _kRegionPaddingFraction = 0.18;
-
-/// A minimum degrees of padding for [_kRegionPaddingFraction] to fall back to when the
-/// group's own bounding window is nearly a point - otherwise a tight cluster near the
-/// singlePlace/region tier boundary would barely pad at all. Deliberately small: a real
-/// group's own region-tier spread is very often a single metro area or a handful of
-/// neighbouring counties (a few degrees at most - see map_tier.dart's own doc comment on
-/// why region is the common real case, not the rare one), and the old 3.0° floor padded a
-/// spread that tight to nearly four times its own width, rendering it as a tiny cluster
-/// lost in the middle of a needlessly wide fitted view.
-const double _kRegionMinPaddingDegrees = 0.5;
-
-/// Above this effective span (degrees, the larger of the current window's own lng/lat
-/// span), the map uses the coarse world-tier outline asset with no admin-1 boundaries and
-/// no labels; at or below it, the finer region/local asset (see region_outlines.dart),
-/// admin-1 boundaries, and place labels. This is a property of the CURRENT view, not the
-/// group's own static [MapTier] classification: pan/zoom (see map_transform.dart) lets a
-/// world-tier view zoom in past this threshold too, at which point it switches to the
-/// finer layer exactly as if the group's own places had fit a region view from the start -
-/// see _mapCanvas. Chosen comfortably above the widest a real region-tier fitted view ever
-/// gets (a few tens of degrees) and comfortably below "still basically the whole world".
+/// Above this visible span (degrees, the larger of the camera's own lng/lat span) the map
+/// draws the coarse world-tier outline asset with no admin-1 boundaries; at or below it,
+/// the finer region asset plus state lines (see region_outlines.dart).
+///
+/// A property of the CURRENT camera, not the group's own static [MapTier]: zooming a
+/// world-tier view in past this crosses over to the finer layer exactly as if the group's
+/// places had fitted a region view to begin with.
 const double kMapFineDetailMaxSpanDegrees = 45.0;
 
+/// Zoom bounds for the camera.
+///
+/// The ceiling is deliberately low for a map: with no tile imagery there is nothing below
+/// roughly [_kMaxZoom] but empty ocean colour and the nodes themselves, so letting the
+/// camera run to street level would only ever let someone get lost in a blank field. It is
+/// still set well above the fitted view so a dense cluster can be pulled apart.
+const double _kMinZoom = 1.0;
+const double _kMaxZoom = 12.0;
+
+/// The tightest the initial fit is allowed to zoom, for the same reason as [_kMaxZoom]: a
+/// group whose places all sit inside one county would otherwise open on a blank field.
+const double _kMaxFitZoom = 9.0;
+
 /// The map view of the Memories surface's "Places" screen - the second way to look at the
-/// same [places] the list view already fetched (see _PlacesListView in memories_screen.dart,
-/// which owns the fetch and the list/map toggle; this widget is purely a rendering of data
-/// it's handed).
+/// same [places] the list view already fetched.
 ///
-/// Supports pinch-to-zoom and drag-to-pan (see map_transform.dart for the transform maths,
-/// and _onScaleStart/_onScaleUpdate/_onScaleEnd below for how a live gesture drives it) -
-/// clamped so a viewer can never zoom out past the whole world or pan past either pole, and
-/// always recoverable via a double-tap or the small reset button (see _resetButton). The
-/// Memories surface's own close gesture is ALSO a horizontal drag anywhere on the surface
-/// (see MemoriesSurface's own doc comment) - the explicit rule that keeps the two from
-/// fighting is that the surface's own drag-to-close is suppressed entirely while this view
-/// is the one showing (see MemoriesHubController.mapViewActive and
-/// _MemoriesSurfaceContentState's own doc comment in memories_screen.dart), never a gesture-
-/// arena trick here. The header's close (X) button and the Android back button are both
-/// unaffected either way, so the surface always stays closable.
-///
-/// The equivalent problem exists on the vertical axis too, against a different ancestor:
-/// _PlacesListView's own map-mode slot used to wrap this whole widget in a
-/// SingleChildScrollView (for a long couldn't-place-on-map note to scroll into view on a
-/// short screen). A Scrollable's own drag recognizer competes for vertical drags exactly
-/// like the surface's did for horizontal ones, so this widget is no longer inside one at
-/// all - see build()'s own doc comment for how it keeps that overflow protection without
-/// ever putting the map canvas itself inside a scrollable.
-class PlacesMapView extends StatefulWidget {
+/// Pan, pinch-zoom, fling and double-tap-to-zoom all come from flutter_map rather than
+/// from hand-written gesture and projection code. The Memories surface's own close gesture
+/// is ALSO a horizontal drag anywhere on the surface, and the rule that keeps the two from
+/// fighting is unchanged: the surface suppresses its own drag-to-close entirely while this
+/// view is showing (see MemoriesHubController.mapViewActive), never a gesture-arena trick
+/// here. The header's close (X) button and the Android back button are unaffected, so the
+/// surface always stays closable.
+class PlacesMapView extends StatelessWidget {
   const PlacesMapView({super.key, required this.places, required this.onOpenPlace});
 
   final List<Place> places;
   final ValueChanged<Place> onOpenPlace;
 
-  @override
-  State<PlacesMapView> createState() => _PlacesMapViewState();
-}
+  List<Place> get _located => [
+        for (final p in places)
+          if (p.lat != null && p.lng != null) p,
+      ];
 
-class _PlacesMapViewState extends State<PlacesMapView> {
-  // widget.places never changes under this State - see PlacesMapView's own doc comment:
-  // _PlacesListView remounts (a fresh ValueKey) on every group switch, so this only ever
-  // has to reflect one fixed payload for its whole lifetime, computed once rather than
-  // recomputed on every build/gesture-driven setState.
-  late final List<Place> _located = [
-    for (final p in widget.places)
-      if (p.lat != null && p.lng != null) p,
-  ];
-  late final List<Place> _unlocated = [
-    for (final p in widget.places)
-      if (p.lat == null || p.lng == null) p,
-  ];
-  late final MapTier _tier = decideMapTier([for (final p in _located) (lat: p.lat!, lng: p.lng!)]);
+  List<Place> get _unlocated => [
+        for (final p in places)
+          if (p.lat == null || p.lng == null) p,
+      ];
 
-  late final LngWindow _baseLngWindow;
-  late final LatWindow _baseLatWindow;
-
-  /// The live pan/zoom state, or null before any gesture/reset has touched it - null reads
-  /// as "the fitted base window", exactly [MapTransform.identity] would compute, without
-  /// this State needing [_baseLngWindow]/[_baseLatWindow] built yet to construct one purely
-  /// to represent "nothing has happened".
-  MapTransform? _transform;
-
-  Offset? _gestureStartFocalPoint;
-  MapTransform? _gestureStartTransform;
-
-  final Future<WorldOutlines> _worldFuture = WorldOutlines.load();
-  final Future<RegionOutlines> _regionFuture = RegionOutlines.load();
-
-  @override
-  void initState() {
-    super.initState();
-    if (_tier == MapTier.world) {
-      _baseLngWindow = const LngWindow(west: -180, spanDegrees: 360);
-      _baseLatWindow = const LatWindow(south: -85, north: 85);
-    } else {
-      var lngW = computeLngWindow(_located.map((p) => p.lng!).toList());
-      var latW = computeLatWindow(_located.map((p) => p.lat!).toList());
-      final padding = math.max(
-          math.max(lngW.spanDegrees, latW.spanDegrees) * _kRegionPaddingFraction,
-          _kRegionMinPaddingDegrees);
-      _baseLngWindow = lngW.padded(padding);
-      _baseLatWindow = latW.padded(padding);
-    }
-  }
-
-  MapTransform get _effectiveTransform =>
-      _transform ?? MapTransform.identity(baseLng: _baseLngWindow, baseLat: _baseLatWindow);
-
-  // Deliberately no SingleChildScrollView wrapping the whole thing (the old, gesture-free
-  // map's own approach, and still what the list view's own caller uses) - the map canvas
-  // below captures vertical drags for its own pan/zoom, and an ancestor Scrollable
-  // competing for that same gesture is exactly the "dragging up sometimes scrolls the
-  // page instead" roughness a real device surfaced. So: the map (or its own no-map state)
-  // is never inside a scrollable at all - it's wrapped in Flexible instead, so it renders
-  // at its own preferred [kPlacesMapHeight] whenever there's room, but SHRINKS rather than
-  // overflowing on a short screen/large text-scale combination that leaves less than that
-  // (a real, tested combination - see sheet_layout_smoke_test.dart's own worst-case sweep;
-  // this is what that scrollable used to paper over by letting the viewer scroll past a
-  // map that didn't fully fit, which is no longer an option once dragging on it has to mean
-  // panning, never scrolling the page). _unlocatedNote below it - the one part of this view
-  // whose height genuinely isn't bounded at all (a long combined list of unresolved place
-  // names can wrap to several lines) - gets an Expanded SingleChildScrollView of its own
-  // instead: a scrollable there is always safe, since nothing about a block of static text
-  // competes for a gesture the way the map does. The caller (PlacesMapView's own doc
-  // comment) is what has to give this widget a bounded height for either Flexible/Expanded
-  // to be valid at all - true of its one real call site (_PlacesListView's own Expanded
-  // map-mode slot) and every existing test that pumps this widget, which all go through
-  // that same call site.
   @override
   Widget build(BuildContext context) {
-    final mapOrState = _located.isEmpty
-        ? _cannotPlotAnyState(context)
-        : _tier == MapTier.singlePlace
-            ? _singlePlaceState(context)
-            : _map(context);
-    if (_unlocated.isEmpty) {
+    final located = _located;
+    final unlocated = _unlocated;
+    final tier = decideMapTier([for (final p in located) (lat: p.lat!, lng: p.lng!)]);
+
+    final Widget mapOrState;
+    if (located.isEmpty) {
+      mapOrState = const _MapEmptyState(
+        icon: Icons.public_off_outlined,
+        message: "None of your group's places could be placed on a map yet.",
+      );
+    } else if (tier == MapTier.singlePlace) {
+      mapOrState = _SinglePlaceState(located: located);
+    } else {
+      mapOrState = ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: SizedBox(
+          height: kPlacesMapHeight,
+          child: PlacesMapCanvas(
+            located: located,
+            tier: tier,
+            onOpenPlace: onOpenPlace,
+            onExpand: () => _openFullScreen(context, located, tier),
+          ),
+        ),
+      );
+    }
+
+    if (unlocated.isEmpty) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [Flexible(child: mapOrState)],
@@ -178,194 +117,336 @@ class _PlacesMapViewState extends State<PlacesMapView> {
       children: [
         Flexible(child: mapOrState),
         const SizedBox(height: 10),
-        Expanded(child: SingleChildScrollView(child: _unlocatedNote(context))),
+        Expanded(child: SingleChildScrollView(child: _unlocatedNote(unlocated))),
       ],
     );
   }
 
-  Widget _map(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        height: kPlacesMapHeight,
-        color: _mapOcean,
-        child: FutureBuilder<List<Object>>(
-          // Both outline assets are small (see assets/worldmap/SOURCE.md - ~22KB and
-          // ~300KB, neither gzipped, so parsing either is a handful of milliseconds) and
-          // WorldOutlines.load()/RegionOutlines.load() each cache their own already-parsed
-          // result - so waiting on both once, up front, regardless of which one a given
-          // group's own fitted tier starts on, is simpler and just as fast in practice as
-          // conditionally fetching only one: a world-tier view might still need the finer
-          // asset the moment a viewer zooms in past kMapFineDetailMaxSpanDegrees (see
-          // _mapCanvas), and neither asset is ever fetched a second time either way.
-          future: Future.wait([_worldFuture, _regionFuture]),
-          builder: (context, snapshot) {
-            final data = snapshot.data;
-            if (data == null) {
-              return Center(child: CircularProgressIndicator(color: context.accent));
-            }
-            final world = data[0] as WorldOutlines;
-            final region = data[1] as RegionOutlines;
-            return LayoutBuilder(
-              builder: (context, constraints) => _mapCanvas(
-                context,
-                world,
-                region,
-                Size(constraints.maxWidth, constraints.maxHeight),
-              ),
-            );
-          },
+  void _openFullScreen(BuildContext context, List<Place> located, MapTier tier) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PlacesMapScreen(
+          located: located,
+          tier: tier,
+          onOpenPlace: onOpenPlace,
         ),
       ),
     );
   }
 
-  void _onScaleStart(ScaleStartDetails details) {
-    _gestureStartFocalPoint = details.localFocalPoint;
-    _gestureStartTransform = _effectiveTransform;
+  /// The honest surfacing [Place.lat]/[Place.lng]'s own doc comment requires: a place with
+  /// no resolved coordinates never silently vanishes just because a map exists - it's still
+  /// in the list view, and here its name is named explicitly rather than only being absent
+  /// from the canvas above.
+  Widget _unlocatedNote(List<Place> unlocated) {
+    final names = unlocated.map((p) => p.location).join(', ');
+    return Text(
+      "Couldn't place on the map: $names",
+      style: const TextStyle(color: kFgMuted, fontSize: 12),
+    );
   }
+}
 
-  void _onScaleUpdate(ScaleUpdateDetails details, Size canvasSize) {
-    final start = _gestureStartTransform;
-    final startFocal = _gestureStartFocalPoint;
-    if (start == null || startFocal == null) return;
-    setState(() {
-      _transform = updateMapTransformForScaleGesture(
-        start: start,
-        startFocalPoint: startFocal,
-        currentFocalPoint: details.localFocalPoint,
-        gestureScale: details.scale,
-        baseLng: _baseLngWindow,
-        baseLat: _baseLatWindow,
-        canvasSize: canvasSize,
-      );
-    });
-  }
+/// The full-screen map, pushed from the inline card's expand button.
+///
+/// The same [PlacesMapCanvas] the card shows, given the whole window - which is the only
+/// size at which a group spread across a few states can be read at all.
+class PlacesMapScreen extends StatelessWidget {
+  const PlacesMapScreen({
+    super.key,
+    required this.located,
+    required this.tier,
+    required this.onOpenPlace,
+  });
 
-  void _onScaleEnd(ScaleEndDetails details) {
-    _gestureStartFocalPoint = null;
-    _gestureStartTransform = null;
-  }
+  final List<Place> located;
+  final MapTier tier;
+  final ValueChanged<Place> onOpenPlace;
 
-  /// Returns to the fitted view - the header's double-tap and the small reset button (see
-  /// _resetButton) both just call this; a no-op (still valid, still cheap) when the view is
-  /// already there.
-  void _resetTransform() => setState(() => _transform = null);
-
-  Widget _mapCanvas(BuildContext context, WorldOutlines world, RegionOutlines region, Size size) {
-    final transform = _effectiveTransform;
-    final window =
-        applyMapTransform(baseLng: _baseLngWindow, baseLat: _baseLatWindow, transform: transform);
-    final lngWindow = window.lng;
-    final latWindow = window.lat;
-
-    final effectiveSpan = math.max(lngWindow.spanDegrees, latWindow.spanDegrees);
-    final useFineDetail = effectiveSpan <= kMapFineDetailMaxSpanDegrees;
-
-    final maxPostCount = _located.map((p) => p.postCount).fold(1, math.max);
-    final rawCenters = [
-      for (final p in _located)
-        projectLatLng(
-            lat: p.lat!, lng: p.lng!, lngWindow: lngWindow, latWindow: latWindow, size: size)
-    ];
-    final radii = [for (final p in _located) markerRadius(p.postCount, maxPostCount)];
-    final centers = nudgeOverlappingMarkers(rawCenters, radii);
-    final markers = [
-      for (var i = 0; i < _located.length; i++)
-        (place: _located[i], center: centers[i], radius: radii[i]),
-    ];
-
-    final accent = context.accent;
-    return GestureDetector(
-      onScaleStart: _onScaleStart,
-      onScaleUpdate: (d) => _onScaleUpdate(d, size),
-      onScaleEnd: _onScaleEnd,
-      onDoubleTap: _resetTransform,
-      child: Stack(
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: _mapOcean,
+      body: Stack(
         children: [
           Positioned.fill(
-            child: CustomPaint(
-              painter: PlacesMapPainter(
-                rings: useFineDetail ? region.admin0Rings : world.rings,
-                borderRings: useFineDetail ? region.admin1Rings : const [],
-                lngWindow: lngWindow,
-                latWindow: latWindow,
-                markers: markers,
-                landColor: _mapLand,
-                outlineColor: _mapOutline,
-                borderColor: _mapBorder,
-                accent: accent,
-                accentMuted: accent.withValues(alpha: 0.55),
-                showLabels: useFineDetail,
-                labelColor: _mapLabelColor,
-                labelHaloColor: Colors.black.withValues(alpha: 0.55),
-              ),
+            child: PlacesMapCanvas(
+              located: located,
+              tier: tier,
+              onOpenPlace: (place) {
+                Navigator.of(context).pop();
+                onOpenPlace(place);
+              },
             ),
           ),
-          for (final m in markers) _markerTapTarget(m),
-          _resetButton(context),
+          Positioned(
+            left: 8,
+            top: MediaQuery.of(context).padding.top + 8,
+            child: _MapChipButton(
+              icon: Icons.arrow_back,
+              semanticLabel: 'Close full screen map',
+              onTap: () => Navigator.of(context).pop(),
+            ),
+          ),
         ],
       ),
     );
   }
+}
 
-  /// An invisible tap target centered on [marker]'s own painted circle, padded a little
-  /// beyond its radius so a small marker is still comfortably tappable. Stacked in the same
-  /// order the markers were nudged into (see nudgeOverlappingMarkers), so a marker drawn on
-  /// top (later in the list) also wins ties for taps that land in its own padded square -
-  /// the "let the larger one win, smaller still tappable" handling the brief calls out:
-  /// a smaller marker peeking out from behind a larger one still has its own square, and
-  /// only the region the two squares actually overlap ever favors whichever is drawn later.
-  Widget _markerTapTarget(MarkerLayout m) {
-    const tapPadding = 8.0;
-    final side = (m.radius + tapPadding) * 2;
-    return Positioned(
-      left: m.center.dx - m.radius - tapPadding,
-      top: m.center.dy - m.radius - tapPadding,
-      width: side,
-      height: side,
-      child: Semantics(
-        button: true,
-        label: m.place.location,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () => widget.onOpenPlace(m.place),
-        ),
+/// The map itself, shared by the inline card and the full-screen route.
+class PlacesMapCanvas extends StatefulWidget {
+  const PlacesMapCanvas({
+    super.key,
+    required this.located,
+    required this.tier,
+    required this.onOpenPlace,
+    this.onExpand,
+  });
+
+  final List<Place> located;
+  final MapTier tier;
+  final ValueChanged<Place> onOpenPlace;
+
+  /// Shows the expand-to-full-screen affordance when non-null - the full-screen route
+  /// itself passes null, since it is already full screen.
+  final VoidCallback? onExpand;
+
+  @override
+  State<PlacesMapCanvas> createState() => _PlacesMapCanvasState();
+}
+
+class _PlacesMapCanvasState extends State<PlacesMapCanvas> {
+  final MapController _mapController = MapController();
+
+  final Future<WorldOutlines> _worldFuture = WorldOutlines.load();
+  final Future<RegionOutlines> _regionFuture = RegionOutlines.load();
+
+  late bool _fineDetail = widget.tier != MapTier.world;
+
+  late final CameraFit _initialFit = _buildFit();
+
+  CameraFit _buildFit() {
+    if (widget.tier == MapTier.world) {
+      return CameraFit.bounds(
+        // Trimmed short of the poles: Mercator stretches them without bound, and no
+        // group's places are down there anyway.
+        bounds: LatLngBounds(const LatLng(-58, -175), const LatLng(76, 175)),
+        padding: const EdgeInsets.all(12),
+      );
+    }
+    return CameraFit.bounds(
+      bounds: LatLngBounds.fromPoints(
+        [for (final p in widget.located) LatLng(p.lat!, p.lng!)],
+      ),
+      padding: const EdgeInsets.all(48),
+      maxZoom: _kMaxFitZoom,
+    );
+  }
+
+  /// Flips the outline layer when the camera crosses [kMapFineDetailMaxSpanDegrees].
+  ///
+  /// Reads the camera's real visible span rather than a zoom number, so the threshold means
+  /// the same thing on a short inline card as on a full-screen tablet, where the same zoom
+  /// shows very different amounts of world.
+  void _onMapEvent(MapEvent event) {
+    final bounds = event.camera.visibleBounds;
+    final span = math.max(
+      (bounds.east - bounds.west).abs(),
+      (bounds.north - bounds.south).abs(),
+    );
+    final fine = span <= kMapFineDetailMaxSpanDegrees;
+    if (fine != _fineDetail && mounted) setState(() => _fineDetail = fine);
+  }
+
+  void _resetCamera() => _mapController.fitCamera(_initialFit);
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: _mapOcean,
+      child: FutureBuilder<List<Object>>(
+        // Both outline assets are small (~22KB and ~300KB) and each caches its own parsed
+        // result, so waiting on both up front regardless of the starting tier is simpler
+        // and just as fast as fetching one conditionally: a world-tier view needs the
+        // finer asset the moment someone zooms in past the threshold.
+        future: Future.wait([_worldFuture, _regionFuture]),
+        builder: (context, snapshot) {
+          final data = snapshot.data;
+          if (data == null) {
+            return Center(child: CircularProgressIndicator(color: context.accent));
+          }
+          return _buildMap(context, data[0] as WorldOutlines, data[1] as RegionOutlines);
+        },
       ),
     );
   }
 
-  /// The reset/recenter affordance the brief asks for explicitly, alongside the
-  /// double-tap _mapCanvas's own GestureDetector already offers - a small, low-contrast
-  /// icon rather than a full button, matching this map's own generally understated chrome
-  /// (see the toggle row and attribution text above/below it).
-  Widget _resetButton(BuildContext context) {
-    return Positioned(
-      right: 8,
-      bottom: 8,
-      child: Semantics(
-        button: true,
-        label: 'Reset map view',
-        child: Material(
-          color: Colors.black.withValues(alpha: 0.45),
-          shape: const CircleBorder(),
-          child: InkWell(
-            customBorder: const CircleBorder(),
-            onTap: _resetTransform,
-            child: const Padding(
-              padding: EdgeInsets.all(6),
-              child: Icon(Icons.center_focus_strong, size: 16, color: Colors.white),
+  Widget _buildMap(BuildContext context, WorldOutlines world, RegionOutlines region) {
+    final accent = context.accent;
+    final maxPostCount = widget.located.map((p) => p.postCount).fold(1, math.max);
+
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCameraFit: _initialFit,
+              backgroundColor: _mapOcean,
+              minZoom: _kMinZoom,
+              maxZoom: _kMaxZoom,
+              onMapEvent: _onMapEvent,
+              // Rotation off deliberately: north-up is what makes a coastline recognisable
+              // when there are no labels or roads to orient by, and a stray two-finger
+              // twist while pinching would otherwise leave the map crooked with no obvious
+              // way back.
+              interactionOptions: const InteractionOptions(
+                flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+              ),
             ),
+            children: [
+              PolygonLayer(
+                polygons: landPolygons(
+                  _fineDetail ? region.admin0Rings : world.rings,
+                  fill: _mapLand,
+                  border: _mapOutline,
+                  strokeWidth: 0.8,
+                ),
+              ),
+              if (_fineDetail)
+                PolylineLayer(
+                  polylines: borderPolylines(
+                    region.admin1Rings,
+                    color: _mapBorder,
+                    strokeWidth: 0.7,
+                  ),
+                ),
+              MarkerClusterLayerWidget(
+                options: MarkerClusterLayerOptions(
+                  maxClusterRadius: 42,
+                  size: const Size(48, 48),
+                  padding: const EdgeInsets.all(40),
+                  maxZoom: _kMaxZoom,
+                  // Each node handles its own tap (see PlacePhotoNode.onTap for why), which
+                  // is exactly what this flag hands over.
+                  markerChildBehavior: true,
+                  markers: [
+                    for (final p in widget.located)
+                      _PlaceMarker(
+                        place: p,
+                        diameter: placeNodeDiameter(p.postCount, maxPostCount),
+                        accent: accent,
+                        onTap: () => widget.onOpenPlace(p),
+                      ),
+                  ],
+                  builder: (context, markers) => PlaceClusterNode(
+                    places: [
+                      for (final m in markers)
+                        if (m is _PlaceMarker) m.place,
+                    ],
+                    diameter: 48,
+                    accent: accent,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Positioned(
+          right: 8,
+          bottom: 8,
+          child: Column(
+            children: [
+              if (widget.onExpand != null) ...[
+                _MapChipButton(
+                  icon: Icons.fullscreen,
+                  semanticLabel: 'Open full screen map',
+                  onTap: widget.onExpand!,
+                ),
+                const SizedBox(height: 8),
+              ],
+              _MapChipButton(
+                icon: Icons.center_focus_strong,
+                semanticLabel: 'Reset map view',
+                onTap: _resetCamera,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// A [Marker] that remembers which [Place] it stands for, so the cluster layer's own tap
+/// and cluster-builder callbacks (which hand back plain [Marker]s) can get back to it
+/// without a side table keyed on coordinates.
+class _PlaceMarker extends Marker {
+  _PlaceMarker({
+    required this.place,
+    required double diameter,
+    required Color accent,
+    required VoidCallback onTap,
+  }) : super(
+          point: LatLng(place.lat!, place.lng!),
+          width: diameter,
+          height: diameter,
+          alignment: Alignment.center,
+          child: PlacePhotoNode(
+            place: place,
+            diameter: diameter,
+            accent: accent,
+            onTap: onTap,
+          ),
+        );
+
+  final Place place;
+}
+
+/// The small circular chrome buttons overlaid on the map - understated on purpose, to sit
+/// over the map without competing with the place nodes.
+class _MapChipButton extends StatelessWidget {
+  const _MapChipButton({
+    required this.icon,
+    required this.semanticLabel,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String semanticLabel;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: semanticLabel,
+      child: Material(
+        color: Colors.black.withValues(alpha: 0.5),
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(7),
+            child: Icon(icon, size: 18, color: Colors.white),
           ),
         ),
       ),
     );
   }
+}
 
-  Widget _singlePlaceState(BuildContext context) {
-    final single = _located.length == 1;
-    final headline = single
-        ? 'Every check-in has been in ${_located.single.location}.'
+class _SinglePlaceState extends StatelessWidget {
+  const _SinglePlaceState({required this.located});
+
+  final List<Place> located;
+
+  @override
+  Widget build(BuildContext context) {
+    final headline = located.length == 1
+        ? 'Every check-in has been in ${located.single.location}.'
         : "You've all stuck close together so far.";
     return Container(
       height: kPlacesMapHeight,
@@ -394,8 +475,16 @@ class _PlacesMapViewState extends State<PlacesMapView> {
       ),
     );
   }
+}
 
-  Widget _cannotPlotAnyState(BuildContext context) {
+class _MapEmptyState extends StatelessWidget {
+  const _MapEmptyState({required this.icon, required this.message});
+
+  final IconData icon;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
       height: kPlacesMapHeight,
       alignment: Alignment.center,
@@ -404,31 +493,20 @@ class _PlacesMapViewState extends State<PlacesMapView> {
         border: Border.all(color: kBorder),
         borderRadius: BorderRadius.circular(14),
       ),
-      child: const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 28),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 28),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.public_off_outlined, size: 36, color: kFgMuted),
-            SizedBox(height: 12),
-            Text("None of your group's places could be placed on a map yet.",
+            Icon(icon, size: 36, color: kFgMuted),
+            const SizedBox(height: 12),
+            Text(message,
                 textAlign: TextAlign.center,
-                style: TextStyle(color: kFgSecondary, fontSize: 14, fontWeight: FontWeight.w600)),
+                style: const TextStyle(
+                    color: kFgSecondary, fontSize: 14, fontWeight: FontWeight.w600)),
           ],
         ),
       ),
-    );
-  }
-
-  /// The honest surfacing [Place.lat]/[Place.lng]'s own doc comment requires: a place with
-  /// no resolved coordinates never silently vanishes just because a map exists now - it's
-  /// still visible in the list view (see _PlacesListView), and here in map mode its name is
-  /// named explicitly rather than only being absent from the canvas above.
-  Widget _unlocatedNote(BuildContext context) {
-    final names = _unlocated.map((p) => p.location).join(', ');
-    return Text(
-      "Couldn't place on the map: $names",
-      style: const TextStyle(color: kFgMuted, fontSize: 12),
     );
   }
 }

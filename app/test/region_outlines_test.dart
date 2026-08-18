@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:checkin/features/memories/map/outline_codec.dart';
 import 'package:checkin/features/memories/map/region_outlines.dart';
 
 /// The packed region-outline asset's binary parser (see assets/worldmap/SOURCE.md for the
@@ -26,10 +27,15 @@ void main() {
     }
   }
 
-  void writeRing(BytesBuilder buf, List<(int, int)> ring) {
+  /// Takes a ring in DEGREES and quantizes it through the same [kOutlineCoordinateScale]
+  /// the parser divides by - see world_outlines_test.dart's own buildBuffer for why these
+  /// tests state degrees rather than raw fixed-point units.
+  void writeRing(BytesBuilder buf, List<(double, double)> ring) {
     writeVarint(buf, ring.length);
     var prevX = 0, prevY = 0;
-    for (final (x, y) in ring) {
+    for (final (lng, lat) in ring) {
+      final x = (lng * kOutlineCoordinateScale).round();
+      final y = (lat * kOutlineCoordinateScale).round();
       writeVarint(buf, zigzagEncode(x - prevX));
       writeVarint(buf, zigzagEncode(y - prevY));
       prevX = x;
@@ -41,7 +47,7 @@ void main() {
   /// each group's own ring count and rings (same per-ring shape as
   /// world_outlines_test.dart's own buildBuffer) - [groups] is admin-0's rings first,
   /// admin-1's second, matching the real asset's own group order.
-  ByteData buildBuffer(List<List<List<(int, int)>>> groups) {
+  ByteData buildBuffer(List<List<List<(double, double)>>> groups) {
     final buf = BytesBuilder();
     writeVarint(buf, groups.length);
     for (final rings in groups) {
@@ -69,11 +75,11 @@ void main() {
   test('admin-0 and admin-1 rings are kept as two separate lists, in the right order', () {
     final outlines = parseRegionOutlines(buildBuffer([
       [
-        [(0, 0), (1000, 0), (500, 1000)], // a country outline
+        [(0.0, 0.0), (10.0, 0.0), (5.0, 10.0)], // a country outline
       ],
       [
-        [(0, 0), (500, 0), (250, 500)], // a state boundary
-        [(-1000, -1000), (-500, -1000), (-500, -500)], // a second state boundary
+        [(0.0, 0.0), (5.0, 0.0), (2.5, 5.0)], // a state boundary
+        [(-10.0, -10.0), (-5.0, -10.0), (-5.0, -5.0)], // a second state boundary
       ],
     ]));
 
@@ -89,10 +95,10 @@ void main() {
   test('negative deltas decode correctly via zigzag, in either group', () {
     final outlines = parseRegionOutlines(buildBuffer([
       [
-        [(500, 500), (400, 400), (300, 300)],
+        [(5.0, 5.0), (4.0, 4.0), (3.0, 3.0)],
       ],
       [
-        [(200, 200), (100, 100)],
+        [(2.0, 2.0), (1.0, 1.0)],
       ],
     ]));
 

@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:checkin/features/memories/map/outline_codec.dart';
 import 'package:checkin/features/memories/map/world_outlines.dart';
 
 /// The packed world-outline asset's binary parser (see assets/worldmap/SOURCE.md for the
@@ -26,16 +27,21 @@ void main() {
 
   /// Builds a buffer in exactly the format pack_world.py writes: a ring count, then each
   /// ring's point count followed by zigzag-varint (dx, dy) deltas from the previous point
-  /// (the first point's delta is from the origin) - see this function's callers for the
-  /// [rings] each test exercises, where each ring is a list of (lng, lat) *100 integer
-  /// pairs (matching pack_world.py's own SCALE).
-  ByteData buildBuffer(List<List<(int, int)>> rings) {
+  /// (the first point's delta is from the origin).
+  ///
+  /// Takes rings in DEGREES and quantizes them here through the same
+  /// [kOutlineCoordinateScale] the parser divides by, so these tests state what they mean
+  /// ("a 10-degree triangle") and keep meaning it if that scale is ever retuned - which it
+  /// has been once already, when the original 0.01-degree grid proved too coarse to render.
+  ByteData buildBuffer(List<List<(double, double)>> rings) {
     final buf = BytesBuilder();
     writeVarint(buf, rings.length);
     for (final ring in rings) {
       writeVarint(buf, ring.length);
       var prevX = 0, prevY = 0;
-      for (final (x, y) in ring) {
+      for (final (lng, lat) in ring) {
+        final x = (lng * kOutlineCoordinateScale).round();
+        final y = (lat * kOutlineCoordinateScale).round();
         writeVarint(buf, zigzagEncode(x - prevX));
         writeVarint(buf, zigzagEncode(y - prevY));
         prevX = x;
@@ -51,9 +57,9 @@ void main() {
     expect(rings, isEmpty);
   });
 
-  test('a single triangle ring round-trips exactly, scaled back down by 100', () {
+  test('a single triangle ring round-trips exactly, scaled back down to degrees', () {
     final data = buildBuffer([
-      [(0, 0), (1000, 0), (500, 1000)], // a 10°x10° right triangle
+      [(0.0, 0.0), (10.0, 0.0), (5.0, 10.0)], // a 10°x10° right triangle
     ]);
     final rings = parseWorldOutlines(data);
 
@@ -63,8 +69,8 @@ void main() {
 
   test('multiple rings are each parsed independently, in order', () {
     final data = buildBuffer([
-      [(0, 0), (100, 0), (0, 100)],
-      [(-1000, -2000), (-500, -2000), (-500, -1500)],
+      [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)],
+      [(-10.0, -20.0), (-5.0, -20.0), (-5.0, -15.0)],
     ]);
     final rings = parseWorldOutlines(data);
 
@@ -75,7 +81,7 @@ void main() {
 
   test('negative deltas (a ring that moves west/south) decode correctly via zigzag', () {
     final data = buildBuffer([
-      [(500, 500), (400, 400), (300, 300)], // strictly decreasing x and y
+      [(5.0, 5.0), (4.0, 4.0), (3.0, 3.0)], // strictly decreasing x and y
     ]);
     final rings = parseWorldOutlines(data);
 
@@ -83,10 +89,10 @@ void main() {
   });
 
   test('a ring crossing the antimeridian carries large deltas without overflowing', () {
-    // 179°E to 179°W: an 800-unit (8°) eastward jump across the dateline in raw longitude
+    // 179°E to 187° (i.e. 173°W): an 8° eastward jump across the dateline in raw longitude
     // terms, well within a varint's range.
     final data = buildBuffer([
-      [(17900, 0), (18700, 0), (18000, 500)],
+      [(179.0, 0.0), (187.0, 0.0), (180.0, 5.0)],
     ]);
     final rings = parseWorldOutlines(data);
 

@@ -18,7 +18,7 @@ import sys
 
 from shapely.geometry import shape
 
-from outline_codec import write_varint, zigzag_encode
+from outline_codec import SCALE, write_varint, zigzag_encode
 
 # Degrees of Douglas-Peucker simplification tolerance (preserve_topology=True, so no ring
 # collapses to nothing). Chosen empirically: it roughly halves the raw point count while the
@@ -28,10 +28,6 @@ from outline_codec import write_varint, zigzag_encode
 # tolerances this was chosen against.
 SIMPLIFY_TOLERANCE_DEG = 0.1
 
-# Quantization: coordinates are stored as integers of this many units per degree. 100 units/
-# degree (~1.1km of latitude) is far finer than this asset is ever rendered at, and keeps
-# every coordinate a small varint.
-SCALE = 100
 
 
 def usable_ring(points):
