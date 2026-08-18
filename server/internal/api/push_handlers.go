@@ -111,6 +111,16 @@ func (s *Server) handleUpdateNotificationPrefs(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, prefs)
 }
 
+// collapseFor builds the push collapse id for one kind of notification about one shared
+// comment, or noCollapse when the comment was not sent to several groups (the ordinary
+// single-group case, where there is nothing to collapse against).
+func collapseFor(kind, crossCommentID string) string {
+	if crossCommentID == "" {
+		return noCollapse
+	}
+	return kind + ":" + crossCommentID
+}
+
 // notifyPost pushes a new-post notification to everyone opted in except the author. It
 // runs in its own goroutine off the request path, so it uses a background context.
 //
@@ -141,7 +151,14 @@ func (s *Server) notifyPost(authorID int64, authorName string, postID int64, cro
 }
 
 // notifyReply pushes a reply notification to the post's author.
-func (s *Server) notifyReply(commenterName string, postID, commenterID int64) {
+//
+// crossCommentID, when the comment was sent to several groups at once, collapses those
+// groups' separate pushes into one entry on the device - a member of all three groups said
+// one thing and should be told about it once. Prefixed rather than used raw so that a
+// comment which is ALSO a reply cannot collapse its two different notifications ("commented
+// on your check-in" and "replied to your comment") into a single one, which would silently
+// drop whichever arrived first.
+func (s *Server) notifyReply(commenterName string, postID, commenterID int64, crossCommentID string) {
 	if s.push == nil {
 		return
 	}
@@ -157,13 +174,16 @@ func (s *Server) notifyReply(commenterName string, postID, commenterID int64) {
 		return
 	}
 	s.push.Send(ctx, tokens, s.serverName(ctx), commenterName+" commented on your check-in",
-		s.pushData("comment", postID), noCollapse)
+		s.pushData("comment", postID), collapseFor("comment", crossCommentID))
 }
 
 // notifyCommentReply pushes a reply notification to the author of the comment being replied
 // to. The parent comment lives on this same server, so its author resolves with a local
 // join — no cross-group coordination even when the post is a cross-post.
-func (s *Server) notifyCommentReply(replierName string, postID, parentCommentID, replierID int64) {
+//
+// crossCommentID collapses the copies the same way notifyReply's does, under its own
+// prefix - see that function's doc comment.
+func (s *Server) notifyCommentReply(replierName string, postID, parentCommentID, replierID int64, crossCommentID string) {
 	if s.push == nil {
 		return
 	}
@@ -179,7 +199,7 @@ func (s *Server) notifyCommentReply(replierName string, postID, parentCommentID,
 		return
 	}
 	s.push.Send(ctx, tokens, s.serverName(ctx), replierName+" replied to your comment",
-		s.pushData("reply", postID), noCollapse)
+		s.pushData("reply", postID), collapseFor("reply", crossCommentID))
 }
 
 // notifyLike pushes a like notification to the post's author.

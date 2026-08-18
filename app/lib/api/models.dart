@@ -11,6 +11,7 @@ class ServerInfo {
     this.mediaTypes = const ['image'],
     this.gifSearch = false,
     this.commentMedia = false,
+    this.crossComments = false,
     this.recapCapable = false,
     this.recapCadence = 'weekly',
     this.recapWeekday = 1,
@@ -52,6 +53,11 @@ class ServerInfo {
   /// and would 400 on an unknown `mediaId` (DisallowUnknownFields), says nothing here and
   /// this defaults to false.
   final bool commentMedia;
+
+  /// Whether this server understands addComment's crossCommentId. Its ABSENCE, not its
+  /// value, is what an older server speaks: that server rejects unknown JSON fields and
+  /// would 400 a comment carrying the field, so the client gates on this being true.
+  final bool crossComments;
 
   /// Whether this server understands the recap feature at all: lat/lng on createPost, and
   /// the recapCadence/recapWeekday/recapHour/recapOffset fields (here and on
@@ -108,6 +114,7 @@ class ServerInfo {
         mediaTypes: (j['mediaTypes'] as List?)?.map((e) => e as String).toList() ?? const ['image'],
         gifSearch: j['gifSearch'] as bool? ?? false,
         commentMedia: j['commentMedia'] as bool? ?? false,
+        crossComments: j['crossComments'] as bool? ?? false,
         recapCapable: j['recap'] as bool? ?? false,
         recapCadence: j['recapCadence'] as String? ?? 'weekly',
         recapWeekday: (j['recapWeekday'] as num?)?.toInt() ?? 1,
@@ -326,6 +333,7 @@ class Post {
     required this.createdAt,
     required this.likeCount,
     required this.commentCount,
+    this.sharedCommentCount = 0,
     required this.likedByViewer,
     this.mediaId,
     this.mediaIds = const [],
@@ -350,6 +358,11 @@ class Post {
   final DateTime createdAt;
   final int likeCount;
   final int commentCount;
+
+  /// How many of this copy's comments were written once and sent to every group holding a
+  /// copy of this check-in. Zero on a server predating the field, which is correct for it:
+  /// such a server has no shared comments to count.
+  final int sharedCommentCount;
   final bool likedByViewer;
   final int? mediaId;
   final List<int> mediaIds;
@@ -387,13 +400,26 @@ class Post {
   final RecapPayload? recap;
 
   /// Comment engagement across all copies (falls back to this copy's own count when not
-  /// collapsed). Unlike likes, comments never need a same-viewer correction: a comment on a
-  /// cross-post is only ever posted to the one group the commenter picked (see
-  /// PostDetailScreen._send), so each comment is counted exactly once, on exactly one copy.
+  /// collapsed).
+  ///
+  /// A comment can now be written once and sent to every group holding a copy, so a plain
+  /// sum would count that one comment once per group - the same thing said once, reported
+  /// three times. Each copy reports how many of its comments are shared
+  /// ([PostCopy.sharedCommentCount]), and a shared comment appears in EVERY copy, so the
+  /// distinct total is each copy's group-only comments plus the shared ones counted once.
+  ///
+  /// The shared term uses the largest copy's figure rather than assuming they agree: a
+  /// fan-out that partially failed leaves one group short, and taking the max reports what
+  /// was actually said rather than what the unluckiest server received.
+  ///
   /// Likes work differently - liking a cross-post likes every copy the viewer can reach - so
   /// their aggregate is computed by likeView, which corrects for that; see its doc comment.
-  int get totalComments =>
-      isCrossPost ? copies.fold(0, (s, c) => s + c.commentCount) : commentCount;
+  int get totalComments {
+    if (!isCrossPost) return commentCount;
+    final groupOnly = copies.fold(0, (s, c) => s + (c.commentCount - c.sharedCommentCount));
+    final shared = copies.fold(0, (s, c) => c.sharedCommentCount > s ? c.sharedCommentCount : s);
+    return groupOnly + shared;
+  }
 
   /// Returns this post tagged with its origin group.
   Post withGroup(String groupId) => _copy(groupId: groupId);
@@ -410,6 +436,7 @@ class Post {
         createdAt: createdAt,
         likeCount: likeCount,
         commentCount: commentCount,
+        sharedCommentCount: sharedCommentCount,
         likedByViewer: likedByViewer,
         mediaId: mediaId,
         mediaIds: mediaIds,
@@ -468,6 +495,7 @@ class Post {
         createdAt: DateTime.parse(j['createdAt'] as String),
         likeCount: j['likeCount'] as int? ?? 0,
         commentCount: j['commentCount'] as int? ?? 0,
+        sharedCommentCount: (j['sharedCommentCount'] as num?)?.toInt() ?? 0,
         likedByViewer: j['likedByViewer'] as bool? ?? false,
         mediaId: j['mediaId'] as int?,
         mediaIds: ((j['mediaIds'] as List?) ?? const []).map((e) => e as int).toList(),
@@ -768,6 +796,7 @@ typedef PostCopy = ({
   int postId,
   int likeCount,
   int commentCount,
+  int sharedCommentCount,
   bool likedByViewer,
 });
 
@@ -807,6 +836,7 @@ class Comment {
     this.groupId,
     this.parentCommentId,
     this.mediaId,
+    this.crossCommentId,
   });
 
   final int id;
@@ -828,6 +858,10 @@ class Comment {
   /// comment may carry one with no body at all.
   final int? mediaId;
 
+  /// Ties this copy to the same comment sent to several groups at once. Server-stored and
+  /// opaque; [collapseCrossComments] groups on it so one thing said once is shown once.
+  final String? crossCommentId;
+
   Comment withGroup(String? groupId) => Comment(
         id: id,
         authorId: authorId,
@@ -838,6 +872,7 @@ class Comment {
         groupId: groupId,
         parentCommentId: parentCommentId,
         mediaId: mediaId,
+        crossCommentId: crossCommentId,
       );
 
   factory Comment.fromJson(Map<String, dynamic> j) => Comment(
@@ -849,6 +884,7 @@ class Comment {
         authorPhotoId: j['authorPhotoId'] as int?,
         parentCommentId: (j['parentCommentId'] as num?)?.toInt(),
         mediaId: (j['mediaId'] as num?)?.toInt(),
+        crossCommentId: j['crossCommentId'] as String?,
       );
 }
 

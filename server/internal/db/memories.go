@@ -52,6 +52,9 @@ func (d *DB) randomMemoryFrom(ctx context.Context, viewerID int64, requireMedia 
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
 		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
+		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
+		        AND c.cross_comment_id IS NOT NULL
+		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
 		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+recapExpr+`
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
@@ -64,7 +67,7 @@ func (d *DB) randomMemoryFrom(ctx context.Context, viewerID int64, requireMedia 
 		LIMIT 1`,
 		viewerID, floor, requireMedia,
 	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
-		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people, &recap)
+		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.SharedCommentCount, &p.LikedByViewer, &preview, &media, &people, &recap)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, false, nil
 	}

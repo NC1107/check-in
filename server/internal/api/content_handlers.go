@@ -452,6 +452,12 @@ type addCommentReq struct {
 	// body at all) is allowed - see the empty-body check below - so a member can reply with
 	// just a reaction gif the way the app's own compose treats a photo-only check-in.
 	MediaID *int64 `json:"mediaId"`
+	// CrossCommentID ties this copy to the same comment sent to other groups. Client-
+	// generated and opaque; the server only stores it so the multi-group client can collapse
+	// copies, and passes it to the push layer so the copies collapse into one notification.
+	// This server rejects unknown JSON fields (DisallowUnknownFields), so a client must only
+	// send it once /api/server-info has advertised "crossComments".
+	CrossCommentID *string `json:"crossCommentId"`
 }
 
 func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
@@ -474,6 +480,15 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "comment must be 1-2000 characters")
 		return
 	}
+	// Opaque client-generated group id, bounded and dropped when blank so a stray empty
+	// string can't create a one-member "cross-comment" - the same handling crossPostId gets.
+	var crossCommentID *string
+	if req.CrossCommentID != nil {
+		if cid := strings.TrimSpace(*req.CrossCommentID); cid != "" && len(cid) <= 64 {
+			crossCommentID = &cid
+		}
+	}
+
 	me := userFrom(r)
 	if visible, err := s.db.PostVisible(r.Context(), id, me.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
@@ -494,7 +509,7 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	comment, err := s.db.AddComment(r.Context(), id, me.ID, req.Body, req.ParentCommentID, req.MediaID)
+	comment, err := s.db.AddComment(r.Context(), id, me.ID, req.Body, req.ParentCommentID, req.MediaID, crossCommentID)
 	if errors.Is(err, db.ErrNotOwned) {
 		writeErr(w, http.StatusBadRequest, "that attachment is not yours")
 		return
@@ -503,9 +518,16 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not add comment")
 		return
 	}
-	go s.notifyReply(me.Name, id, me.ID)
+	// The shared id doubles as the push collapse key: one comment sent to three groups is
+	// three servers each pushing, and without this a member of all three gets three
+	// notifications for one thing said once (see applyCollapse).
+	sharedComment := ""
+	if comment.CrossCommentID != nil {
+		sharedComment = *comment.CrossCommentID
+	}
+	go s.notifyReply(me.Name, id, me.ID, sharedComment)
 	if req.ParentCommentID != nil {
-		go s.notifyCommentReply(me.Name, id, *req.ParentCommentID, me.ID)
+		go s.notifyCommentReply(me.Name, id, *req.ParentCommentID, me.ID, sharedComment)
 	}
 	writeJSON(w, http.StatusCreated, comment)
 }

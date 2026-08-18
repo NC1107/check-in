@@ -980,6 +980,9 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
 		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
+		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
+		        AND c.cross_comment_id IS NOT NULL
+		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
 		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+recapExpr+`
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
@@ -1004,7 +1007,7 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 		var p Post
 		var preview, media, people, recap []byte
 		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people, &recap); err != nil {
+			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.SharedCommentCount, &p.LikedByViewer, &preview, &media, &people, &recap); err != nil {
 			return nil, err
 		}
 		if len(preview) > 0 {
@@ -1064,6 +1067,9 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
 		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
+		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
+		        AND c.cross_comment_id IS NOT NULL
+		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
 		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+recapExpr+`
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
@@ -1086,7 +1092,7 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 		var p Post
 		var preview, media, people, recap []byte
 		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people, &recap); err != nil {
+			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.SharedCommentCount, &p.LikedByViewer, &preview, &media, &people, &recap); err != nil {
 			return nil, err
 		}
 		if len(preview) > 0 {
@@ -1116,6 +1122,9 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 		       (SELECT count(*) FROM likes l WHERE l.post_id = p.id),
 		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
 		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
+		       (SELECT count(*) FROM comments c WHERE c.post_id = p.id
+		        AND c.cross_comment_id IS NOT NULL
+		        AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)),
 		       EXISTS(SELECT 1 FROM likes l WHERE l.post_id = p.id AND l.user_id = $1)`+commentPreviewExpr+postMediaExpr+postPeopleExpr+recapExpr+`
 		FROM posts p
 		JOIN users u ON u.id = p.author_id
@@ -1124,7 +1133,7 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 		  AND (p.kind = 'recap' OR p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1))`,
 		viewerID, postID,
 	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
-		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.LikedByViewer, &preview, &media, &people, &recap)
+		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.SharedCommentCount, &p.LikedByViewer, &preview, &media, &people, &recap)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, ErrNotFound
 	}
@@ -1421,7 +1430,7 @@ func (d *DB) UnlikePost(ctx context.Context, postID, userID int64) error {
 // non-nil, attaches a gif the caller must own - the same IDOR protection CreatePost applies
 // to its attachments, since without it a member could point a comment at someone else's
 // not-yet-posted upload and have it exposed to the whole group.
-func (d *DB) AddComment(ctx context.Context, postID, userID int64, body string, parentID, mediaID *int64) (Comment, error) {
+func (d *DB) AddComment(ctx context.Context, postID, userID int64, body string, parentID, mediaID *int64, crossCommentID *string) (Comment, error) {
 	var c Comment
 	tx, err := d.Pool.Begin(ctx)
 	if err != nil {
@@ -1438,13 +1447,13 @@ func (d *DB) AddComment(ctx context.Context, postID, userID int64, body string, 
 	// empty name and a placeholder avatar.
 	err = tx.QueryRow(ctx, `
 		WITH ins AS (
-			INSERT INTO comments (post_id, user_id, body, parent_comment_id, media_id) VALUES ($1, $2, $3, $4, $5)
-			RETURNING id, post_id, user_id, body, created_at, parent_comment_id, media_id
+			INSERT INTO comments (post_id, user_id, body, parent_comment_id, media_id, cross_comment_id) VALUES ($1, $2, $3, $4, $5, $6)
+			RETURNING id, post_id, user_id, body, created_at, parent_comment_id, media_id, cross_comment_id
 		)
-		SELECT ins.id, ins.post_id, ins.user_id, ins.body, ins.created_at, ins.parent_comment_id, ins.media_id, u.name, u.profile_media_id
+		SELECT ins.id, ins.post_id, ins.user_id, ins.body, ins.created_at, ins.parent_comment_id, ins.media_id, ins.cross_comment_id, u.name, u.profile_media_id
 		FROM ins JOIN users u ON u.id = ins.user_id`,
-		postID, userID, body, parentID, mediaID,
-	).Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.ParentCommentID, &c.MediaID, &c.AuthorName, &c.AuthorPhotoID)
+		postID, userID, body, parentID, mediaID, crossCommentID,
+	).Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.ParentCommentID, &c.MediaID, &c.CrossCommentID, &c.AuthorName, &c.AuthorPhotoID)
 	if err != nil {
 		return c, err
 	}
@@ -1474,7 +1483,7 @@ func commentMediaOwned(ctx context.Context, tx pgx.Tx, mediaID *int64, userID in
 // ListComments returns comments on a post in chronological order with author info.
 func (d *DB) ListComments(ctx context.Context, postID, viewerID int64) ([]Comment, error) {
 	rows, err := d.Pool.Query(ctx, `
-		SELECT c.id, c.post_id, c.user_id, c.body, c.created_at, c.parent_comment_id, c.media_id, u.name, u.profile_media_id
+		SELECT c.id, c.post_id, c.user_id, c.body, c.created_at, c.parent_comment_id, c.media_id, c.cross_comment_id, u.name, u.profile_media_id
 		FROM comments c JOIN users u ON u.id = c.user_id
 		WHERE c.post_id = $1
 		  AND c.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $2)
@@ -1486,7 +1495,7 @@ func (d *DB) ListComments(ctx context.Context, postID, viewerID int64) ([]Commen
 	var comments []Comment
 	for rows.Next() {
 		var c Comment
-		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.ParentCommentID, &c.MediaID, &c.AuthorName, &c.AuthorPhotoID); err != nil {
+		if err := rows.Scan(&c.ID, &c.PostID, &c.UserID, &c.Body, &c.CreatedAt, &c.ParentCommentID, &c.MediaID, &c.CrossCommentID, &c.AuthorName, &c.AuthorPhotoID); err != nil {
 			return nil, err
 		}
 		comments = append(comments, c)
