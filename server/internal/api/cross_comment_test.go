@@ -26,10 +26,17 @@ func TestCollapseKindsStayDistinct(t *testing.T) {
 	}
 }
 
-// Every copy has to derive the same id from the same input, or they would not collapse at
-// all and the whole mechanism would be a no-op.
-func TestCollapseIsStableAcrossCopies(t *testing.T) {
-	if collapseFor("comment", "abc") != collapseFor("comment", "abc") {
-		t.Error("the same shared comment produced different collapse ids on two servers")
+// The id's exact shape is a contract between servers that never talk to each other: every
+// copy has to derive a byte-identical string from the same shared id, or the copies simply
+// do not collapse and the mechanism is a silent no-op. Pinning the literal is what catches a
+// change to the format - comparing the function against itself would only ever be a
+// tautology.
+func TestCollapseIdFormatIsPinned(t *testing.T) {
+	if got := collapseFor("comment", "abc"); got != "comment:abc" {
+		t.Errorf("collapse id = %q, want comment:abc - a different shape on one server means "+
+			"its copies never collapse against another's", got)
+	}
+	if got := collapseFor("reply", "abc"); got != "reply:abc" {
+		t.Errorf("collapse id = %q, want reply:abc", got)
 	}
 }

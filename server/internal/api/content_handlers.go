@@ -472,21 +472,9 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Body = strings.TrimSpace(req.Body)
-	if req.Body == "" && req.MediaID == nil {
-		writeErr(w, http.StatusBadRequest, "comment must have a body or a gif")
+	if msg := validateComment(req); msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
 		return
-	}
-	if len(req.Body) > 2000 {
-		writeErr(w, http.StatusBadRequest, "comment must be 1-2000 characters")
-		return
-	}
-	// Opaque client-generated group id, bounded and dropped when blank so a stray empty
-	// string can't create a one-member "cross-comment" - the same handling crossPostId gets.
-	var crossCommentID *string
-	if req.CrossCommentID != nil {
-		if cid := strings.TrimSpace(*req.CrossCommentID); cid != "" && len(cid) <= 64 {
-			crossCommentID = &cid
-		}
 	}
 
 	me := userFrom(r)
@@ -509,7 +497,7 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	comment, err := s.db.AddComment(r.Context(), id, me.ID, req.Body, req.ParentCommentID, req.MediaID, crossCommentID)
+	comment, err := s.db.AddComment(r.Context(), id, me.ID, req.Body, req.ParentCommentID, req.MediaID, crossCommentIDFrom(req.CrossCommentID))
 	if errors.Is(err, db.ErrNotOwned) {
 		writeErr(w, http.StatusBadRequest, "that attachment is not yours")
 		return
@@ -530,6 +518,33 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		go s.notifyCommentReply(me.Name, id, *req.ParentCommentID, me.ID, sharedComment)
 	}
 	writeJSON(w, http.StatusCreated, comment)
+}
+
+// validateComment returns the error message for a comment that cannot be accepted, or "" when
+// it is fine. Split out of the handler so the handler reads as the sequence of steps it
+// performs rather than interleaving field checks with them.
+func validateComment(req addCommentReq) string {
+	if req.Body == "" && req.MediaID == nil {
+		return "comment must have a body or a gif"
+	}
+	if len(req.Body) > 2000 {
+		return "comment must be 1-2000 characters"
+	}
+	return ""
+}
+
+// crossCommentIDFrom normalizes the opaque client-generated group id: bounded in length, and
+// dropped when blank so a stray empty string cannot create a one-member "cross-comment". The
+// same handling crossPostId gets.
+func crossCommentIDFrom(raw *string) *string {
+	if raw == nil {
+		return nil
+	}
+	id := strings.TrimSpace(*raw)
+	if id == "" || len(id) > 64 {
+		return nil
+	}
+	return &id
 }
 
 func (s *Server) handleUpcomingBirthdays(w http.ResponseWriter, r *http.Request) {

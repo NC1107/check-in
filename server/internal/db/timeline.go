@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"encoding/json"
 	"sort"
 	"time"
 )
@@ -301,20 +300,10 @@ func (d *DB) TimelineMonthPosts(ctx context.Context, viewerID int64, year, month
 	defer rows.Close()
 
 	for rows.Next() {
-		var p Post
-		var preview, media, people, recap []byte
-		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.SharedCommentCount, &p.LikedByViewer, &preview, &media, &people, &recap); err != nil {
+		p, err := scanPost(rows)
+		if err != nil {
 			return nil, false, err
 		}
-		if len(preview) > 0 {
-			_ = json.Unmarshal(preview, &p.CommentsPreview)
-		}
-		if len(people) > 0 {
-			_ = json.Unmarshal(people, &p.People)
-		}
-		p.applyMedia(media)
-		p.applyRecap(recap)
 		posts = append(posts, p)
 	}
 	if err := rows.Err(); err != nil {

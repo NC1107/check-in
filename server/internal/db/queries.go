@@ -12,6 +12,38 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// postRow is the one method both a multi-row pgx.Rows and a single-row pgx.Row share, so
+// scanPost can serve the list queries and the pick-one queries alike.
+type postRow interface {
+	Scan(dest ...any) error
+}
+
+// scanPost reads one post in the column order every post query in this package selects, and
+// unmarshals the JSON side-tables that ride along with it.
+//
+// Defined once because that column order is a contract between each query's SELECT list and
+// its Scan call, and nothing checks it: the db tests here run without a database, so a
+// mismatched column would compile, pass CI, and fail only against a real server. Six copies
+// of this loop meant adding one column touched six SELECT lists and six Scan calls that had
+// to agree; now the Scan half is written once.
+func scanPost(row postRow) (Post, error) {
+	var p Post
+	var preview, media, people, recap []byte
+	if err := row.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
+		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.SharedCommentCount, &p.LikedByViewer, &preview, &media, &people, &recap); err != nil {
+		return p, err
+	}
+	if len(preview) > 0 {
+		_ = json.Unmarshal(preview, &p.CommentsPreview)
+	}
+	if len(people) > 0 {
+		_ = json.Unmarshal(people, &p.People)
+	}
+	p.applyMedia(media)
+	p.applyRecap(recap)
+	return p, nil
+}
+
 // commentPreviewExpr is a SELECT-list fragment returning the 2 most recent comments on
 // post p as a JSON array (oldest-of-the-two first), for inline feed previews.
 const commentPreviewExpr = `, COALESCE((
@@ -1004,20 +1036,10 @@ func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, location
 	defer rows.Close()
 	var posts []Post
 	for rows.Next() {
-		var p Post
-		var preview, media, people, recap []byte
-		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.SharedCommentCount, &p.LikedByViewer, &preview, &media, &people, &recap); err != nil {
+		p, err := scanPost(rows)
+		if err != nil {
 			return nil, err
 		}
-		if len(preview) > 0 {
-			_ = json.Unmarshal(preview, &p.CommentsPreview)
-		}
-		if len(people) > 0 {
-			_ = json.Unmarshal(people, &p.People)
-		}
-		p.applyMedia(media)
-		p.applyRecap(recap)
 		posts = append(posts, p)
 	}
 	if err := rows.Err(); err != nil {
@@ -1089,20 +1111,10 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 	defer rows.Close()
 	var posts []Post
 	for rows.Next() {
-		var p Post
-		var preview, media, people, recap []byte
-		if err := rows.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
-			&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.SharedCommentCount, &p.LikedByViewer, &preview, &media, &people, &recap); err != nil {
+		p, err := scanPost(rows)
+		if err != nil {
 			return nil, err
 		}
-		if len(preview) > 0 {
-			_ = json.Unmarshal(preview, &p.CommentsPreview)
-		}
-		if len(people) > 0 {
-			_ = json.Unmarshal(people, &p.People)
-		}
-		p.applyMedia(media)
-		p.applyRecap(recap)
 		posts = append(posts, p)
 	}
 	if err := rows.Err(); err != nil {
@@ -1113,9 +1125,7 @@ func (d *DB) SearchPosts(ctx context.Context, viewerID int64, query string, limi
 
 // GetPost returns a single post with engagement counts from the viewer's perspective.
 func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) {
-	var p Post
-	var preview, media, people, recap []byte
-	err := d.Pool.QueryRow(ctx, `
+	p, err := scanPost(d.Pool.QueryRow(ctx, `
 		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id, p.lat, p.lng,
 		       CASE WHEN p.kind = 'recap' THEN sc.name ELSE u.name END,
 		       CASE WHEN p.kind = 'recap' THEN NULL ELSE u.profile_media_id END,
@@ -1132,20 +1142,9 @@ func (d *DB) GetPost(ctx context.Context, viewerID, postID int64) (Post, error) 
 		WHERE p.id = $2 AND u.status = 'active'
 		  AND (p.kind = 'recap' OR p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1))`,
 		viewerID, postID,
-	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
-		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.SharedCommentCount, &p.LikedByViewer, &preview, &media, &people, &recap)
+	))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, ErrNotFound
-	}
-	if err == nil && len(preview) > 0 {
-		_ = json.Unmarshal(preview, &p.CommentsPreview)
-	}
-	if err == nil && len(people) > 0 {
-		_ = json.Unmarshal(people, &p.People)
-	}
-	if err == nil {
-		p.applyMedia(media)
-		p.applyRecap(recap)
 	}
 	if err != nil {
 		return p, err

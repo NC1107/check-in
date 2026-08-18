@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"time"
 
@@ -105,10 +104,8 @@ func forgottenPhotoEligible(hasMedia bool, createdAt, now time.Time, likeCount, 
 // remedy (a maintained rollup of engagement/eligibility, rather than recomputing it live on
 // every read).
 func (d *DB) ForgottenPhoto(ctx context.Context, viewerID int64) (Post, bool, error) {
-	var p Post
-	var preview, media, people, recap []byte
 	floor := time.Now().Add(-forgottenAgeFloor)
-	err := d.Pool.QueryRow(ctx, `
+	p, err := scanPost(d.Pool.QueryRow(ctx, `
 		WITH candidates AS (
 			SELECT p.id, p.created_at,
 			       (SELECT count(*) FROM likes l WHERE l.post_id = p.id) +
@@ -142,21 +139,12 @@ func (d *DB) ForgottenPhoto(ctx context.Context, viewerID int64) (Post, bool, er
 		ORDER BY random()
 		LIMIT 1`,
 		viewerID, floor, forgottenEngagementCeiling, forgottenCandidateWindow,
-	).Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
-		&p.AuthorName, &p.AuthorPhotoID, &p.LikeCount, &p.CommentCount, &p.SharedCommentCount, &p.LikedByViewer, &preview, &media, &people, &recap)
+	))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return p, false, nil
 	}
 	if err != nil {
 		return p, false, err
 	}
-	if len(preview) > 0 {
-		_ = json.Unmarshal(preview, &p.CommentsPreview)
-	}
-	if len(people) > 0 {
-		_ = json.Unmarshal(people, &p.People)
-	}
-	p.applyMedia(media)
-	p.applyRecap(recap)
 	return p, true, nil
 }
