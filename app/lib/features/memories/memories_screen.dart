@@ -17,6 +17,7 @@ import '../../widgets/auth_image.dart';
 import '../../widgets/photo_viewer.dart';
 import '../../widgets/user_avatar.dart';
 import '../post/post_detail_screen.dart';
+import 'map/places_map_view.dart';
 
 // Theme tokens (centralized in theme/tokens.dart).
 const _bgMain = kBgMain;
@@ -2541,11 +2542,18 @@ class _PlacesListView extends ConsumerStatefulWidget {
   ConsumerState<_PlacesListView> createState() => _PlacesListViewState();
 }
 
+/// Which of the two ways to look at the group's places is showing - a plain toggle, not a
+/// second hub entry: Places already exists as one screen with two views onto the same
+/// [Place] list this state already fetches, per the founder's brief for the map (phase 2 of
+/// this feature - see PlacesMapView's own doc comment for what it renders).
+enum _PlacesViewMode { list, map }
+
 class _PlacesListViewState extends ConsumerState<_PlacesListView> {
   List<Place>? _places;
   bool _loading = true;
   bool _failed = false;
   bool _unsupported = false;
+  _PlacesViewMode _viewMode = _PlacesViewMode.list;
 
   @override
   void initState() {
@@ -2603,7 +2611,35 @@ class _PlacesListViewState extends ConsumerState<_PlacesListView> {
     final places = _places ?? const [];
     return Column(
       children: [
-        Expanded(child: places.isEmpty ? _emptyState(context) : _list(places)),
+        // The toggle only makes sense with real places to look at two ways - loading,
+        // error and unsupported are already handled above, and an empty group has nothing
+        // for a map to plot either, so _emptyState below covers it exactly like before this
+        // feature existed.
+        if (places.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 4, 18, 10),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: _PlacesViewToggle(
+                mode: _viewMode,
+                onChanged: (m) => setState(() => _viewMode = m),
+              ),
+            ),
+          ),
+        Expanded(
+          child: places.isEmpty
+              ? _emptyState(context)
+              : switch (_viewMode) {
+                  _PlacesViewMode.list => _list(places),
+                  _PlacesViewMode.map => SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
+                      child: PlacesMapView(
+                        places: places,
+                        onOpenPlace: widget.hub.openPlaceDetail,
+                      ),
+                    ),
+                },
+        ),
         _attribution(),
       ],
     );
@@ -2696,12 +2732,62 @@ class _PlacesListViewState extends ConsumerState<_PlacesListView> {
   }
 }
 
+/// The list/map switch atop the Places screen - not a second hub entry (Places already is
+/// one; this is a second way to look at the same fetched list - see PlacesMapView's own doc
+/// comment). The same two-state pill idiom _MemoriesGroupPill uses elsewhere in this file,
+/// scaled down to an icon-only pair since "List"/"Map" need no label to be legible.
+class _PlacesViewToggle extends StatelessWidget {
+  const _PlacesViewToggle({required this.mode, required this.onChanged});
+
+  final _PlacesViewMode mode;
+  final ValueChanged<_PlacesViewMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: _border),
+        borderRadius: BorderRadius.circular(9999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _segment(context, _PlacesViewMode.list, Icons.view_list_outlined, 'List view'),
+          _segment(context, _PlacesViewMode.map, Icons.map_outlined, 'Map view'),
+        ],
+      ),
+    );
+  }
+
+  Widget _segment(BuildContext context, _PlacesViewMode value, IconData icon, String label) {
+    final selected = value == mode;
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: label,
+      child: GestureDetector(
+        onTap: () => onChanged(value),
+        child: ExcludeSemantics(
+          child: Container(
+            padding: const EdgeInsets.all(9),
+            decoration: BoxDecoration(
+              color: selected ? context.accent : Colors.transparent,
+              borderRadius: BorderRadius.circular(9999),
+            ),
+            child: Icon(icon, size: 18, color: selected ? context.onAccent : _fgSecondary),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// One place: a cover photo (or a plain place icon when nothing here has one), the
 /// location, how many check-ins and photos, how many people have been there, and the date
 /// range - everything the founder's brief asked the card to carry. Tapping opens the
 /// place's own photos. A place with no resolved coordinates (see [Place.lat]/[Place.lng])
-/// renders exactly like any other - it's still a real place in the group's history, it
-/// just can't be plotted once a map view exists.
+/// renders exactly like any other in this list view - the map view (PlacesMapView) is the
+/// one that can't plot it, and surfaces that honestly instead of dropping it silently.
 class _PlaceCard extends StatelessWidget {
   const _PlaceCard({required this.place, required this.onTap});
 
