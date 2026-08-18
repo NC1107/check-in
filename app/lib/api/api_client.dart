@@ -344,6 +344,33 @@ class ApiClient {
     return (posts: posts, hasMore: data['hasMore'] as bool? ?? false);
   }
 
+  /// places fetches every distinct location across this group's eligible check-ins, most
+  /// check-ins first - a clean empty list, not a failure, for a group with no located
+  /// posts yet (see the server's handlePlaces). Only ever called against a group whose
+  /// server-info advertised [ServerInfo.placesCapable]; an older server has no such route.
+  Future<List<Place>> places() async {
+    final r = await _dio.get('/api/memories/places');
+    return ((r.data as Map<String, dynamic>)['places'] as List)
+        .map((e) => Place.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// placePosts fetches one place's own eligible check-ins, newest first, serialized like
+  /// the feed (see the server's handlePlacePosts). location must be exactly the display
+  /// string a [places] call itself returned for that place - never constructed by the
+  /// caller. hasMore mirrors [timelineMonth]'s own contract: a caller must derive any "how
+  /// many check-ins" display from posts.length (and hasMore), never from a separately
+  /// fetched [Place.postCount], which is an unbounded aggregate that can legitimately
+  /// exceed what this returns.
+  Future<({List<Post> posts, bool hasMore})> placePosts(String location) async {
+    final r =
+        await _dio.get('/api/memories/places/photos', queryParameters: {'location': location});
+    final data = r.data as Map<String, dynamic>;
+    final posts =
+        (data['posts'] as List).map((e) => Post.fromJson(e as Map<String, dynamic>)).toList();
+    return (posts: posts, hasMore: data['hasMore'] as bool? ?? false);
+  }
+
   /// lat/lng are only ever sent by the caller when the target server's server-info
   /// advertised the "recap" capability (see [ServerInfo.recapCapable]) - this server
   /// rejects unknown JSON fields, so an unguarded send would 400 every post against a

@@ -21,6 +21,7 @@ class ServerInfo {
     this.eventsCapable = false,
     this.timelineCapable = false,
     this.forgottenCapable = false,
+    this.placesCapable = false,
   });
 
   final String name;
@@ -92,6 +93,13 @@ class ServerInfo {
   /// opening a view that can never load anything. Independent of the other three.
   final bool forgottenCapable;
 
+  /// Whether this server has GET /api/memories/places - the "Places" hub entry. Same
+  /// story as [memoriesCapable], [eventsCapable], [timelineCapable] and
+  /// [forgottenCapable]: a server predating it has no such route at all, so the client
+  /// hides that hub entry rather than opening a list that can never load anything.
+  /// Independent of the other four.
+  final bool placesCapable;
+
   factory ServerInfo.fromJson(Map<String, dynamic> j) => ServerInfo(
         name: j['name'] as String? ?? 'Check-In',
         initialized: j['initialized'] as bool? ?? false,
@@ -110,6 +118,7 @@ class ServerInfo {
         eventsCapable: j['events'] as bool? ?? false,
         timelineCapable: j['timeline'] as bool? ?? false,
         forgottenCapable: j['forgotten'] as bool? ?? false,
+        placesCapable: j['places'] as bool? ?? false,
       );
 }
 
@@ -1115,6 +1124,98 @@ class TimelineMonth {
         posterCount: (j['posterCount'] as num?)?.toInt() ?? 0,
         coverMediaIds:
             ((j['coverMediaIds'] as List?) ?? const []).map((e) => (e as num).toInt()).toList(),
+      );
+}
+
+/// One distinct location across a group's eligible check-ins, for the "Places" hub
+/// entry - see the server's db/places.go for the aggregation and gazetteer-resolution
+/// this is a snapshot of.
+class Place {
+  Place({
+    required this.location,
+    required this.postCount,
+    required this.photoCount,
+    required this.posterCount,
+    required this.firstSeen,
+    required this.lastSeen,
+    required this.homeArea,
+    this.lat,
+    this.lng,
+    this.coordsGuessed = false,
+    this.coverMediaId,
+    this.groupId,
+  });
+
+  /// The display string exactly as posts carry it - "City, Country". Never reformatted
+  /// client-side.
+  final String location;
+
+  /// Resolved coordinates, or null when the server couldn't turn this place into
+  /// coordinates at all - too small a place for its embedded gazetteer, an unrecognised
+  /// country name, or simply not captured yet. See the server's db/places.go
+  /// (buildPlaces) for the full resolution order: a post's own stored coordinates first,
+  /// then the gazetteer, disambiguated by proximity to the group's own other places
+  /// rather than by population. A place with null lat/lng still belongs in the list and
+  /// is rendered exactly like any other; it just can't be plotted once a map view exists
+  /// (out of scope for this build).
+  final double? lat;
+  final double? lng;
+
+  /// True only when [lat]/[lng] came from the server's last-resort, population-only
+  /// tiebreak - an ambiguous place name the group had no other confidently-known place
+  /// to disambiguate by proximity to yet (see db/places.go's own doc comment). Not
+  /// currently shown distinctly in the list - reserved for a future "approximate" marker
+  /// once a map view exists.
+  final bool coordsGuessed;
+
+  final int postCount;
+  final int photoCount;
+  final int posterCount;
+
+  final DateTime firstSeen;
+  final DateTime lastSeen;
+
+  /// The most-liked photo taken at this place, or null when nothing here carries one -
+  /// the card then falls back to a plain place icon, the same convention _EventCard uses.
+  final int? coverMediaId;
+
+  /// Whether this place is part of the group's own collective home turf (see the
+  /// server's computeHomeArea) as opposed to somewhere they visited. Not currently shown
+  /// distinctly in the list - reserved for the map view this feature's phase 2 adds.
+  final bool homeArea;
+
+  /// Which connected group this place came from. Never sent by the server (single-tenant
+  /// per server) - the client stamps it when fetching, the same way [Event.groupId] and
+  /// [TimelineMonth.groupId] are, so a place's photos route to the right server.
+  final String? groupId;
+
+  Place withGroup(String groupId) => Place(
+        location: location,
+        postCount: postCount,
+        photoCount: photoCount,
+        posterCount: posterCount,
+        firstSeen: firstSeen,
+        lastSeen: lastSeen,
+        homeArea: homeArea,
+        lat: lat,
+        lng: lng,
+        coordsGuessed: coordsGuessed,
+        coverMediaId: coverMediaId,
+        groupId: groupId,
+      );
+
+  factory Place.fromJson(Map<String, dynamic> j) => Place(
+        location: j['location'] as String? ?? '',
+        postCount: (j['postCount'] as num?)?.toInt() ?? 0,
+        photoCount: (j['photoCount'] as num?)?.toInt() ?? 0,
+        posterCount: (j['posterCount'] as num?)?.toInt() ?? 0,
+        firstSeen: DateTime.parse(j['firstSeen'] as String),
+        lastSeen: DateTime.parse(j['lastSeen'] as String),
+        homeArea: j['homeArea'] as bool? ?? false,
+        lat: (j['lat'] as num?)?.toDouble(),
+        lng: (j['lng'] as num?)?.toDouble(),
+        coordsGuessed: j['coordsGuessed'] as bool? ?? false,
+        coverMediaId: (j['coverMediaId'] as num?)?.toInt(),
       );
 }
 

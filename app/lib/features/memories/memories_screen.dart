@@ -279,7 +279,7 @@ class MemoriesDragDriver {
 }
 
 /// Which top-level screen the hub is showing - see [MemoriesHubController].
-enum HubScreen { hub, randomMemory, eventsList, timeline, forgotten }
+enum HubScreen { hub, randomMemory, eventsList, timeline, forgotten, places }
 
 /// The Memories surface's own tiny internal navigation stack: hub -> ("Give me a memory"
 /// or "You were there") -> (an events list entry may drill into one event's own detail).
@@ -292,6 +292,7 @@ class MemoriesHubController extends ChangeNotifier {
   HubScreen _screen = HubScreen.hub;
   Event? _selectedEvent;
   TimelineMonth? _selectedMonth;
+  Place? _selectedPlace;
 
   /// The explicit group pick from the surface's own group selector, or null when nothing
   /// has been picked yet (every reader falls back to [effectiveMemoriesGroupId]'s
@@ -329,6 +330,10 @@ class MemoriesHubController extends ChangeNotifier {
   /// the list itself (or any other screen) is what's showing.
   TimelineMonth? get selectedMonth => _selectedMonth;
 
+  /// The place whose detail is showing, drilled into from the places list - null whenever
+  /// the list itself (or any other screen) is what's showing.
+  Place? get selectedPlace => _selectedPlace;
+
   void openRandomMemory() {
     _screen = HubScreen.randomMemory;
     notifyListeners();
@@ -361,11 +366,22 @@ class MemoriesHubController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void openPlaces() {
+    _screen = HubScreen.places;
+    _selectedPlace = null;
+    notifyListeners();
+  }
+
+  void openPlaceDetail(Place place) {
+    _selectedPlace = place;
+    notifyListeners();
+  }
+
   /// Steps back exactly one level (event detail -> events list -> hub, month detail ->
-  /// timeline list -> hub, or randomMemory -> hub) and returns true, or does nothing and
-  /// returns false when already at the hub with nothing left to pop internally - the
-  /// signal callers (Android back, the header's own back chevron) use to know whether they
-  /// should instead close the whole surface.
+  /// timeline list -> hub, place detail -> places list -> hub, or randomMemory -> hub) and
+  /// returns true, or does nothing and returns false when already at the hub with nothing
+  /// left to pop internally - the signal callers (Android back, the header's own back
+  /// chevron) use to know whether they should instead close the whole surface.
   bool back() {
     if (_selectedEvent != null) {
       _selectedEvent = null;
@@ -374,6 +390,11 @@ class MemoriesHubController extends ChangeNotifier {
     }
     if (_selectedMonth != null) {
       _selectedMonth = null;
+      notifyListeners();
+      return true;
+    }
+    if (_selectedPlace != null) {
+      _selectedPlace = null;
       notifyListeners();
       return true;
     }
@@ -391,10 +412,16 @@ class MemoriesHubController extends ChangeNotifier {
   /// (see home_shell.dart), so a group choice made on an earlier visit should still be
   /// there the next time the surface opens, not reset along with the navigation stack.
   void reset() {
-    if (_screen == HubScreen.hub && _selectedEvent == null && _selectedMonth == null) return;
+    if (_screen == HubScreen.hub &&
+        _selectedEvent == null &&
+        _selectedMonth == null &&
+        _selectedPlace == null) {
+      return;
+    }
     _screen = HubScreen.hub;
     _selectedEvent = null;
     _selectedMonth = null;
+    _selectedPlace = null;
     notifyListeners();
   }
 }
@@ -786,6 +813,11 @@ class _MemoriesSurfaceContentState extends ConsumerState<_MemoriesSurfaceContent
           hub: widget.hub,
           month: selectedMonth);
     }
+    final selectedPlace = widget.hub.selectedPlace;
+    if (selectedPlace != null) {
+      return _PlaceDetailView(
+          key: ValueKey('place-${selectedPlace.location}'), hub: widget.hub, place: selectedPlace);
+    }
     switch (widget.hub.screen) {
       case HubScreen.hub:
         return _MemoriesHubHome(key: const ValueKey('hub'), hub: widget.hub);
@@ -836,6 +868,9 @@ class _MemoriesSurfaceContentState extends ConsumerState<_MemoriesSurfaceContent
       case HubScreen.timeline:
         return _TimelineListView(
             key: ValueKey('timeline-$selectedGroupId'), hub: widget.hub, groupId: selectedGroupId);
+      case HubScreen.places:
+        return _PlacesListView(
+            key: ValueKey('places-$selectedGroupId'), hub: widget.hub, groupId: selectedGroupId);
     }
   }
 
@@ -866,9 +901,12 @@ class _MemoriesSurfaceContentState extends ConsumerState<_MemoriesSurfaceContent
               // left to step back to.
               final atRoot = widget.hub.screen == HubScreen.hub && widget.hub.selectedEvent == null;
               // The group selector only makes sense one level up from a specific fetched
-              // event or month - drilling further in is already scoped to whatever group
-              // that item came from, and switching there would have nothing coherent to do.
-              final inDetail = widget.hub.selectedEvent != null || widget.hub.selectedMonth != null;
+              // event, month or place - drilling further in is already scoped to whatever
+              // group that item came from, and switching there would have nothing coherent
+              // to do.
+              final inDetail = widget.hub.selectedEvent != null ||
+                  widget.hub.selectedMonth != null ||
+                  widget.hub.selectedPlace != null;
               final selectedGroupId = effectiveMemoriesGroupId(session, widget.hub.selectedGroupId);
               return Column(
                 children: [
@@ -1062,6 +1100,7 @@ class _MemoriesHubHome extends ConsumerWidget {
     final eventsOn = selected?.eventsCapable ?? false;
     final timelineOn = selected?.timelineCapable ?? false;
     final forgottenOn = selected?.forgottenCapable ?? false;
+    final placesOn = selected?.placesCapable ?? false;
     final entries = [
       if (memoriesOn)
         _HubEntry(
@@ -1090,6 +1129,13 @@ class _MemoriesHubHome extends ConsumerWidget {
           title: 'Forgotten photos',
           subtitle: 'Photos nobody has liked or commented on in months.',
           onTap: hub.openForgottenPhotos,
+        ),
+      if (placesOn)
+        _HubEntry(
+          icon: Icons.place_outlined,
+          title: 'Places',
+          subtitle: 'Every place your group has checked in from.',
+          onTap: hub.openPlaces,
         ),
     ];
     // A capable group can offer all four entries, and each subtitle wraps at a large text
@@ -2457,6 +2503,425 @@ class _MonthDetailViewState extends ConsumerState<_MonthDetailView> {
           Text(
             '$countLabel $checkinNoun · '
             '${month.posterCount} ${month.posterCount == 1 ? 'person' : 'people'}',
+            style: const TextStyle(color: _fgMuted, fontSize: 13),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// "Aug 10" for a place seen on a single day, "Aug 10 - Aug 16" (or across a year
+/// boundary) for a range - mirrors [eventDateRangeLabel]'s exact shape, applied to a
+/// place's firstSeen/lastSeen instead of an event's startDate/endDate.
+String placeDateRangeLabel(Place place) {
+  final start = place.firstSeen.toLocal();
+  final end = place.lastSeen.toLocal();
+  if (start.year == end.year && start.month == end.month && start.day == end.day) {
+    return DateFormat.yMMMd().format(start);
+  }
+  if (start.year == end.year) {
+    return '${DateFormat.MMMd().format(start)} - ${DateFormat.yMMMd().format(end)}';
+  }
+  return '${DateFormat.yMMMd().format(start)} - ${DateFormat.yMMMd().format(end)}';
+}
+
+/// The places list: every distinct location across the group's eligible check-ins, most
+/// check-ins first exactly as the server already ranks them, for [groupId] (see
+/// [effectiveMemoriesGroupId]). Keyed by that group id at the call site (see
+/// _MemoriesSurfaceContentState._body), so switching the header's group selector remounts
+/// this fresh rather than leaving a stale group's places up.
+class _PlacesListView extends ConsumerStatefulWidget {
+  const _PlacesListView({super.key, required this.hub, required this.groupId});
+
+  final MemoriesHubController hub;
+  final String? groupId;
+
+  @override
+  ConsumerState<_PlacesListView> createState() => _PlacesListViewState();
+}
+
+class _PlacesListViewState extends ConsumerState<_PlacesListView> {
+  List<Place>? _places;
+  bool _loading = true;
+  bool _failed = false;
+  bool _unsupported = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  Future<void> _fetch() async {
+    final groupId = widget.groupId;
+    final account = groupId == null ? null : ref.read(multiSessionProvider).byId(groupId);
+    if (account == null) {
+      setState(() {
+        _places = const [];
+        _loading = false;
+        _failed = false;
+        _unsupported = false;
+      });
+      return;
+    }
+    if (!account.placesCapable) {
+      setState(() {
+        _places = const [];
+        _loading = false;
+        _failed = false;
+        _unsupported = true;
+      });
+      return;
+    }
+    setState(() {
+      _loading = true;
+      _failed = false;
+      _unsupported = false;
+    });
+    try {
+      final places = await ref.read(apiForGroupProvider(account.id)).places();
+      if (!mounted) return;
+      setState(() {
+        _places = [for (final p in places) p.withGroup(account.id)];
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return Center(child: CircularProgressIndicator(color: context.accent));
+    if (_failed) return _errorState(context);
+    if (_unsupported) return _unsupportedState(context);
+    final places = _places ?? const [];
+    return Column(
+      children: [
+        Expanded(child: places.isEmpty ? _emptyState(context) : _list(places)),
+        _attribution(),
+      ],
+    );
+  }
+
+  Widget _list(List<Place> places) => ListView.separated(
+        padding: const EdgeInsets.fromLTRB(18, 4, 18, 24),
+        itemCount: places.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 12),
+        itemBuilder: (_, i) => _PlaceCard(
+          place: places[i],
+          onTap: () => widget.hub.openPlaceDetail(places[i]),
+        ),
+      );
+
+  /// GeoNames' CC BY 4.0 license requires attribution wherever its place data is shown -
+  /// the same discreet, always-visible-under-the-content treatment gif_picker.dart's own
+  /// Klipy credit uses. Every place this view lists (resolved or not) was looked up
+  /// against that dataset, so this belongs here regardless of whether any individual
+  /// place actually got coordinates back.
+  Widget _attribution() => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Text('Place data from GeoNames, CC BY 4.0',
+            style: TextStyle(color: _fgMuted.withValues(alpha: 0.8), fontSize: 11)),
+      );
+
+  Widget _emptyState(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.place_outlined, size: 40, color: _fgMuted),
+            SizedBox(height: 16),
+            Text('No places yet.',
+                style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            SizedBox(height: 6),
+            Text(
+              "Once your group checks in somewhere, it'll show up here.",
+              textAlign: TextAlign.center,
+              style: TextStyle(color: _fgMuted, fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _unsupportedState(BuildContext context) {
+    return const Center(
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.place_outlined, size: 40, color: _fgMuted),
+            SizedBox(height: 16),
+            Text("This group doesn't support Places.",
+                style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            SizedBox(height: 6),
+            Text(
+              'Its server needs an update before places can show up here.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: _fgMuted, fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _errorState(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cloud_off_outlined, size: 40, color: _fgMuted),
+            const SizedBox(height: 16),
+            const Text("Couldn't load your group's places.",
+                style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 20),
+            PrimaryButton(label: 'Try again', enabled: !_loading, busy: _loading, onTap: _fetch),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// One place: a cover photo (or a plain place icon when nothing here has one), the
+/// location, how many check-ins and photos, how many people have been there, and the date
+/// range - everything the founder's brief asked the card to carry. Tapping opens the
+/// place's own photos. A place with no resolved coordinates (see [Place.lat]/[Place.lng])
+/// renders exactly like any other - it's still a real place in the group's history, it
+/// just can't be plotted once a map view exists.
+class _PlaceCard extends StatelessWidget {
+  const _PlaceCard({required this.place, required this.onTap});
+
+  final Place place;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: place.location,
+      child: GestureDetector(
+        onTap: onTap,
+        // See _EventCard's identical guard: without this every descendant Text merges its
+        // own semantics into this node, turning one announced action into a wall of text.
+        child: ExcludeSemantics(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: _bgSurface,
+                border: Border.all(color: _border),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AspectRatio(
+                    aspectRatio: 16 / 9,
+                    child: place.coverMediaId != null
+                        ? AuthImage(mediaId: place.coverMediaId!, groupId: place.groupId)
+                        : const ColoredBox(
+                            color: _bgSurfaceHover,
+                            child: Icon(Icons.place_outlined, size: 32, color: _fgMuted),
+                          ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(place.location,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 15)),
+                        const SizedBox(height: 3),
+                        Text(placeDateRangeLabel(place),
+                            style: const TextStyle(color: _fgMuted, fontSize: 12)),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 14,
+                          runSpacing: 6,
+                          children: [
+                            _StatItem(
+                                icon: Icons.check_circle_outline,
+                                value: place.postCount,
+                                suffix: place.postCount == 1 ? 'check-in' : 'check-ins'),
+                            if (place.photoCount > 0)
+                              _StatItem(
+                                  icon: Icons.photo_outlined,
+                                  value: place.photoCount,
+                                  suffix: place.photoCount == 1 ? 'photo' : 'photos'),
+                            _StatItem(
+                                icon: Icons.groups_outlined,
+                                value: place.posterCount,
+                                suffix: place.posterCount == 1 ? 'person' : 'people'),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// One place's own photos: fetches that place's posts directly in one bulk call (see
+/// ApiClient.placePosts) - the same shape _MonthDetailView already uses, since a place
+/// (unlike an event's naturally small trip/gathering cluster) has no bound on how many
+/// check-ins it can accumulate, especially a group's own home area - and flattens them
+/// into the exact same photo grid _EventDetailView and _MonthDetailView both use (see
+/// _memoriesPhotoGridDelegate): same columns, spacing, and tile radius. Tapping a photo
+/// opens the same full-screen viewer and "go to post" route.
+class _PlaceDetailView extends ConsumerStatefulWidget {
+  const _PlaceDetailView({super.key, required this.hub, required this.place});
+
+  final MemoriesHubController hub;
+  final Place place;
+
+  @override
+  ConsumerState<_PlaceDetailView> createState() => _PlaceDetailViewState();
+}
+
+class _PlaceDetailViewState extends ConsumerState<_PlaceDetailView> {
+  List<Post>? _posts;
+
+  /// Whether the server capped this place's posts (see ApiClient.placePosts) - the
+  /// header's own check-in count is built from _posts.length plus this flag, never from
+  /// widget.place.postCount, which is an unbounded aggregate from the places LIST route
+  /// and can legitimately exceed what this screen actually fetched and can show - the
+  /// same contract _MonthDetailView's own doc comment pins for its own hasMore.
+  bool _hasMore = false;
+  bool _loading = true;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final groupId = widget.place.groupId;
+    if (groupId == null) {
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+      return;
+    }
+    try {
+      final result = await ref.read(apiForGroupProvider(groupId)).placePosts(widget.place.location);
+      if (!mounted) return;
+      setState(() {
+        _posts = [for (final p in result.posts) p.withGroup(groupId)];
+        _hasMore = result.hasMore;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _failed = true;
+      });
+    }
+  }
+
+  /// Every image on every fetched post, in the server's own (newest-first) order, paired
+  /// with the post it belongs to - the same flattening _EventDetailView.photos and
+  /// _MonthDetailView.photos do.
+  List<({Post post, PostMedia media})> get _photos => [
+        for (final p in _posts ?? const <Post>[])
+          for (final m in p.imageMedia) (post: p, media: m),
+      ];
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return Center(child: CircularProgressIndicator(color: context.accent));
+    if (_failed) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.cloud_off_outlined, size: 40, color: _fgMuted),
+              const SizedBox(height: 16),
+              const Text("Couldn't load this place.",
+                  style: TextStyle(color: _fgSecondary, fontSize: 15, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 20),
+              PrimaryButton(label: 'Try again', enabled: true, onTap: _load),
+            ],
+          ),
+        ),
+      );
+    }
+    final photos = _photos;
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(child: _header(context)),
+        if (photos.isEmpty)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 40),
+              child: Center(
+                child: Text('No photos at this place.',
+                    style: TextStyle(color: _fgMuted, fontSize: 13)),
+              ),
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+            sliver: SliverGrid(
+              gridDelegate: _memoriesPhotoGridDelegate,
+              delegate: SliverChildBuilderDelegate(
+                (context, i) => _PhotoTile(post: photos[i].post, media: photos[i].media),
+                childCount: photos.length,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _header(BuildContext context) {
+    final place = widget.place;
+    final shown = _posts?.length ?? 0;
+    final countLabel = _hasMore ? '$shown+' : '$shown';
+    final checkinNoun = (!_hasMore && shown == 1) ? 'check-in' : 'check-ins';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(18, 4, 18, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(place.location,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
+          const SizedBox(height: 4),
+          Text(
+            '$countLabel $checkinNoun · '
+            '${place.posterCount} ${place.posterCount == 1 ? 'person' : 'people'}',
             style: const TextStyle(color: _fgMuted, fontSize: 13),
           ),
         ],

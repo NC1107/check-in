@@ -53,6 +53,11 @@ type EventParticipant struct {
 // package's queries.go and memories.go for that precedent. A plain Go struct, not a query
 // result, precisely so detectEvents and everything it calls can be exercised as a pure
 // function over hand-built rows with no database in the loop.
+//
+// Also reused, unmodified, as PlacesForViewer's own row shape (places.go) - detectEvents
+// and computeHomeArea never read Lat/Lng, so EventsForViewer's own query (which doesn't
+// select posts.lat/lng at all) leaves them nil with no effect on event detection; only
+// PlacesForViewer's query populates them, for buildPlaces' own coordinate resolution.
 type eventPostRow struct {
 	PostID        int64
 	AuthorID      int64
@@ -63,6 +68,12 @@ type eventPostRow struct {
 	LikeCount     int
 	PhotoCount    int    // image attachments on this post
 	CoverMediaID  *int64 // this post's own first image attachment, if any
+
+	// Lat/Lng are this post's own stored coordinates (posts.lat/lng), nil for a post
+	// predating coordinate capture or one whose author's device never attached them -
+	// see buildPlaces' own doc comment for why these, not the gazetteer, are the first
+	// thing a place's coordinates are resolved from.
+	Lat, Lng *float64
 }
 
 // homeBaseLookback is how far back a member's posting history counts toward their home

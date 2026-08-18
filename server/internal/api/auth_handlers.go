@@ -88,6 +88,11 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		// has no such route at all, so the client hides that hub entry rather than opening a
 		// view that can never load anything. Independent of the other three.
 		"forgotten": true,
+		// places is the capability signal for GET /api/memories/places, the "Places" hub
+		// entry. Same story as memories/events/timeline/forgotten: a server predating it
+		// has no such route at all, so the client hides that hub entry rather than opening
+		// a list that can never load anything. Independent of the other four.
+		"places": true,
 	}
 	if settings, err := s.db.GetRecapSettings(r.Context()); err == nil {
 		resp["recapCadence"] = settings.Cadence
