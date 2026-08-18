@@ -354,14 +354,14 @@ func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	if visible, err := s.db.PostVisible(r.Context(), id); err != nil {
+	me := userFrom(r)
+	if visible, err := s.db.PostVisible(r.Context(), id, me.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	} else if !visible {
 		writeErr(w, http.StatusNotFound, "post not found")
 		return
 	}
-	me := userFrom(r)
 	inserted, err := s.db.LikePost(r.Context(), id, me.ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
@@ -461,7 +461,8 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "comment must be 1-2000 characters")
 		return
 	}
-	if visible, err := s.db.PostVisible(r.Context(), id); err != nil {
+	me := userFrom(r)
+	if visible, err := s.db.PostVisible(r.Context(), id, me.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	} else if !visible {
@@ -480,7 +481,6 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	me := userFrom(r)
 	comment, err := s.db.AddComment(r.Context(), id, me.ID, req.Body, req.ParentCommentID, req.MediaID)
 	if errors.Is(err, db.ErrNotOwned) {
 		writeErr(w, http.StatusBadRequest, "that attachment is not yours")

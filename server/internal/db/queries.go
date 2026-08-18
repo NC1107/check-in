@@ -1296,11 +1296,39 @@ func (d *DB) RecentComments(ctx context.Context, limit int) ([]Comment, error) {
 
 // ---- likes ----
 
-// PostVisible reports whether a post exists and is visible to members — i.e. its author
-// is still active. Used to reject likes/comments on missing or hidden posts with a clean
-// 404 instead of leaking a foreign-key 500 or letting members interact with content the
-// feed hides.
-func (d *DB) PostVisible(ctx context.Context, postID int64) (bool, error) {
+// PostVisible reports whether a post exists and is visible to a specific viewer for
+// ordinary interaction: its author is still active AND the viewer hasn't blocked them - the
+// same predicate the feed already applies. Used by handleLike and handleAddComment (and
+// handleListComments) to refuse the action on a missing or hidden post with a clean 404
+// instead of leaking a foreign-key 500 or, just as important, letting a member like,
+// comment on, or read the comments of a post from someone they've specifically blocked just
+// because they still know (or can guess) its id. Viewer-scoped for the same reason
+// GetVisibleMedia is: "visible" has to mean visible to *someone*, and a blocked author's
+// posts are exactly the case where that differs per caller.
+//
+// Deliberately NOT used by handleReportPost - see ReportablePost below for why reporting
+// gets its own, viewer-independent check instead of this one.
+func (d *DB) PostVisible(ctx context.Context, postID, viewerID int64) (bool, error) {
+	var ok bool
+	err := d.Pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM posts p JOIN users u ON u.id = p.author_id
+			WHERE p.id = $1 AND u.status = 'active'
+			  AND p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $2))`,
+		postID, viewerID).Scan(&ok)
+	return ok, err
+}
+
+// ReportablePost reports whether a post exists and its author's account is still active -
+// deliberately independent of the reporter's own block list, unlike PostVisible. Reporting
+// abusive content to the host must not get harder, or start silently 404ing, the moment a
+// member protects themselves by blocking that content's author: "I blocked them AND
+// reported this" is the expected pair of actions a safety feature should support, and a
+// member who already blocked someone specifically because of a post is exactly who most
+// needs to still be able to flag it. A revoked author's post still 404s here, same as
+// PostVisible - there's no host left to receive a report about content whose author the
+// host already removed.
+func (d *DB) ReportablePost(ctx context.Context, postID int64) (bool, error) {
 	var ok bool
 	err := d.Pool.QueryRow(ctx, `
 		SELECT EXISTS (

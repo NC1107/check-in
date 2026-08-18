@@ -32,16 +32,24 @@ func (s *Server) handleReportPost(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "reason must be 1-1000 characters")
 		return
 	}
-	// Verify the post exists before inserting, so a deleted/bad id is a clean 404 rather
-	// than a foreign-key violation surfacing as a generic 500.
-	if visible, err := s.db.PostVisible(r.Context(), postID); err != nil {
+	me := userFrom(r)
+	// Verify the post exists and its author is still active before inserting, so a
+	// deleted/bad id is a clean 404 rather than a foreign-key violation surfacing as a
+	// generic 500. Deliberately uses ReportablePost, NOT PostVisible: reporting must not get
+	// harder (or start 404ing) the moment a member protects themselves by blocking a post's
+	// author - "I blocked them AND reported this" is the expected pair of actions a safety
+	// feature should support, not a contradiction, and a member who blocked someone
+	// specifically because of a post is exactly who most needs to still be able to flag it
+	// for the host to see. See PostVisible's own doc comment for the like/comment side of
+	// this same distinction.
+	if visible, err := s.db.ReportablePost(r.Context(), postID); err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	} else if !visible {
 		writeErr(w, http.StatusNotFound, "post not found")
 		return
 	}
-	if err := s.db.ReportPost(r.Context(), userFrom(r).ID, postID, req.Reason); err != nil {
+	if err := s.db.ReportPost(r.Context(), me.ID, postID, req.Reason); err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
 	}
