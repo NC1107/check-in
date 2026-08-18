@@ -422,7 +422,20 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid id")
 		return
 	}
-	comments, err := s.db.ListComments(r.Context(), id, userFrom(r).ID)
+	viewerID := userFrom(r).ID
+	// Gate on the post itself the same way handleLike and handleAddComment do - without
+	// this, a post hidden from the viewer's feed (its author blocked or revoked) still
+	// served its whole comment thread to anyone who knew or guessed the post id, even though
+	// GET /api/posts/{id} correctly 404s for that same post. ListComments' own predicate only
+	// ever excluded blocked *commenters*, never checked the post's own author.
+	if visible, err := s.db.PostVisible(r.Context(), id, viewerID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "server error")
+		return
+	} else if !visible {
+		writeErr(w, http.StatusNotFound, "post not found")
+		return
+	}
+	comments, err := s.db.ListComments(r.Context(), id, viewerID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "server error")
 		return
