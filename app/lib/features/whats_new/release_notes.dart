@@ -19,6 +19,12 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.21',
+    highlights: [
+      'Places has a map now. Everywhere your group has checked in from, drawn on one map, with the busiest spots biggest. Tap anywhere you have been to see the photos from it.',
+    ],
+  ),
+  ReleaseNote(
     version: '1.20',
     highlights: [
       "Places: every spot your group has checked in from, with how many of you have been there and everything you posted while you were.",
