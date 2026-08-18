@@ -585,12 +585,22 @@ func (d *DB) DigestTargets(ctx context.Context) ([]DigestDue, error) {
 	return out, rows.Err()
 }
 
-// CountPostsSince counts check-ins by everyone but [userID] since [since] - what that
-// member has missed in the window their digest covers.
+// CountPostsSince counts check-ins visible to [userID] since [since] - what that member has
+// missed in the window their digest covers. Applies the same active-author, not-blocked-by-
+// viewer predicate the feed uses, so the digest can never tell someone about a check-in they
+// couldn't actually open (a revoked member's, or one from someone they've since blocked) -
+// and excludes kind = 'recap': a recap is the group's own periodic summary of everyone
+// else's check-ins, not a check-in itself, and counting it here would both double-count the
+// activity it already tallies and could fire on a period whose only underlying posts came
+// from an author this member has blocked.
 func (d *DB) CountPostsSince(ctx context.Context, userID int64, since time.Time) (int, error) {
 	var n int
-	err := d.Pool.QueryRow(ctx,
-		`SELECT count(*) FROM posts WHERE author_id <> $1 AND created_at > $2`, userID, since,
+	err := d.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM posts p JOIN users u ON u.id = p.author_id
+		WHERE p.author_id <> $1 AND p.created_at > $2
+		  AND u.status = 'active' AND p.kind <> 'recap'
+		  AND p.author_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = $1)`,
+		userID, since,
 	).Scan(&n)
 	return n, err
 }
