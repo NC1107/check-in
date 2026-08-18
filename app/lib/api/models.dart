@@ -1141,6 +1141,7 @@ class Place {
     required this.homeArea,
     this.lat,
     this.lng,
+    this.coordsGuessed = false,
     this.coverMediaId,
     this.groupId,
   });
@@ -1149,13 +1150,23 @@ class Place {
   /// client-side.
   final String location;
 
-  /// Resolved coordinates, or null when the server's embedded gazetteer had no row for
-  /// this place (too small, an unrecognised country name, or simply not captured yet
-  /// coordinate-wise) - see the server's gazetteer.Resolve. A place with null lat/lng
-  /// still belongs in the list and is rendered exactly like any other; it just can't be
-  /// plotted once a map view exists (out of scope for this build).
+  /// Resolved coordinates, or null when the server couldn't turn this place into
+  /// coordinates at all - too small a place for its embedded gazetteer, an unrecognised
+  /// country name, or simply not captured yet. See the server's db/places.go
+  /// (buildPlaces) for the full resolution order: a post's own stored coordinates first,
+  /// then the gazetteer, disambiguated by proximity to the group's own other places
+  /// rather than by population. A place with null lat/lng still belongs in the list and
+  /// is rendered exactly like any other; it just can't be plotted once a map view exists
+  /// (out of scope for this build).
   final double? lat;
   final double? lng;
+
+  /// True only when [lat]/[lng] came from the server's last-resort, population-only
+  /// tiebreak - an ambiguous place name the group had no other confidently-known place
+  /// to disambiguate by proximity to yet (see db/places.go's own doc comment). Not
+  /// currently shown distinctly in the list - reserved for a future "approximate" marker
+  /// once a map view exists.
+  final bool coordsGuessed;
 
   final int postCount;
   final int photoCount;
@@ -1188,6 +1199,7 @@ class Place {
         homeArea: homeArea,
         lat: lat,
         lng: lng,
+        coordsGuessed: coordsGuessed,
         coverMediaId: coverMediaId,
         groupId: groupId,
       );
@@ -1202,6 +1214,7 @@ class Place {
         homeArea: j['homeArea'] as bool? ?? false,
         lat: (j['lat'] as num?)?.toDouble(),
         lng: (j['lng'] as num?)?.toDouble(),
+        coordsGuessed: j['coordsGuessed'] as bool? ?? false,
         coverMediaId: (j['coverMediaId'] as num?)?.toInt(),
       );
 }

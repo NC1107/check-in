@@ -144,6 +144,55 @@ func TestResolveAliasFallback(t *testing.T) {
 	}
 }
 
+// TestCandidatesReturnsAllMatchesNotJustOne pins the API db.buildPlaces actually calls:
+// every real candidate for an ambiguous name, not Resolve's own population-reduced
+// single winner - db.buildPlaces needs the full set to disambiguate by proximity to the
+// group's own other places instead.
+func TestCandidatesReturnsAllMatchesNotJustOne(t *testing.T) {
+	got := Candidates("Arlington, United States")
+	if len(got) != 4 {
+		t.Fatalf("got %d candidates, want 4 (this dataset has 4 US Arlingtons)", len(got))
+	}
+	var haveVA, haveTX bool
+	for _, c := range got {
+		if c.Lat == 38.88101 && c.Lng == -77.10428 {
+			haveVA = true
+		}
+		if c.Lat == 32.73569 && c.Lng == -97.10807 {
+			haveTX = true
+		}
+	}
+	if !haveVA {
+		t.Error("candidates missing Arlington, VA (38.88101, -77.10428)")
+	}
+	if !haveTX {
+		t.Error("candidates missing Arlington, TX (32.73569, -97.10807)")
+	}
+}
+
+// TestCandidatesUnresolvablePlaceReturnsNil mirrors
+// TestResolveUnresolvablePlaceReturnsFalseNotAGuess for the new API: no match is nil,
+// not a fabricated single-element slice.
+func TestCandidatesUnresolvablePlaceReturnsNil(t *testing.T) {
+	if got := Candidates("Ocean City, United States"); got != nil {
+		t.Errorf("got %v, want nil - this dataset has no row for Ocean City, MD", got)
+	}
+}
+
+// TestCandidatesSingleMatchIsUnambiguous pins the other case db.buildPlaces relies on:
+// a place with exactly one real-world candidate for its name+country comes back as a
+// single-element slice, which is what buildPlaces treats as unambiguous enough to anchor
+// on.
+func TestCandidatesSingleMatchIsUnambiguous(t *testing.T) {
+	got := Candidates("Lisbon, Portugal")
+	if len(got) != 1 {
+		t.Fatalf("got %d candidates, want 1", len(got))
+	}
+	if got[0].Lat != 38.72509 || got[0].Lng != -9.1498 {
+		t.Errorf("got (%v, %v), want Lisbon's real GeoNames coordinates", got[0].Lat, got[0].Lng)
+	}
+}
+
 // TestNormalizeKeyFoldsCaseAndWhitespace pins the fold rule itself in isolation from any
 // dataset lookup.
 func TestNormalizeKeyFoldsCaseAndWhitespace(t *testing.T) {

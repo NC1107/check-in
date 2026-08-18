@@ -153,70 +153,96 @@ func load() *index {
 	return idx
 }
 
-// Resolve turns a post's "City, Country" display string into coordinates, or reports
-// ok=false when it can't - never a guess. Unmatched is the expected outcome for most of a
-// group's history (a village too small for GeoNames' 15,000-population/capital bar, a
-// country name this build's country table doesn't carry, a typo a reverse geocoder never
-// actually produces) and callers MUST treat it as a normal result, not an error: db.Place
-// returns such a place with nil lat/lng rather than dropping it or inventing a location -
-// see db/places.go's own doc comment.
+// Candidate is one GeoNames row matching a "City, Country" query - what Candidates
+// returns, and what Resolve reduces to a single winner.
+type Candidate struct {
+	Lat, Lng   float64
+	Population int
+}
+
+// Candidates returns every GeoNames row a "City, Country" display string could mean
+// within its country, or nil when nothing matches at all (see the "no match" cases
+// below) - unlike Resolve, it never itself picks a winner among more than one candidate
+// for the same normalized city name in the same country. Which of several same-named
+// places (Arlington, VA vs Arlington, TX) a group actually meant depends on where that
+// group's OTHER check-ins are, something only the caller knows - see db/places.go's
+// buildPlaces, which disambiguates by proximity to the group's own anchor locations
+// rather than by population (Resolve's own, deliberately cruder, policy - see its doc
+// comment for exactly why that's wrong for this specifically).
 //
 // location is split on its LAST comma - "City, Country", the shape every post's location
 // string has (content_handlers.go's own doc comment pins this; see this package's own
 // header comment for why nothing else is ever stored). A city name that happened to
 // contain a comma of its own would break this, but no real "City, Country" string
-// produced by on-device reverse geocoding does.
+// produced by on-device reverse geocoding does. No match at all (an unknown country, or
+// a place too small for the embedded dataset's population/capital-status bar) returns
+// nil, not an error - callers MUST treat that as a normal result: db.Place carries nil
+// lat/lng for such a place rather than dropping it or inventing a location.
 //
-// Matching is tiered, never blended into one flat lookup: every row whose own GeoNames
+// Matching is tiered, never blended into one flat list: every row whose own GeoNames
 // name folds to the query is preferred outright over every row where only an alternate
-// name matches - see load's primary/alias split. Skipping straight to a merged
-// population-ranked list of both would occasionally let a place's minor historical
-// alternate name (Paterson, NJ's GeoNames data files it under the alternate name "Great
-// Falls", after the waterfall the city was built around) outrank an actual town primarily
-// named that (Great Falls, MT; Great Falls, VA) on population alone - tiering the two
-// classes of match apart is what keeps a real Great Falls check-in from resolving to
-// Paterson.
-//
-// Within whichever tier matches, more than one same-named place in the same country is a
-// genuine, common ambiguity ("Arlington, United States" is both Arlington, VA and
-// Arlington, TX) that this package cannot resolve from a display string alone - there is
-// no more context in "Arlington, United States" to disambiguate with. The tie always
-// breaks toward the larger population: not a guess about which one a given post actually
-// meant, but a deterministic, defensible default (the place someone unqualified means by
-// a bare city name is, on average, the one more people would also mean) applied the same
-// way every time, documented here rather than left to map iteration order.
-func Resolve(location string) (lat, lng float64, ok bool) {
+// name matches - see load's primary/alias split. Returning a merged list of both would
+// occasionally let a place's minor historical alternate name (Paterson, NJ's GeoNames
+// data files it under the alternate name "Great Falls", after the waterfall the city was
+// built around) sit alongside an actual town primarily named that (Great Falls, MT;
+// Great Falls, VA) as if they were equally good answers - tiering the two classes of
+// match apart is what keeps a real Great Falls check-in from ever being offered Paterson
+// as a candidate at all.
+func Candidates(location string) []Candidate {
 	idx := get()
 
 	comma := strings.LastIndex(location, ",")
 	if comma < 0 {
-		return 0, 0, false
+		return nil
 	}
 	city := normalizeKey(location[:comma])
 	country := normalizeKey(location[comma+1:])
 	if city == "" || country == "" {
-		return 0, 0, false
+		return nil
 	}
 
 	iso, ok := idx.countryISOByName[country]
 	if !ok {
-		return 0, 0, false
+		return nil
 	}
 
 	key := indexKey(iso, city)
-	candidates := idx.primary[key]
-	if len(candidates) == 0 {
-		candidates = idx.alias[key]
+	entries := idx.primary[key]
+	if len(entries) == 0 {
+		entries = idx.alias[key]
 	}
+	if len(entries) == 0 {
+		return nil
+	}
+
+	candidates := make([]Candidate, len(entries))
+	for i, e := range entries {
+		candidates[i] = Candidate{Lat: e.lat, Lng: e.lng, Population: e.population}
+	}
+	return candidates
+}
+
+// Resolve turns a post's "City, Country" display string into ONE set of coordinates, or
+// reports ok=false when Candidates found nothing at all - never a guess in that sense.
+// When more than one candidate matches, this breaks the tie toward the most populous:
+// a deterministic default, but the WRONG one whenever a group's real place is the
+// smaller of two same-named cities (Arlington, VA is real and much-visited by a
+// Washington-area group, but Arlington, TX is the larger city GeoNames-wide) - db.Place
+// does not call this for an ambiguous name for exactly that reason, preferring
+// buildPlaces' own proximity-to-the-group's-other-places disambiguation instead (see
+// Candidates' own doc comment). Resolve is kept as the population-only baseline: the
+// right answer when there is truly no better signal (db.buildPlaces' own last-resort
+// fallback), and useful on its own for exercising the raw dataset in tests.
+func Resolve(location string) (lat, lng float64, ok bool) {
+	candidates := Candidates(location)
 	if len(candidates) == 0 {
 		return 0, 0, false
 	}
-
 	best := candidates[0]
 	for _, c := range candidates[1:] {
-		if c.population > best.population {
+		if c.Population > best.Population {
 			best = c
 		}
 	}
-	return best.lat, best.lng, true
+	return best.Lat, best.Lng, true
 }

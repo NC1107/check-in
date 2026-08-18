@@ -53,6 +53,56 @@ func TestPlacesReturnsDistinctLocations(t *testing.T) {
 	}
 }
 
+// TestPlacesDisambiguatesArlingtonAndGreatFallsForADCGroup is the end-to-end regression
+// test for the original defect, through the real HTTP round trip: a Washington-area
+// group's own everyday check-ins (Baltimore, Silver Spring, Bethesda - each unambiguous
+// on its own in the gazetteer) must anchor "Arlington, United States" and "Great Falls,
+// United States" to their real Virginia coordinates, not the more populous Arlington,
+// Texas or Great Falls, Montana a population-only tiebreak would have picked.
+func TestPlacesDisambiguatesArlingtonAndGreatFallsForADCGroup(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+	now := time.Now()
+
+	h.eventPost(admin, "Baltimore, United States", now.Add(-30*24*time.Hour))
+	h.eventPost(admin, "Silver Spring, United States", now.Add(-25*24*time.Hour))
+	h.eventPost(admin, "Bethesda, United States", now.Add(-20*24*time.Hour))
+	h.eventPost(admin, "Arlington, United States", now.Add(-10*24*time.Hour))
+	h.eventPost(admin, "Great Falls, United States", now.Add(-5*24*time.Hour))
+
+	got := h.places(admin.Token)
+	byLoc := make(map[string]db.Place, len(got.Places))
+	for _, p := range got.Places {
+		byLoc[p.Location] = p
+	}
+
+	arl := byLoc["Arlington, United States"]
+	if arl.Lat == nil || arl.Lng == nil {
+		t.Fatal("Arlington did not resolve")
+	}
+	if !nearlyEqualF(*arl.Lat, 38.88101) || !nearlyEqualF(*arl.Lng, -77.10428) {
+		t.Errorf("Arlington = (%v, %v), want Arlington, VA (38.88101, -77.10428) - not the "+
+			"more populous Arlington, TX (32.73569, -97.10807)", *arl.Lat, *arl.Lng)
+	}
+
+	gf := byLoc["Great Falls, United States"]
+	if gf.Lat == nil || gf.Lng == nil {
+		t.Fatal("Great Falls did not resolve")
+	}
+	if !nearlyEqualF(*gf.Lat, 38.99817) || !nearlyEqualF(*gf.Lng, -77.28832) {
+		t.Errorf("Great Falls = (%v, %v), want Great Falls, VA (38.99817, -77.28832) - not the "+
+			"more populous Great Falls, MT (47.50024, -111.30081)", *gf.Lat, *gf.Lng)
+	}
+}
+
+func nearlyEqualF(a, b float64) bool {
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	return d < 0.01
+}
+
 // TestPlacesResolvesRealCoordinates pins that a real, GeoNames-recognized place comes
 // back with actual coordinates through the full HTTP round trip, not just at the pure
 // buildPlaces layer.
