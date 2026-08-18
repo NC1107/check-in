@@ -87,6 +87,7 @@ type contentLimits struct {
 	events    *rateLimiter
 	timeline  *rateLimiter
 	forgotten *rateLimiter
+	places    *rateLimiter
 }
 
 // mediaBurst is the media allowance, and 20 is a requirement rather than a preference: a
@@ -131,6 +132,12 @@ func newContentLimits() contentLimits {
 		// debounce ahead of it either, so the burst is sized the same way - generous
 		// enough for someone genuinely mashing "Another" for a minute.
 		forgotten: newRateLimiter(30, 15),
+		// Opening the "Places" hub entry, or switching groups while it's open - the same
+		// shape of read as events' and timeline's own limiters, and the same modest
+		// burst: the underlying query is a single grouped scan (see
+		// db.PlacesForViewer's own cost comment), not something worth inviting repeated
+		// hammering of.
+		places: newRateLimiter(20, 10),
 	}
 }
 

@@ -125,6 +125,8 @@ func (s *Server) Router() http.Handler {
 		r.With(s.rateLimitUser(s.content.timeline)).
 			Get("/api/memories/timeline/{year}/{month}", s.handleTimelineMonth)
 		r.With(s.rateLimitUser(s.content.forgotten)).Get("/api/memories/forgotten", s.handleForgottenPhoto)
+		r.With(s.rateLimitUser(s.content.places)).Get("/api/memories/places", s.handlePlaces)
+		r.With(s.rateLimitUser(s.content.places)).Get("/api/memories/places/photos", s.handlePlacePosts)
 		r.Get("/api/locations", s.handleLocations)
 		r.Get("/api/search", s.handleSearch)
 		r.Get("/api/users", s.handleSearchUsers)
