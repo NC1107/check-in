@@ -1,3 +1,4 @@
+<H1 align="center"> Check-in </H1>
 <!-- social-badges:start -->
 <p align="center">
   <a href="https://discord.gg/jUMuSxGf6q"><img src="https://img.shields.io/badge/Discord-5865F2?logo=discord&logoColor=white" alt="Discord"></a>
