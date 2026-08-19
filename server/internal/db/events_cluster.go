@@ -151,14 +151,23 @@ func displayLocation(run []eventPostRow) string {
 	for _, r := range run {
 		counts[r.Location]++
 	}
+	best, _ := mostCommonKey(counts)
+	return best
+}
+
+// mostCommonKey returns the highest-counted key, breaking ties toward the lexicographically
+// smallest one. The tiebreak is the point: Go's map iteration order is unspecified, so
+// without it the same rows could produce a different answer run to run. Any consistent rule
+// is defensible; having one is not optional. Returns a count of zero for an empty map.
+func mostCommonKey(counts map[string]int) (string, int) {
 	var best string
 	var bestCount int
-	for loc, n := range counts {
-		if n > bestCount || (n == bestCount && loc < best) {
-			best, bestCount = loc, n
+	for k, n := range counts {
+		if n > bestCount || (n == bestCount && k < best) {
+			best, bestCount = k, n
 		}
 	}
-	return best
+	return best, bestCount
 }
 
 // homeBaseMinDays is the fewest DISTINCT calendar days an author has to have posted from
@@ -294,8 +303,20 @@ func countEpisodes(days map[time.Time]bool) int {
 // consistent tiebreak is defensible, but the result has to be the same every time this
 // runs over the same rows.
 func computeHomeBases(rows []eventPostRow, now time.Time) map[int64]string {
-	cutoff := now.AddDate(0, homeBaseLookback6Months, 0)
-	// authorID -> normalized location -> the set of distinct days posted there.
+	days := tallyDaysByAuthorLocation(rows, now.AddDate(0, homeBaseLookback6Months, 0))
+	homeBase := make(map[int64]string, len(days))
+	for author, byLoc := range days {
+		if loc, n := bestHomeLocation(byLoc); n > 0 {
+			homeBase[author] = loc
+		}
+	}
+	return homeBase
+}
+
+// tallyDaysByAuthorLocation counts the distinct days each author posted at each normalized
+// location, ignoring anything older than the cutoff. Distinct days, not posts, so a single
+// chatty afternoon cannot look like living somewhere.
+func tallyDaysByAuthorLocation(rows []eventPostRow, cutoff time.Time) map[int64]map[string]map[time.Time]bool {
 	days := make(map[int64]map[string]map[time.Time]bool)
 	for _, r := range rows {
 		if r.CreatedAt.Before(cutoff) {
@@ -314,24 +335,21 @@ func computeHomeBases(rows []eventPostRow, now time.Time) map[int64]string {
 		}
 		daySet[dayOf(r.CreatedAt)] = true
 	}
-	homeBase := make(map[int64]string, len(days))
-	for author, byLoc := range days {
-		var best string
-		var bestCount int
-		for loc, daySet := range byLoc {
-			n := len(daySet)
-			if n < homeBaseMinDays {
-				continue
-			}
-			if n > bestCount || (n == bestCount && loc < best) {
-				best, bestCount = loc, n
-			}
-		}
-		if bestCount > 0 {
-			homeBase[author] = best
+	return days
+}
+
+// bestHomeLocation picks one author's home base: the location with the most distinct days,
+// provided it clears homeBaseMinDays. Ties break toward the lexicographically smallest key
+// so the result does not depend on Go's unspecified map iteration order. Returns a count of
+// zero when nothing qualifies.
+func bestHomeLocation(byLoc map[string]map[time.Time]bool) (string, int) {
+	counts := make(map[string]int, len(byLoc))
+	for loc, daySet := range byLoc {
+		if n := len(daySet); n >= homeBaseMinDays {
+			counts[loc] = n
 		}
 	}
-	return homeBase
+	return mostCommonKey(counts)
 }
 
 // detectEvents is the whole "You Were There" detection pipeline over a group's eligible,
@@ -383,37 +401,49 @@ func detectTrips(
 		if homeArea[loc] {
 			continue
 		}
-		locRows := byLocation[loc]
-		sort.Slice(locRows, func(i, j int) bool { return locRows[i].CreatedAt.Before(locRows[j].CreatedAt) })
-
-		var run []eventPostRow
-		var firstDay, lastDay time.Time
-		flush := func() {
-			if len(run) == 0 {
-				return
+		for _, run := range tripRuns(byLocation[loc]) {
+			ev, ok := buildTripIfQualifies(loc, run, homeBase)
+			if !ok {
+				continue
 			}
-			if ev, ok := buildTripIfQualifies(loc, run, homeBase); ok {
-				events = append(events, ev)
-				for _, r := range run {
-					consumed[r.PostID] = true
-				}
+			events = append(events, ev)
+			for _, r := range run {
+				consumed[r.PostID] = true
 			}
-			run = nil
 		}
-		for _, r := range locRows {
-			day := dayOf(r.CreatedAt)
-			if len(run) > 0 && (day.Sub(lastDay) > tripWindow || day.Sub(firstDay) > tripMaxSpan) {
-				flush()
-			}
-			if len(run) == 0 {
-				firstDay = day
-			}
-			run = append(run, r)
-			lastDay = day
-		}
-		flush()
 	}
 	return events, consumed
+}
+
+// tripRuns splits one location's posts into candidate trips: consecutive posts stay in the
+// same run while each is within tripWindow of the previous day and the run as a whole stays
+// inside tripMaxSpan. A gap longer than the window, or a run that has stretched past the
+// max span, starts a new one - so a fortnight away is one trip, while two weekends a month
+// apart at the same place are two. Sorts a copy, leaving the caller's slice alone.
+func tripRuns(locRows []eventPostRow) [][]eventPostRow {
+	sorted := make([]eventPostRow, len(locRows))
+	copy(sorted, locRows)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].CreatedAt.Before(sorted[j].CreatedAt) })
+
+	var runs [][]eventPostRow
+	var run []eventPostRow
+	var firstDay, lastDay time.Time
+	for _, r := range sorted {
+		day := dayOf(r.CreatedAt)
+		if len(run) > 0 && (day.Sub(lastDay) > tripWindow || day.Sub(firstDay) > tripMaxSpan) {
+			runs = append(runs, run)
+			run = nil
+		}
+		if len(run) == 0 {
+			firstDay = day
+		}
+		run = append(run, r)
+		lastDay = day
+	}
+	if len(run) > 0 {
+		runs = append(runs, run)
+	}
+	return runs
 }
 
 // buildTripIfQualifies decides whether one normalized location's date-merged run of posts
