@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/nc1107/check-in/server/internal/db"
@@ -73,12 +74,16 @@ func TestPostReportsTotalAndSharedCommentCounts(t *testing.T) {
 	h.post(fmt.Sprintf("/api/posts/%d/comments", post.ID), admin.Token,
 		map[string]any{"body": "said everywhere", "crossCommentId": "shared-2f9c"})
 
+	// Every endpoint that serves a Post scans the same column list through scanPost, and a
+	// column swap between two integers is invisible to the compiler - so each one is checked
+	// rather than trusting that they share code today and always will.
 	for _, tc := range []struct {
 		name string
 		post db.Post
 	}{
 		{"as the feed serves it", onlyPost(t, h.feed(viewer))},
 		{"as the single-post endpoint serves it", h.postByID(viewer, post.ID)},
+		{"as a member's own posts serve it", onlyPost(t, h.userPosts(viewer, admin.ID))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.post.CommentCount != 3 {
@@ -121,4 +126,61 @@ func (h *harness) postByID(a actor, id int64) db.Post {
 	var p db.Post
 	h.get(fmt.Sprintf("/api/posts/%d", id), a.Token).expect(http.StatusOK).decode(&p)
 	return p
+}
+
+// The client only sends crossCommentId to a server that advertises this. If the flag ever
+// stopped being published, every client would treat every group as incapable and quietly
+// stop collapsing anything - comments and notifications would silently start arriving once
+// per group again, with nothing failing to explain why.
+func TestServerInfoAdvertisesCrossComments(t *testing.T) {
+	h := newHarness(t)
+	var info map[string]any
+	h.get("/api/server-info", "").expect(http.StatusOK).decode(&info)
+
+	if got, ok := info["crossComments"].(bool); !ok || !got {
+		t.Errorf("crossComments = %v, want true - a client gates the whole feature on it",
+			info["crossComments"])
+	}
+}
+
+// The shared id is opaque and client-supplied, so its bounds are the server's business.
+func TestCrossCommentIDIsBounded(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+	post := h.createPost(admin, map[string]any{"kind": "text", "body": "trip"})
+
+	for _, tc := range []struct {
+		name string
+		id   any
+		want bool // whether the comment should end up carrying an id
+	}{
+		{"an ordinary id is kept", "shared-2f9c", true},
+		{"blank is dropped", "", false},
+		{"whitespace only is dropped", "   ", false},
+		{"over 64 characters is dropped", strings.Repeat("x", 65), false},
+		{"exactly 64 characters is kept", strings.Repeat("x", 64), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var c db.Comment
+			h.post(fmt.Sprintf("/api/posts/%d/comments", post.ID), admin.Token,
+				map[string]any{"body": "hi", "crossCommentId": tc.id}).
+				expect(http.StatusCreated).decode(&c)
+
+			got := c.CrossCommentID != nil
+			if got != tc.want {
+				t.Errorf("stored an id = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// userPosts reads one member's posts through the public endpoint.
+func (h *harness) userPosts(a actor, userID int64) []db.Post {
+	h.t.Helper()
+	var page struct {
+		Posts []db.Post `json:"posts"`
+	}
+	h.get(fmt.Sprintf("/api/users/%d/posts", userID), a.Token).
+		expect(http.StatusOK).decode(&page)
+	return page.Posts
 }
