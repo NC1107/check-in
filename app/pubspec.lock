@@ -820,10 +820,10 @@ packages:
     dependency: "direct main"
     description:
       name: native_exif
-      sha256: "0d37444c1ed00cbcada69b7510aba1d505fed75d3b6ef3ea3c8c2c970040e4f1"
+      sha256: "13976193e3f033c443bab4e6c6698871d54227b4661f175514c2eb9f7920794c"
       url: "https://pub.dev"
     source: hosted
-    version: "0.6.2"
+    version: "0.8.0"
   nested:
     dependency: transitive
     description:
