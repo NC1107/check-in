@@ -1028,7 +1028,15 @@ List<Comment> collapseCrossComments(List<Comment> comments) {
   }
   for (final entry in groups.values) {
     entry.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-    out.add(entry.first);
+    // The representative carries every copy's own (group, id) pair with it. A comment id is
+    // only meaningful on the server that issued it, so throwing the others away would leave
+    // the comment addressable in exactly one group - and a reply to it could then only ever
+    // reach that one, chosen by which server happened to answer first.
+    final copies = [
+      for (final c in entry)
+        if (c.groupId != null) (groupId: c.groupId!, commentId: c.id),
+    ];
+    out.add(entry.first.withCopies(copies));
   }
   out.sort((a, b) => a.createdAt.compareTo(b.createdAt));
   return out;

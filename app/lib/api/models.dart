@@ -791,6 +791,13 @@ class RecapAward {
 
 /// One copy of a cross-post: which group's server holds it, that copy's post id, and its
 /// own engagement (each group counts only its own members). The merged card sums these.
+/// One group's copy of a comment sent to several at once: the id it holds THERE, which is
+/// the only id that means anything on that group's server.
+typedef CommentCopy = ({
+  String groupId,
+  int commentId,
+});
+
 typedef PostCopy = ({
   String groupId,
   int postId,
@@ -837,6 +844,7 @@ class Comment {
     this.parentCommentId,
     this.mediaId,
     this.crossCommentId,
+    this.copies = const [],
   });
 
   final int id;
@@ -862,6 +870,19 @@ class Comment {
   /// opaque; [collapseCrossComments] groups on it so one thing said once is shown once.
   final String? crossCommentId;
 
+  /// Every copy of this comment the viewer can reach, one per group, when it was sent to
+  /// more than one. Empty for an ordinary single-group comment.
+  ///
+  /// Collapsing used to discard the other copies once it had picked a representative, which
+  /// threw away the only thing that made them addressable: a comment id means something on
+  /// exactly one server, so a reply to a shared comment could only ever reach the
+  /// representative's group - whichever server happened to answer first. Keeping the copies
+  /// is what lets a reply reach everyone who can see the comment being replied to.
+  final List<CommentCopy> copies;
+
+  /// True when this stands in for the same comment in several groups.
+  bool get isShared => copies.length > 1;
+
   Comment withGroup(String? groupId) => Comment(
         id: id,
         authorId: authorId,
@@ -873,6 +894,22 @@ class Comment {
         parentCommentId: parentCommentId,
         mediaId: mediaId,
         crossCommentId: crossCommentId,
+        copies: copies,
+      );
+
+  /// Returns this comment standing in for the given set of per-group copies.
+  Comment withCopies(List<CommentCopy> copies) => Comment(
+        id: id,
+        authorId: authorId,
+        authorName: authorName,
+        body: body,
+        createdAt: createdAt,
+        authorPhotoId: authorPhotoId,
+        groupId: groupId,
+        parentCommentId: parentCommentId,
+        mediaId: mediaId,
+        crossCommentId: crossCommentId,
+        copies: copies,
       );
 
   factory Comment.fromJson(Map<String, dynamic> j) => Comment(

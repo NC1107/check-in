@@ -145,7 +145,16 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     _commentFocus.requestFocus();
   }
 
-  void _cancelReply() => setState(() => _replyTo = null);
+  /// Cancels the reply AND releases the group it pinned.
+  ///
+  /// Starting a reply pins the target to the parent's group; cancelling used to leave that
+  /// pin in place, so a member who backed out of a reply to write an ordinary comment
+  /// silently kept sending to just that one group instead of returning to the "all groups"
+  /// default they started from.
+  void _cancelReply() => setState(() {
+        _replyTo = null;
+        _composeGroupId = null;
+      });
 
   /// Reports [c] to its own group's host. Mirrors how a post is reported (post_card.dart):
   /// same reason sheet, same "reviewed within 24 hours" copy, same snack feedback.
@@ -170,11 +179,22 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
 
   /// The display name of the comment [c] is replying to, resolved from the loaded thread
   /// (same id, and same group for a merged cross-post thread). Null if it can't be found.
+  /// The author of the comment [c] replies to, or null when it is not in this thread.
+  ///
+  /// Matched on (id, group) rather than id alone, because a comment id only identifies a row
+  /// on its own server and two groups will happily both have a comment 15. The parent may
+  /// also be a shared comment, in which case the merged thread shows ONE representative and
+  /// the reply may point at any of its per-group copies - so every copy is a valid match.
+  /// Without that, a reply written by someone who only sees one group would lose its
+  /// "Replying to X" line for everyone reading the merged thread.
   String? _parentAuthorName(Comment c) {
     final pid = c.parentCommentId;
     if (pid == null) return null;
     for (final other in _comments) {
       if (other.id == pid && other.groupId == c.groupId) return other.authorName;
+      for (final copy in other.copies) {
+        if (copy.commentId == pid && copy.groupId == c.groupId) return other.authorName;
+      }
     }
     return null;
   }
@@ -315,16 +335,27 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     //
     // A reply is pinned to its parent's group (see _startReply), so it never fans out: the
     // parent comment id it carries only means anything on that one server.
-    final replyToId = _replyTo?.id;
-    final targets = replyToId != null
-        ? [
-            _sendTargets().firstWhere((t) => t.groupId == _replyTo!.groupId,
-                orElse: () => _sendTargets().first)
-          ]
-        : _sendTargets();
+    final replyTo = _replyTo;
+    // A reply carries a parentCommentId, and that id means something on exactly one server -
+    // so a reply can never simply be broadcast the way a fresh comment is. It goes to the
+    // groups that hold the comment being answered, each with THAT group's own parent id.
+    //
+    // For an ordinary single-group comment that is one group, which is what "limit a reply to
+    // the group of the person you are replying to" means. For a comment that was itself sent
+    // everywhere, it is every group that can see it - otherwise replying to something the
+    // whole group read would answer only whichever server happened to answer first, and the
+    // other groups would see the question and never the answer.
+    final List<({int postId, String? groupId, int? parentId})> targets;
+    if (replyTo != null) {
+      targets = _replyTargets(replyTo);
+    } else {
+      targets = [
+        for (final t in _sendTargets()) (postId: t.postId, groupId: t.groupId, parentId: null)
+      ];
+    }
     final crossCommentId = targets.length > 1 ? _newCrossCommentId() : null;
     final added = <Comment>[];
-    var anyFailed = false;
+    var failedCount = 0;
     for (final target in targets) {
       try {
         final api = ref.read(contentApiProvider(target.groupId));
@@ -335,10 +366,14 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
           mediaId = await api.uploadImageBytes(gifBytes, filename: _pendingGifName ?? 'reply.gif');
         }
         final c = await api.addComment(target.postId, text,
-            parentCommentId: replyToId, mediaId: mediaId, crossCommentId: crossCommentId);
+            parentCommentId: target.parentId,
+            mediaId: mediaId,
+            // Withheld from a server that would reject the unknown field. That copy simply
+            // does not collapse with the others - see _supportsSharedId.
+            crossCommentId: _supportsSharedId(target.groupId) ? crossCommentId : null);
         added.add(c.withGroup(_isCrossPost ? target.groupId : null));
       } catch (_) {
-        anyFailed = true;
+        failedCount++;
       }
     }
     if (!mounted) return;
@@ -359,12 +394,14 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       _pendingGifName = null;
       _sending = false;
     });
-    if (anyFailed) {
+    if (failedCount > 0) {
       // Partial success is worth saying out loud: the comment is up, but not everywhere the
       // member asked for, and silently pretending otherwise would leave them believing a
-      // group had seen something it never received.
+      // group had seen something it never received. Counted rather than hardcoded to "one" -
+      // saying one group failed when two did is its own small lie.
+      final groups = failedCount == 1 ? '1 group' : '$failedCount groups';
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Posted, but one group didn't get it")),
+        SnackBar(content: Text("Posted, but $groups didn't get it")),
       );
     }
   }
@@ -418,18 +455,56 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       final first = copies.first;
       return [(postId: first.postId, groupId: first.groupId)];
     }
-    final capable = [
-      for (final c in copies)
-        if (_account(c.groupId)?.crossComments ?? false) (postId: c.postId, groupId: c.groupId),
-    ];
-    // Every group predating the capability: fall back to the single-group behaviour rather
-    // than silently sending nowhere.
-    if (capable.isEmpty) {
-      final first = copies.first;
-      return [(postId: first.postId, groupId: first.groupId)];
-    }
-    return capable;
+    return [for (final c in copies) (postId: c.postId, groupId: c.groupId)];
   }
+
+  /// Where a reply goes: every group holding the comment being answered, each paired with
+  /// the parent id that group's own server issued.
+  ///
+  /// A comment sent to several groups keeps its per-group copies (see Comment.copies), so
+  /// the reply can reach all of them. One that was only ever in one group resolves to that
+  /// group alone. A copy whose group is no longer reachable is dropped rather than guessed
+  /// at - sending another server's comment id would attach the reply to whatever unrelated
+  /// row happens to hold that number.
+  List<({int postId, String? groupId, int? parentId})> _replyTargets(Comment replyTo) {
+    final copies = widget.copies;
+    int? postIdIn(String groupId) {
+      if (copies == null) return widget.postId;
+      for (final c in copies) {
+        if (c.groupId == groupId) return c.postId;
+      }
+      return null;
+    }
+
+    if (replyTo.copies.length > 1) {
+      final out = <({int postId, String? groupId, int? parentId})>[];
+      for (final copy in replyTo.copies) {
+        final postId = postIdIn(copy.groupId);
+        if (postId != null && _account(copy.groupId) != null) {
+          out.add((postId: postId, groupId: copy.groupId, parentId: copy.commentId));
+        }
+      }
+      if (out.isNotEmpty) return out;
+    }
+    final gid = replyTo.groupId;
+    final postId = gid == null ? widget.postId : postIdIn(gid);
+    return [
+      (postId: postId ?? widget.postId, groupId: gid ?? widget.groupId, parentId: replyTo.id)
+    ];
+  }
+
+  /// Whether this target's server understands the shared id.
+  ///
+  /// A group whose server predates it still RECEIVES the comment - it is simply sent without
+  /// the id, exactly as a single-group comment always was. An earlier version dropped such a
+  /// group from the fan-out entirely, which silently reduced "everyone" to "everyone with an
+  /// up-to-date server" with no failure and no cue anywhere in the UI: the member had every
+  /// reason to think they had spoken to all their groups.
+  ///
+  /// The cost of sending anyway is that the copy on the old server carries no id, so someone
+  /// in that group AND another sees the comment twice until its host updates. A visible
+  /// duplicate is a far smaller harm than words that never arrived, and it repairs itself.
+  bool _supportsSharedId(String? groupId) => _account(groupId)?.crossComments ?? false;
 
   ServerAccount? _account(String? groupId) {
     if (groupId == null) return null;

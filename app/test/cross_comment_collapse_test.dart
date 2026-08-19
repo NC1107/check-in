@@ -182,4 +182,39 @@ void main() {
       expect(post.totalComments, 6);
     });
   });
+
+  group('collapsing keeps every copy addressable', () {
+    // A comment id means something on exactly one server. Collapsing used to keep only the
+    // representative and drop the rest, which left a shared comment addressable in one group
+    // only - so a reply to it could reach whichever server merely happened to answer first.
+    test('the representative carries one copy per group', () {
+      final collapsed = collapseCrossComments([
+        comment(10, crossCommentId: 'shared', groupId: 'a', minute: 1),
+        comment(15, crossCommentId: 'shared', groupId: 'b', minute: 2),
+        comment(21, crossCommentId: 'shared', groupId: 'c', minute: 3),
+      ]);
+
+      expect(collapsed, hasLength(1));
+      final only = collapsed.single;
+      expect(only.isShared, isTrue);
+      expect(only.copies.map((c) => '${c.groupId}:${c.commentId}'),
+          containsAll(['a:10', 'b:15', 'c:21']),
+          reason: 'each group must keep the id its own server issued');
+    });
+
+    test('an ordinary single-group comment is not marked shared', () {
+      final collapsed = collapseCrossComments([comment(3, groupId: 'a')]);
+      expect(collapsed.single.isShared, isFalse);
+      expect(collapsed.single.copies, isEmpty);
+    });
+
+    test('a shared comment reaching only one group is not treated as shared', () {
+      // A fan-out where every other leg failed. There is one place to reply, so it must
+      // behave exactly like an ordinary comment rather than claiming to span groups.
+      final collapsed = collapseCrossComments([
+        comment(10, crossCommentId: 'shared', groupId: 'a'),
+      ]);
+      expect(collapsed.single.isShared, isFalse);
+    });
+  });
 }

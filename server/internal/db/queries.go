@@ -574,12 +574,20 @@ func (d *DB) SetNotificationPrefs(ctx context.Context, userID int64, p NotifyPre
 // TokensForNewPost returns the device tokens of every active member who wants new-post
 // notifications, excluding the post's author. Members on a digest are excluded: their
 // check-ins arrive as one summary at their chosen hour instead of a ping each.
+// Every TokensFor* query below excludes a recipient who has blocked the person the
+// notification is about. Blocking is asymmetric here - PostVisible only filters against the
+// VIEWER's own block list - so a blocked member can still post and comment perfectly well;
+// what must not happen is the blocked person's name arriving on the blocker's lock screen.
+// Without this the push actively advertises content the recipient's own feed then hides,
+// which is the worst of both: the notification cannot be acted on and should never have
+// been sent.
 func (d *DB) TokensForNewPost(ctx context.Context, authorID int64) ([]string, error) {
 	return d.scanTokens(ctx, `
 		SELECT dt.token FROM device_tokens dt
 		JOIN users u ON u.id = dt.user_id
 		WHERE u.status = 'active' AND u.notify_posts = TRUE
-		  AND u.digest_enabled = FALSE AND u.id <> $1`, authorID)
+		  AND u.digest_enabled = FALSE AND u.id <> $1
+		  AND $1 NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = u.id)`, authorID)
 }
 
 // DigestDue is one member whose digest hour has arrived, with the window to summarize.
@@ -658,7 +666,9 @@ func (d *DB) TokensForReply(ctx context.Context, postID, commenterID int64) ([]s
 		JOIN posts p ON p.id = $1
 		JOIN users u ON u.id = p.author_id
 		WHERE dt.user_id = p.author_id AND u.status = 'active'
-		  AND u.notify_replies = TRUE AND p.author_id <> $2`, postID, commenterID)
+		  AND u.notify_replies = TRUE AND p.author_id <> $2
+		  AND $2 NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = p.author_id)`,
+		postID, commenterID)
 }
 
 // TokensForCommentReply returns the parent comment author's device tokens when someone
@@ -672,7 +682,8 @@ func (d *DB) TokensForCommentReply(ctx context.Context, parentCommentID, replier
 		JOIN posts p ON p.id = pc.post_id
 		JOIN users u ON u.id = pc.user_id
 		WHERE dt.user_id = pc.user_id AND u.status = 'active'
-		  AND u.notify_replies = TRUE AND pc.user_id <> $2 AND pc.user_id <> p.author_id`,
+		  AND u.notify_replies = TRUE AND pc.user_id <> $2 AND pc.user_id <> p.author_id
+		  AND $2 NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = pc.user_id)`,
 		parentCommentID, replierID)
 }
 
@@ -684,7 +695,9 @@ func (d *DB) TokensForLike(ctx context.Context, postID, likerID int64) ([]string
 		JOIN posts p ON p.id = $1
 		JOIN users u ON u.id = p.author_id
 		WHERE dt.user_id = p.author_id AND u.status = 'active'
-		  AND u.notify_likes = TRUE AND p.author_id <> $2`, postID, likerID)
+		  AND u.notify_likes = TRUE AND p.author_id <> $2
+		  AND $2 NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id = p.author_id)`,
+		postID, likerID)
 }
 
 func (d *DB) scanTokens(ctx context.Context, sql string, args ...any) ([]string, error) {
