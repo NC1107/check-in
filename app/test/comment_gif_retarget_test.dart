@@ -7,7 +7,6 @@ import 'package:checkin/api/models.dart';
 import 'package:checkin/features/post/post_detail_screen.dart';
 import 'package:checkin/state/app_state.dart';
 import 'package:checkin/theme/tokens.dart';
-import 'package:checkin/widgets/auth_image.dart';
 
 /// A group-scoped ApiClient stub: getPost/comments answer this group's own thread, gifSearch
 /// hands back one canned result, and uploadImageBytes records that this group's server (not
@@ -62,6 +61,52 @@ class _FakeApi extends ApiClient {
 /// not silently carry over to the new target. Media ids are only unique per server (see
 /// AuthImage's own doc comment), so leaking one across groups is either a broken thumbnail
 /// or, worse, an id collision attaching the wrong media entirely.
+/// A valid 1x1 transparent GIF - the smallest thing Image.memory will actually decode.
+final _onePixelGif = <int>[
+  71,
+  73,
+  70,
+  56,
+  57,
+  97,
+  1,
+  0,
+  1,
+  0,
+  128,
+  0,
+  0,
+  0,
+  0,
+  0,
+  255,
+  255,
+  255,
+  33,
+  249,
+  4,
+  1,
+  0,
+  0,
+  0,
+  0,
+  44,
+  0,
+  0,
+  0,
+  0,
+  1,
+  0,
+  1,
+  0,
+  0,
+  2,
+  1,
+  68,
+  0,
+  59
+];
+
 void main() {
   final me = User(id: 1, name: 'Nick', phone: '+15550001111', isAdmin: false);
 
@@ -74,6 +119,7 @@ void main() {
         createdAt: DateTime(2026, 1, 1),
         likeCount: 0,
         commentCount: 0,
+        sharedCommentCount: 0,
         likedByViewer: false,
         groupId: groupId,
       );
@@ -89,8 +135,22 @@ void main() {
       );
 
   const copies = [
-    (groupId: 'alpha.invalid', postId: 1, likeCount: 0, commentCount: 0, likedByViewer: false),
-    (groupId: 'beta.invalid', postId: 2, likeCount: 0, commentCount: 0, likedByViewer: false),
+    (
+      groupId: 'alpha.invalid',
+      postId: 1,
+      likeCount: 0,
+      commentCount: 0,
+      sharedCommentCount: 0,
+      likedByViewer: false
+    ),
+    (
+      groupId: 'beta.invalid',
+      postId: 2,
+      likeCount: 0,
+      commentCount: 0,
+      sharedCommentCount: 0,
+      likedByViewer: false
+    ),
   ];
 
   Future<void> pumpCrossPost(
@@ -119,7 +179,10 @@ void main() {
           groupId: 'alpha.invalid',
           copies: copies,
           // No network: the download step is stubbed the same way search and upload are.
-          gifDownloader: (url) async => const [1, 2, 3],
+          // Real (if tiny) gif bytes rather than three arbitrary numbers - the staged gif is
+          // now decoded locally for its preview, so undecodable filler would only ever
+          // exercise the error path.
+          gifDownloader: (url) async => _onePixelGif,
         ),
       ),
     ));
@@ -144,6 +207,11 @@ void main() {
     await settle(tester);
   }
 
+  /// The staged gif's own preview. It is rendered straight from the picked bytes now - the
+  /// gif is not uploaded anywhere until send, precisely so it can go to several servers -
+  /// so it is a memory image rather than an AuthImage fetched back from one of them.
+  Finder pendingGifThumb() => find.byWidgetPredicate((w) => w is Image && w.image is MemoryImage);
+
   testWidgets('a pending gif floats free of the composer bar', (tester) async {
     final alphaApi =
         _FakeApi(groupId: 'alpha.invalid', post: post('alpha.invalid', 1), uploadedMediaId: 100);
@@ -152,10 +220,10 @@ void main() {
     await pumpCrossPost(tester, alphaApi: alphaApi, betaApi: betaApi);
     await attachAGif(tester);
 
-    expect(find.byType(AuthImage), findsOneWidget);
+    expect(pendingGifThumb(), findsOneWidget);
     expect(
       find.ancestor(
-        of: find.byType(AuthImage),
+        of: pendingGifThumb(),
         matching: find.byWidgetPredicate((w) =>
             w is Container &&
             w.decoration is BoxDecoration &&
@@ -167,28 +235,31 @@ void main() {
     );
   });
 
-  testWidgets('switching the target group via the chip clears a pending gif', (tester) async {
+  testWidgets('a pending gif survives switching the target group', (tester) async {
     final alphaApi =
         _FakeApi(groupId: 'alpha.invalid', post: post('alpha.invalid', 1), uploadedMediaId: 100);
     final betaApi =
         _FakeApi(groupId: 'beta.invalid', post: post('beta.invalid', 2), uploadedMediaId: 200);
     await pumpCrossPost(tester, alphaApi: alphaApi, betaApi: betaApi);
 
-    expect(find.byType(AuthImage), findsNothing);
+    expect(pendingGifThumb(), findsNothing);
     await attachAGif(tester);
-    // Attached against the default target (the first copy, alpha).
-    expect(alphaApi.uploadCalls, 1);
+    // Nothing is uploaded at pick time any more: the gif is staged as bytes so it can be
+    // re-hosted on whichever servers the comment actually goes to.
+    expect(alphaApi.uploadCalls, 0);
     expect(betaApi.uploadCalls, 0);
-    expect(find.byType(AuthImage), findsOneWidget, reason: 'the pending gif thumbnail');
+    expect(pendingGifThumb(), findsOneWidget, reason: 'the pending gif thumbnail');
 
     await tester.tap(find.text('Beta'));
     await tester.pump();
 
-    expect(find.byType(AuthImage), findsNothing,
-        reason: 'a gif uploaded to alpha must not survive a retarget to beta');
+    // The old behaviour dropped it here, because the id belonged to alpha's server and
+    // meant nothing on beta's. Bytes belong to no server, so there is nothing to drop.
+    expect(pendingGifThumb(), findsOneWidget,
+        reason: 'a staged gif is server-agnostic and must survive a retarget');
   });
 
-  testWidgets('replying to a comment on a different group clears a pending gif', (tester) async {
+  testWidgets('replying to a comment on a different group keeps a pending gif', (tester) async {
     final alphaApi =
         _FakeApi(groupId: 'alpha.invalid', post: post('alpha.invalid', 1), uploadedMediaId: 100);
     final betaApi = _FakeApi(
@@ -207,13 +278,13 @@ void main() {
     await pumpCrossPost(tester, alphaApi: alphaApi, betaApi: betaApi);
 
     await attachAGif(tester);
-    expect(find.byType(AuthImage), findsOneWidget, reason: 'the pending gif thumbnail');
+    expect(pendingGifThumb(), findsOneWidget, reason: 'the pending gif thumbnail');
 
     await tester.tap(find.text('Reply'));
     await tester.pump();
 
     expect(find.text('Replying to Robin'), findsOneWidget);
-    expect(find.byType(AuthImage), findsNothing,
-        reason: 'a reply that retargets to beta must drop the gif uploaded to alpha');
+    expect(pendingGifThumb(), findsOneWidget,
+        reason: 'the staged gif belongs to no server, so pinning the reply to beta keeps it');
   });
 }

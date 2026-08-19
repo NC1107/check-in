@@ -37,6 +37,7 @@ import (
 
 	"github.com/nc1107/check-in/server/internal/config"
 	"github.com/nc1107/check-in/server/internal/db"
+	"github.com/nc1107/check-in/server/internal/push"
 	"github.com/nc1107/check-in/server/internal/storage"
 )
 
@@ -63,12 +64,23 @@ var (
 // The pool is never closed. Closing it at the end of a test would race the goroutines the
 // handlers fan work out to (notifyPost and friends), which outlive the request that started
 // them; letting the process exit take the pool with it costs nothing and removes the race.
-func openTestDB(t *testing.T) *db.DB {
+// primaryTestDBURL is the connection string the suite was pointed at, or "" when it was
+// not - callers that must have one use requireTestDBURL.
+func primaryTestDBURL() string { return os.Getenv(testDBEnv) }
+
+// requireTestDBURL skips the calling test when no database was supplied.
+func requireTestDBURL(t *testing.T) string {
 	t.Helper()
-	url := os.Getenv(testDBEnv)
+	url := primaryTestDBURL()
 	if url == "" {
 		t.Skipf("%s is not set - skipping the DB-backed integration tests", testDBEnv)
 	}
+	return url
+}
+
+func openTestDB(t *testing.T) *db.DB {
+	t.Helper()
+	url := requireTestDBURL(t)
 	testDBOnce.Do(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
@@ -153,9 +165,33 @@ func newHarness(t *testing.T) *harness {
 // newHarnessWithConfig is newHarness with a chance to tweak the config before the server is
 // built - for the handful of tests that need something newHarness's fixed cfg doesn't set
 // (e.g. a Klipy key), without disturbing every other test's baseline config.
+// newHarnessWithNotifier is newHarness with a push Notifier attached, for the tests that
+// need to observe what the handlers actually hand the push layer.
+func newHarnessWithNotifier(t *testing.T, n push.Notifier) *harness {
+	t.Helper()
+	return newHarnessWith(t, nil, n)
+}
+
 func newHarnessWithConfig(t *testing.T, mutate func(*config.Config)) *harness {
 	t.Helper()
-	database := openTestDB(t)
+	return newHarnessWith(t, mutate, nil)
+}
+
+// newHarnessOnSecondDB builds a harness against the SECOND database, for the two-server
+// tests. Everything above the database is a fresh, independent instance of the same code.
+func newHarnessOnSecondDB(t *testing.T) *harness {
+	t.Helper()
+	return newHarnessOn(t, openSecondTestDB(t), nil, nil)
+}
+
+func newHarnessWith(t *testing.T, mutate func(*config.Config), notifier push.Notifier) *harness {
+	t.Helper()
+	return newHarnessOn(t, openTestDB(t), mutate, notifier)
+}
+
+func newHarnessOn(t *testing.T, database *db.DB, mutate func(*config.Config),
+	notifier push.Notifier) *harness {
+	t.Helper()
 	resetDB(t, database)
 
 	dir := t.TempDir()
@@ -173,9 +209,10 @@ func newHarnessWithConfig(t *testing.T, mutate func(*config.Config)) *harness {
 	if mutate != nil {
 		mutate(&cfg)
 	}
-	// A genuinely nil Notifier, so every notify* helper returns before touching the database.
-	// Push has its own tests; here it would only add goroutines racing the test's end.
-	srv := New(cfg, database, store, nil)
+	// Usually a genuinely nil Notifier, so every notify* helper returns before touching the
+	// database - most tests care about the response, and push would only add goroutines
+	// racing the test's end. The tests that DO care pass one in (see newHarnessWithNotifier).
+	srv := New(cfg, database, store, notifier)
 	ts := httptest.NewServer(srv.Router())
 	t.Cleanup(ts.Close)
 

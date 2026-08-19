@@ -39,6 +39,22 @@ void main() {
     expect(info.commentMedia, isTrue);
   });
 
+  test('ServerInfo reads crossComments, and treats its absence as no', () {
+    // This one fails quietly in BOTH directions, which is why it is worth pinning.
+    //
+    // If the parse were missing, every group would read as incapable: comments would still
+    // send, but never carry a shared id, so nothing would ever collapse and a member of
+    // three groups would be shown one sentence three times and notified three times - with
+    // no error anywhere to explain it.
+    //
+    // Defaulting the other way is worse: sending the field to a server that predates it
+    // fails the whole request (DisallowUnknownFields), so an absent key must mean no.
+    expect(ServerInfo.fromJson({'crossComments': true}).crossComments, isTrue);
+    expect(ServerInfo.fromJson(const {}).crossComments, isFalse,
+        reason: 'an older server does not send the key at all, and must never be guessed '
+            'capable - the comment would 400 rather than degrade');
+  });
+
   test('GifResult.fromJson parses a slim gif result and derives its aspect ratio', () {
     final g = GifResult.fromJson({
       'id': '123',

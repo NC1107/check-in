@@ -137,6 +137,15 @@ type Post struct {
 	Lat *float64 `json:"lat,omitempty"`
 	Lng *float64 `json:"lng,omitempty"`
 
+	// SharedCommentCount is how many of this copy's comments carry a cross_comment_id, i.e.
+	// were written once and sent to every group holding a copy of this check-in.
+	//
+	// It exists so the multi-group client can total comments across copies without counting
+	// a shared one once per group. A shared comment appears in EVERY copy, so the distinct
+	// total is the sum of each copy's group-only comments plus the shared ones counted once:
+	// see the client's own Post.totalComments. This server cannot compute that itself - it
+	// can see that a comment is shared, but not which other servers also hold it.
+	SharedCommentCount int `json:"sharedCommentCount"`
 	// CrossPostID groups the copies of one post shared to several groups at once, so the
 	// multi-group client can collapse them into a single card. Null for a single-group post.
 	CrossPostID *string `json:"crossPostId,omitempty"`
@@ -330,6 +339,10 @@ type Comment struct {
 	// MediaID is a gif attached to the comment (re-hosted, never a hotlink). A comment may
 	// carry one and no body at all - see the empty-body allowance in handleAddComment.
 	MediaID *int64 `json:"mediaId,omitempty"`
+	// CrossCommentID groups the copies of one comment sent to several groups at once, so the
+	// multi-group client can show it once instead of once per group. Opaque and
+	// client-generated - each group is its own server, so nothing here coordinates them.
+	CrossCommentID *string `json:"crossCommentId,omitempty"`
 }
 
 // PreviewBody is what a plain-text summary of this comment should show: the body, or "GIF"

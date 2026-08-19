@@ -19,6 +19,15 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.24',
+    highlights: [
+      'You can put photos and a video in the same check-in now. It used to be one or the other for no particular reason.',
+      'Memories has a filter next to the title for picking which group you are looking at, instead of the row of group buttons.',
+      "Commenting on a check-in you shared to several groups now goes to all of them at once, which is what it should have done from the start. You can still pick one group if you'd rather.",
+      'A comment sent to every group shows up once instead of once per group, and only notifies people once. Same for a gif.',
+    ],
+  ),
+  ReleaseNote(
     version: '1.23',
     highlights: [
       'Places opens straight onto the map now, full screen, with the map and list toggle in the top left corner.',

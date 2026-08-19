@@ -12,9 +12,11 @@ jobs:
     defaults:
       run:
         working-directory: server
-    # Throwaway database for the DB-backed handler tests. They skip themselves when
-    # TESTDB_URL is unset, so `go test ./...` on a laptop with no Postgres stays green - CI
-    # always sets it, which is what keeps that skip from quietly becoming permanent.
+    # Throwaway database for the DB-backed handler tests, which are most of the suite.
+    # Without TESTDB_URL those tests refuse to run rather than skipping (see
+    # internal/api/main_test.go's requireTestDB), so this service container is what makes
+    # the job meaningful rather than merely green. Locally, server/scripts/test.sh sets up
+    # the same thing.
     services:
       postgres:
         image: postgres:16

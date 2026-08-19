@@ -44,6 +44,40 @@ void main() {
     expect(uploadKindFor('/tmp/photo.jpg'), UploadKind.reencodeImage);
   });
 
+  group('photos and a clip in one post', () {
+    // The server has always accepted this - its kindFor labels a post "video" if ANY
+    // attachment is one - so the old "photos or a clip, never both" rule was a client
+    // restriction with nothing behind it.
+    test('a clip takes one of the same ten slots photos do', () {
+      expect(photoCapacity(hasClip: false, photos: 0), 10);
+      expect(photoCapacity(hasClip: true, photos: 0), 9,
+          reason: 'ten photos plus a clip would be eleven attachments, which the server '
+              'refuses');
+      expect(photoCapacity(hasClip: true, photos: 9), 0);
+    });
+
+    test('capacity never goes negative, however it was overfilled', () {
+      expect(photoCapacity(hasClip: true, photos: 10), 0);
+      expect(photoCapacity(hasClip: true, photos: 40), 0);
+    });
+
+    test('the clip is uploaded first, so it is the mixed post\'s cover', () {
+      expect(orderedAttachments<int>(clip: 7, photos: [1, 2, 3]), [7, 1, 2, 3]);
+    });
+
+    test('photos keep the order they were added', () {
+      expect(orderedAttachments<int>(clip: null, photos: [3, 1, 2]), [3, 1, 2]);
+    });
+
+    test('a clip on its own is still just one attachment', () {
+      expect(orderedAttachments<int>(clip: 7, photos: const []), [7]);
+    });
+
+    test('no attachments at all stays empty rather than becoming a null entry', () {
+      expect(orderedAttachments<int>(clip: null, photos: const []), isEmpty);
+    });
+  });
+
   group('the 10s clip cap', () {
     test('trims only a clip over ten seconds', () {
       // The boundary is what the server's cap and the trim sheet agree on, so the exact

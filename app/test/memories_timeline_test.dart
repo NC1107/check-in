@@ -453,7 +453,11 @@ void main() {
       await settle(tester);
       expect(find.text('August 2026'), findsOneWidget);
 
-      await tester.tap(find.text('b.invalid')); // the header's own group selector pill
+      // The group filter is a menu in the header now, so switching is two steps:
+      // open it, then pick.
+      await tester.tap(find.bySemanticsLabel(RegExp(r'^Filter by group')));
+      await settle(tester);
+      await tester.tap(find.text('b.invalid').last);
       await settle(tester);
 
       expect(find.text("This group doesn't support Month by month."), findsOneWidget);

@@ -25,7 +25,14 @@ import (
 func TestMigration0021ChangesDefaultOnlyLeavesExistingRowsAlone(t *testing.T) {
 	url := os.Getenv("TESTDB_URL")
 	if url == "" {
-		t.Skip("TESTDB_URL is not set - skipping the DB-backed migration test")
+		// Same rule as internal/api's own guard: a skip that only ever shows under -v, in a
+		// package whose "ok" is otherwise indistinguishable from a real pass, is how a whole
+		// suite quietly stops running. Skipping has to be chosen.
+		if os.Getenv("CHECKIN_SKIP_DB_TESTS") == "" {
+			t.Fatal("TESTDB_URL is not set. Run server/scripts/test.sh, or set " +
+				"CHECKIN_SKIP_DB_TESTS=1 to run without a database on purpose.")
+		}
+		t.Skip("TESTDB_URL is not set and CHECKIN_SKIP_DB_TESTS was set - skipping")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
