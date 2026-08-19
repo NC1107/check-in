@@ -99,7 +99,10 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	posts, err := s.db.Feed(r.Context(), viewer.ID, authorID, locations, before, beforeID, limit, false)
+	posts, err := s.db.Feed(r.Context(), db.FeedQuery{
+		ViewerID: viewer.ID, AuthorID: authorID, Locations: locations,
+		Before: before, BeforeID: beforeID, Limit: limit,
+	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
@@ -183,7 +186,10 @@ func (s *Server) handleUserPosts(w http.ResponseWriter, r *http.Request) {
 			before = &t
 		}
 	}
-	posts, err := s.db.Feed(r.Context(), userFrom(r).ID, &id, nil, before, nil, parseLimit(r, 30, 100), true)
+	posts, err := s.db.Feed(r.Context(), db.FeedQuery{
+		ViewerID: userFrom(r).ID, AuthorID: &id, Before: before,
+		Limit: parseLimit(r, 30, 100), ExcludeRecap: true,
+	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return

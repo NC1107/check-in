@@ -156,15 +156,29 @@ func (d *DB) SeedServerName(ctx context.Context, envName string) error {
 // ---- users ----
 
 // CreateUser inserts a new user and returns it.
-func (d *DB) CreateUser(ctx context.Context, phone, name, firstName, lastName string, birthday time.Time, profileMediaID *int64, passwordHash string, isAdmin bool) (User, error) {
-	var u User
+// NewUser is a signup's worth of user fields. A struct rather than a parameter list
+// because four of them are adjacent strings - phone, name, first and last - which a call
+// site can transpose without the compiler noticing.
+type NewUser struct {
+	Phone          string
+	Name           string
+	FirstName      string
+	LastName       string
+	Birthday       time.Time
+	ProfileMediaID *int64
+	PasswordHash   string
+	IsAdmin        bool
+}
+
+func (d *DB) CreateUser(ctx context.Context, u NewUser) (User, error) {
+	var out User
 	err := d.Pool.QueryRow(ctx, `
 		INSERT INTO users (phone, name, first_name, last_name, birthday, profile_media_id, password_hash, is_admin)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id, phone, name, first_name, last_name, birthday, profile_media_id, is_admin, status, created_at, title, title_set_at`,
-		phone, name, firstName, lastName, birthday, profileMediaID, passwordHash, isAdmin,
-	).Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt, &u.Title, &u.TitleSetAt)
-	return u, err
+		u.Phone, u.Name, u.FirstName, u.LastName, u.Birthday, u.ProfileMediaID, u.PasswordHash, u.IsAdmin,
+	).Scan(&out.ID, &out.Phone, &out.Name, &out.FirstName, &out.LastName, &out.Birthday, &out.ProfileMediaID, &out.IsAdmin, &out.Status, &out.CreatedAt, &out.Title, &out.TitleSetAt)
+	return out, err
 }
 
 // GetUserByPhone returns the user (and password hash) for login.
@@ -1017,7 +1031,24 @@ func dedupeExcluding(ids []int64, exclude int64) []int64 {
 // timeline (handleUserPosts), where a recap is a group artifact attributed to the admin
 // rather than something they personally posted, and does not belong in their history. The
 // main feed passes false: recaps belong there like any other post.
-func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, locations []string, before *time.Time, beforeID *int64, limit int, excludeRecap bool) ([]Post, error) {
+// FeedQuery is one feed read. A struct rather than a parameter list because the two
+// cursor halves and the two filters are all optional pointers, and a call site passing a
+// row of nils says nothing about which is which.
+type FeedQuery struct {
+	ViewerID  int64
+	AuthorID  *int64   // nil for everyone
+	Locations []string // empty or nil for no location filter
+	Before    *time.Time
+	BeforeID  *int64
+	Limit     int
+	// ExcludeRecap drops kind = 'recap' posts entirely - used for a member's personal
+	// profile; the main feed passes false, since recaps belong there like any other post.
+	ExcludeRecap bool
+}
+
+func (d *DB) Feed(ctx context.Context, q FeedQuery) ([]Post, error) {
+	viewerID, authorID, locations := q.ViewerID, q.AuthorID, q.Locations
+	before, beforeID, limit, excludeRecap := q.Before, q.BeforeID, q.Limit, q.ExcludeRecap
 	rows, err := d.Pool.Query(ctx, `
 		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id, p.lat, p.lng,
 		       CASE WHEN p.kind = 'recap' THEN sc.name ELSE u.name END,

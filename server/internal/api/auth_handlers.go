@@ -478,9 +478,15 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := s.db.CreateUser(r.Context(), phone, name,
-		strings.TrimSpace(req.FirstName), strings.TrimSpace(req.LastName),
-		birthday, nil, hash, isAdmin)
+	user, err := s.db.CreateUser(r.Context(), db.NewUser{
+		Phone:        phone,
+		Name:         name,
+		FirstName:    strings.TrimSpace(req.FirstName),
+		LastName:     strings.TrimSpace(req.LastName),
+		Birthday:     birthday,
+		PasswordHash: hash,
+		IsAdmin:      isAdmin,
+	})
 	if err != nil {
 		writeErr(w, http.StatusConflict, "could not create account (phone may already exist)")
 		return
