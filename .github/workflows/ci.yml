@@ -5,10 +5,13 @@ on:
   push:
     branches-ignore: [main]
 
+# Least privilege per job rather than whatever the repository default happens to be.
 jobs:
   server:
     name: Server (Go)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: server
@@ -50,6 +53,8 @@ jobs:
   app:
     name: App (Flutter)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: app

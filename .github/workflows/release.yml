@@ -9,12 +9,10 @@ on:
   push:
     branches: [main]
 
-# No workflow-wide write. Each job below declares only what it needs, so a step in an
-# unrelated job - or an action compromised upstream - cannot push a package or a release
-# just because the pipeline as a whole is allowed to.
-permissions:
-  contents: read
-
+# No workflow-wide permissions at all. Every job below states exactly what it needs, so a
+# step in an unrelated job - or an action compromised upstream - cannot push a package or a
+# release just because the pipeline as a whole was allowed to. Read is not free either: it
+# is what lets a job see the repository, so the jobs that only consume artifacts say so.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -26,6 +24,8 @@ jobs:
   test-server:
     name: Test server (Go)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: server
@@ -65,6 +65,8 @@ jobs:
   test-app:
     name: Test app (Flutter)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: app
@@ -210,6 +212,8 @@ jobs:
     needs: version
     if: needs.version.outputs.new_tag != ''
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
@@ -272,6 +276,8 @@ jobs:
       needs.version.outputs.has_play == 'true' &&
       needs.version.outputs.new_tag != ''
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
@@ -308,6 +314,8 @@ jobs:
       needs.version.outputs.has_appstore == 'true' &&
       needs.version.outputs.new_tag != ''
     runs-on: macos-15
+    permissions:
+      contents: read
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
