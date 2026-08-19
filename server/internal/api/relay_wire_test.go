@@ -78,8 +78,19 @@ func (f *fakeRelay) waitForMessages(t *testing.T, want int) []map[string]any {
 		if req.Auth != "Bearer test-relay-key" {
 			t.Errorf("auth header = %q, want the server's registration key", req.Auth)
 		}
-		for _, m := range req.Body["messages"].([]any) {
-			msgs = append(msgs, m.(map[string]any))
+		// Checked rather than asserted outright: if the body ever stops being the shape
+		// this expects, that IS the finding, and it should be reported as one rather than
+		// panicking with a type-assertion trace that says nothing about the contract.
+		raw, ok := req.Body["messages"].([]any)
+		if !ok {
+			t.Fatalf("relay body has no messages array: %v", req.Body)
+		}
+		for _, m := range raw {
+			msg, ok := m.(map[string]any)
+			if !ok {
+				t.Fatalf("relay message is not an object: %v", m)
+			}
+			msgs = append(msgs, msg)
 		}
 	}
 	return msgs
