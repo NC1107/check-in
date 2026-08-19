@@ -99,7 +99,7 @@ void main() {
       expect(screen, isA<ProfileScreen>());
     });
 
-    testWidgets('an unknown groupId falls back to the current account, not a crash',
+    testWidgets('an unknown groupId opens an ordinary profile rather than guessing it is you',
         (tester) async {
       late BuildContext ctx;
       final controller =
@@ -113,9 +113,16 @@ void main() {
       ));
 
       final screen = ProfileScreen.resolve(ctx, userId: me.id, groupId: 'no-such-group');
-      // byId('no-such-group') misses, contentAccountProvider falls back to currentAccount
-      // (the only signed-in group), so this is still recognised as "me".
-      expect(screen, isA<MyProfileScreen>());
+      // "Is this me?" is decided by comparing a user id against the signed-in user of the
+      // group the id CAME FROM. When that group is unknown there is nothing valid to
+      // compare against: user ids are per-server, so checking it against whichever group
+      // happens to be current can answer "yes, that's you" about a completely different
+      // person who merely holds the same number there.
+      //
+      // So resolve declines to shortcut and opens the ordinary profile, which loads (or
+      // fails) honestly. The original point of this test still holds - it must not crash.
+      expect(screen, isA<ProfileScreen>());
+      expect(screen, isNot(isA<MyProfileScreen>()));
     });
   });
 }

@@ -55,6 +55,11 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		// carrying mediaId (DisallowUnknownFields), so the client gates sending mediaId on
 		// this key being present at all, not on it being true.
 		"commentMedia": true,
+		// crossComments is the capability signal for addComment's own crossCommentId. A
+		// server predating it rejects unknown JSON fields (DisallowUnknownFields), so a
+		// client must only send that field once it has seen this key - otherwise commenting
+		// on a cross-posted check-in would 400 against any group not yet updated.
+		"crossComments": true,
 		// recap is this server's capability signal for the whole recap feature: lat/lng in
 		// createPost, and the recapCadence/recapWeekday/recapHour/recapOffset fields below
 		// and on PATCH /api/admin/server. This server rejects unknown JSON fields

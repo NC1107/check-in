@@ -419,13 +419,16 @@ class ApiClient {
   }
 
   /// addComment posts a comment. [mediaId] must only be sent to a server whose server-info
-  /// advertises `commentMedia` - an older server 400s on the unknown field
+  /// advertises `commentMedia`, and [crossCommentId] only to one advertising
+  /// `crossComments` - an older server 400s on either unknown field
   /// (DisallowUnknownFields); callers gate on that before ever passing one.
-  Future<Comment> addComment(int postId, String body, {int? parentCommentId, int? mediaId}) async {
+  Future<Comment> addComment(int postId, String body,
+      {int? parentCommentId, int? mediaId, String? crossCommentId}) async {
     final r = await _dio.post('/api/posts/$postId/comments', data: {
       'body': body,
       if (parentCommentId != null) 'parentCommentId': parentCommentId,
       if (mediaId != null) 'mediaId': mediaId,
+      if (crossCommentId != null) 'crossCommentId': crossCommentId,
     });
     return Comment.fromJson(r.data as Map<String, dynamic>);
   }

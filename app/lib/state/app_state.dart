@@ -27,6 +27,7 @@ class ServerAccount {
     this.mediaTypes = const ['image'],
     this.gifSearch = false,
     this.commentMedia = false,
+    this.crossComments = false,
     this.recapCapable = false,
     this.memoriesCapable = false,
     this.eventsCapable = false,
@@ -69,6 +70,12 @@ class ServerAccount {
   /// server-info. An older server predates the field entirely (see [ServerInfo.commentMedia])
   /// and defaults to false, so the client never sends it a `mediaId` it would 400 on.
   final bool commentMedia;
+
+  /// Whether this group's server accepts a shared id on a comment, so one comment can be
+  /// sent to every group holding a copy of the same cross-post and shown once. An older
+  /// server predates the field and defaults to false, so the client sends it nothing it
+  /// would 400 on - and simply comments in that group on its own.
+  final bool crossComments;
 
   /// Whether this group's server understands the recap feature (see
   /// [ServerInfo.recapCapable]). Gates sending lat/lng on createPost, sending the recap
@@ -126,6 +133,7 @@ class ServerAccount {
     List<String>? mediaTypes,
     bool? gifSearch,
     bool? commentMedia,
+    bool? crossComments,
     bool? recapCapable,
     bool? memoriesCapable,
     bool? eventsCapable,
@@ -144,6 +152,7 @@ class ServerAccount {
       mediaTypes: mediaTypes ?? this.mediaTypes,
       gifSearch: gifSearch ?? this.gifSearch,
       commentMedia: commentMedia ?? this.commentMedia,
+      crossComments: crossComments ?? this.crossComments,
       recapCapable: recapCapable ?? this.recapCapable,
       memoriesCapable: memoriesCapable ?? this.memoriesCapable,
       eventsCapable: eventsCapable ?? this.eventsCapable,
@@ -359,6 +368,7 @@ class MultiSessionController extends Notifier<MultiSession> {
             mediaTypes: const ['image'],
             gifSearch: false,
             commentMedia: false,
+            crossComments: false,
             recapCapable: false,
             memoriesCapable: false,
             eventsCapable: false,
@@ -385,6 +395,7 @@ class MultiSessionController extends Notifier<MultiSession> {
           mediaTypes: e.mediaTypes,
           gifSearch: e.gifSearch,
           commentMedia: e.commentMedia,
+          crossComments: e.crossComments,
           recapCapable: e.recapCapable,
           memoriesCapable: e.memoriesCapable,
           eventsCapable: e.eventsCapable,
@@ -439,7 +450,9 @@ class MultiSessionController extends Notifier<MultiSession> {
       final nameChanged = info.name.isNotEmpty && info.name != g.serverName;
       final colorChanged = info.color != (g.color ?? '');
       final mediaChanged = !listEquals(info.mediaTypes, g.mediaTypes);
-      final gifChanged = info.gifSearch != g.gifSearch || info.commentMedia != g.commentMedia;
+      final gifChanged = info.gifSearch != g.gifSearch ||
+          info.commentMedia != g.commentMedia ||
+          info.crossComments != g.crossComments;
       final recapChanged = info.recapCapable != g.recapCapable;
       final memoriesChanged = info.memoriesCapable != g.memoriesCapable;
       final eventsChanged = info.eventsCapable != g.eventsCapable;
@@ -465,6 +478,7 @@ class MultiSessionController extends Notifier<MultiSession> {
                   mediaTypes: info.mediaTypes,
                   gifSearch: info.gifSearch,
                   commentMedia: info.commentMedia,
+                  crossComments: info.crossComments,
                   recapCapable: info.recapCapable,
                   memoriesCapable: info.memoriesCapable,
                   eventsCapable: info.eventsCapable,
@@ -505,6 +519,7 @@ class MultiSessionController extends Notifier<MultiSession> {
             mediaTypes: g.mediaTypes,
             gifSearch: g.gifSearch,
             commentMedia: g.commentMedia,
+            crossComments: g.crossComments,
             recapCapable: g.recapCapable,
             memoriesCapable: g.memoriesCapable,
             eventsCapable: g.eventsCapable,
@@ -645,6 +660,7 @@ class MultiSessionController extends Notifier<MultiSession> {
         List<String> mediaTypes,
         bool gifSearch,
         bool commentMedia,
+        bool crossComments,
         bool recapCapable,
         bool memoriesCapable,
         bool eventsCapable,
@@ -671,6 +687,7 @@ class MultiSessionController extends Notifier<MultiSession> {
             // hydrate refreshes it from server-info.
             gifSearch: e['gifSearch'] as bool? ?? false,
             commentMedia: e['commentMedia'] as bool? ?? false,
+            crossComments: e['crossComments'] as bool? ?? false,
             // Same story: absent means unknown, not capable - the next hydrate refreshes it.
             recapCapable: e['recapCapable'] as bool? ?? false,
             memoriesCapable: e['memoriesCapable'] as bool? ?? false,
@@ -698,6 +715,7 @@ class MultiSessionController extends Notifier<MultiSession> {
                 List<String> mediaTypes,
                 bool gifSearch,
                 bool commentMedia,
+                bool crossComments,
                 bool recapCapable,
                 bool memoriesCapable,
                 bool eventsCapable,
@@ -717,6 +735,7 @@ class MultiSessionController extends Notifier<MultiSession> {
           'mediaTypes': e.mediaTypes,
           'gifSearch': e.gifSearch,
           'commentMedia': e.commentMedia,
+          'crossComments': e.crossComments,
           'recapCapable': e.recapCapable,
           'memoriesCapable': e.memoriesCapable,
           'eventsCapable': e.eventsCapable,
@@ -771,9 +790,16 @@ final apiProvider = Provider<ApiClient>((ref) {
 /// Post.groupId). Null falls back to the current group, so single-group screens work
 /// unchanged.
 final contentAccountProvider = Provider.family<ServerAccount?, String?>((ref, groupId) {
+  // A NAMED group that is no longer signed in resolves to nothing, never to whichever group
+  // happens to be current. Post ids, comment ids and media ids are only unique per server,
+  // so substituting a different one does not fail - it addresses whatever unrelated row on
+  // that server happens to hold the same number, and nothing afterwards can tell. A member
+  // who signs out of a group while a reply to it is half-written is enough to reach this.
+  //
+  // A NULL groupId is different: it means "no particular group, use whatever is current",
+  // which is a deliberate absence rather than a stale reference, so it still falls back.
   if (groupId != null) {
-    final g = ref.watch(multiSessionProvider.select((s) => s.byId(groupId)));
-    if (g != null) return g;
+    return ref.watch(multiSessionProvider.select((s) => s.byId(groupId)));
   }
   return ref.watch(currentAccountProvider);
 });
@@ -982,6 +1008,47 @@ List<Post> mergeFeeds(Iterable<List<Post>> pages) {
   return merged;
 }
 
+/// Collapses comments sharing a [Comment.crossCommentId] into one entry.
+///
+/// One comment written once and sent to every group holding a copy of the same check-in
+/// arrives here as several rows, one per server, because each group IS a separate server
+/// and they have no way to know about each other. Showing them all would tell the author
+/// their own comment three times and tell a member of two groups the same thing twice.
+///
+/// The EARLIEST copy stands in as the representative, not the newest: the copies are the
+/// same text sent in one action, so the first one to land is the closest thing to when it
+/// was actually said, and picking it keeps a merged thread's ordering stable rather than
+/// letting a slow server shuffle a comment later in the conversation than it belongs.
+///
+/// A comment with no shared id passes through untouched - which is every comment on a
+/// single-group post, and every comment made before this existed.
+List<Comment> collapseCrossComments(List<Comment> comments) {
+  final groups = <String, List<Comment>>{};
+  final out = <Comment>[];
+  for (final c in comments) {
+    final id = c.crossCommentId;
+    if (id == null || id.isEmpty) {
+      out.add(c);
+      continue;
+    }
+    (groups[id] ??= []).add(c);
+  }
+  for (final entry in groups.values) {
+    entry.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    // The representative carries every copy's own (group, id) pair with it. A comment id is
+    // only meaningful on the server that issued it, so throwing the others away would leave
+    // the comment addressable in exactly one group - and a reply to it could then only ever
+    // reach that one, chosen by which server happened to answer first.
+    final copies = [
+      for (final c in entry)
+        if (c.groupId != null) (groupId: c.groupId!, commentId: c.id),
+    ];
+    out.add(entry.first.withCopies(copies));
+  }
+  out.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+  return out;
+}
+
 /// Collapses posts sharing a [Post.crossPostId] into one card carrying every copy the
 /// viewer can see (each on its own group's server). A copy only appears here if the viewer
 /// is in that group, so a single-group member's app never has more than one copy and sees
@@ -1011,6 +1078,7 @@ List<Post> collapseCrossPosts(List<Post> posts) {
           postId: p.id,
           likeCount: p.likeCount,
           commentCount: p.commentCount,
+          sharedCommentCount: p.sharedCommentCount,
           likedByViewer: p.likedByViewer,
         ),
     ];

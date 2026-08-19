@@ -1,5 +1,8 @@
 import 'dart:io';
 
+import 'dart:math';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gal/gal.dart';
@@ -73,6 +76,17 @@ class PostDetailScreen extends ConsumerStatefulWidget {
   ConsumerState<PostDetailScreen> createState() => _PostDetailScreenState();
 }
 
+/// A fresh opaque id tying the copies of one comment together across servers.
+///
+/// Random rather than derived from the content: two members could legitimately say the same
+/// word at the same moment, and collapsing those into one comment would delete someone's
+/// contribution. 128 bits from a secure source makes an accidental collision impossible in
+/// practice, which matters because a collision here would silently hide a real comment.
+String _newCrossCommentId() {
+  final r = Random.secure();
+  return List.generate(16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+}
+
 class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   final _comment = TextEditingController();
   final _commentFocus = FocusNode();
@@ -88,25 +102,37 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   bool _didFocusComments = false;
   // Cross-post only: which group a new comment posts to (defaults to the first copy). Like
   // state is read from the app-wide likesProvider, so it stays in step with the feed card.
+  /// Which group a new comment goes to, or null for "every group holding a copy".
+  ///
+  /// Null is the default on a cross-post: the check-in itself went to all of them, so a
+  /// reply to it going to one by default was the odd half of that pair.
   String? _composeGroupId;
+
+  /// A picked gif held as its own bytes rather than an uploaded media id.
+  ///
+  /// Media ids are only unique per server, so one cannot describe an attachment on three of
+  /// them. Holding the bytes and uploading per target at send time is what lets a gif go to
+  /// every group at once - and it also removes the old hazard where switching the compose
+  /// group mid-upload left an id pointing at the wrong server.
+  List<int>? _pendingGifBytes;
+  String? _pendingGifName;
   // The comment being replied to, or null for a top-level comment. A reply always goes to
   // the parent's own group, so replying pins the compose target to it.
   Comment? _replyTo;
   // A gif picked for the comment being composed, already uploaded to the target group's
   // server and held here until send (or removed via the thumbnail's X).
-  int? _pendingGifMediaId;
   bool _attachingGif = false;
 
   bool get _isCrossPost => (widget.copies?.length ?? 0) > 1;
 
-  /// Switches which group a new comment posts to, clearing any gif already staged for the
-  /// old target. Media ids are only unique per server (see AuthImage's own doc comment), so
-  /// a pending attachment uploaded to one group's server is meaningless - or, on an id
-  /// collision, actively wrong - once retargeted at another's.
+  /// Switches which group a new comment posts to (null meaning all of them).
+  ///
+  /// A staged gif survives the switch now: it is held as bytes rather than as a media id
+  /// belonging to one server, so retargeting it is just a matter of uploading it somewhere
+  /// else at send time.
   void _setComposeGroup(String? groupId) {
     if (groupId == _composeGroupId) return;
     _composeGroupId = groupId;
-    _pendingGifMediaId = null;
   }
 
   /// Starts a reply to [c]: pins the compose group to the parent's (so it lands on the right
@@ -119,7 +145,16 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     _commentFocus.requestFocus();
   }
 
-  void _cancelReply() => setState(() => _replyTo = null);
+  /// Cancels the reply AND releases the group it pinned.
+  ///
+  /// Starting a reply pins the target to the parent's group; cancelling used to leave that
+  /// pin in place, so a member who backed out of a reply to write an ordinary comment
+  /// silently kept sending to just that one group instead of returning to the "all groups"
+  /// default they started from.
+  void _cancelReply() => setState(() {
+        _replyTo = null;
+        _composeGroupId = null;
+      });
 
   /// Reports [c] to its own group's host. Mirrors how a post is reported (post_card.dart):
   /// same reason sheet, same "reviewed within 24 hours" copy, same snack feedback.
@@ -144,11 +179,22 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
 
   /// The display name of the comment [c] is replying to, resolved from the loaded thread
   /// (same id, and same group for a merged cross-post thread). Null if it can't be found.
+  /// The author of the comment [c] replies to, or null when it is not in this thread.
+  ///
+  /// Matched on (id, group) rather than id alone, because a comment id only identifies a row
+  /// on its own server and two groups will happily both have a comment 15. The parent may
+  /// also be a shared comment, in which case the merged thread shows ONE representative and
+  /// the reply may point at any of its per-group copies - so every copy is a valid match.
+  /// Without that, a reply written by someone who only sees one group would lose its
+  /// "Replying to X" line for everyone reading the merged thread.
   String? _parentAuthorName(Comment c) {
     final pid = c.parentCommentId;
     if (pid == null) return null;
     for (final other in _comments) {
       if (other.id == pid && other.groupId == c.groupId) return other.authorName;
+      for (final copy in other.copies) {
+        if (copy.commentId == pid && copy.groupId == c.groupId) return other.authorName;
+      }
     }
     return null;
   }
@@ -250,10 +296,9 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                 .then((cs) => [for (final cm in cs) cm.withGroup(c.groupId)])
                 .catchError((_) => <Comment>[]),
         ]);
-        comments = [for (final l in lists) ...l]
-          ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        // One comment sent to several groups arrives once per server; show it once.
+        comments = collapseCrossComments([for (final l in lists) ...l]);
         post = post.withCopies(copies);
-        _composeGroupId ??= copies.first.groupId;
       } else {
         comments = await api.comments(widget.postId);
         // Tag the post with its group so the like overlay keys it the same way the feed
@@ -278,38 +323,90 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
 
   Future<void> _send() async {
     final text = _comment.text.trim();
-    final gifMediaId = _pendingGifMediaId;
-    if ((text.isEmpty && gifMediaId == null) || _sending) return;
+    final gifBytes = _pendingGifBytes;
+    if ((text.isEmpty && gifBytes == null) || _sending) return;
     setState(() => _sending = true);
     FocusScope.of(context).unfocus();
-    // On a cross-post, a comment goes to exactly one group - the one the viewer picked. The
-    // members of the other groups never see it; only the poster, who is in every group, does.
-    // A reply is pinned to its parent's group (see _startReply), so the parent id it carries
-    // always refers to a comment on the same server.
-    final target = _sendTarget();
-    final replyToId = _replyTo?.id;
-    try {
-      final added = (await ref
-              .read(contentApiProvider(target.groupId))
-              .addComment(target.postId, text, parentCommentId: replyToId, mediaId: gifMediaId))
-          .withGroup(_isCrossPost ? target.groupId : null);
-      _comment.clear();
-      // Append in place - no re-fetch, so the post and existing comments don't flash.
-      if (mounted) {
-        setState(() {
-          _comments = [..._comments, added];
-          _replyTo = null;
-          _pendingGifMediaId = null;
-        });
+    // A comment can go to every group holding a copy of the check-in, not just one. Each
+    // group is its own server, so this is a fan-out of separate requests carrying one
+    // client-generated id - the same shape cross-posting itself uses. That id is what lets
+    // the copies be shown once here (collapseCrossComments) and pushed once to a member of
+    // several of those groups (see the server's own collapseFor).
+    //
+    // A reply is pinned to its parent's group (see _startReply), so it never fans out: the
+    // parent comment id it carries only means anything on that one server.
+    final replyTo = _replyTo;
+    // A reply carries a parentCommentId, and that id means something on exactly one server -
+    // so a reply can never simply be broadcast the way a fresh comment is. It goes to the
+    // groups that hold the comment being answered, each with THAT group's own parent id.
+    //
+    // For an ordinary single-group comment that is one group, which is what "limit a reply to
+    // the group of the person you are replying to" means. For a comment that was itself sent
+    // everywhere, it is every group that can see it - otherwise replying to something the
+    // whole group read would answer only whichever server happened to answer first, and the
+    // other groups would see the question and never the answer.
+    final List<({int postId, String? groupId, int? parentId})> targets;
+    if (replyTo != null) {
+      targets = _replyTargets(replyTo);
+    } else {
+      targets = [
+        for (final t in _sendTargets()) (postId: t.postId, groupId: t.groupId, parentId: null)
+      ];
+    }
+    final crossCommentId = targets.length > 1 ? _newCrossCommentId() : null;
+    final added = <Comment>[];
+    var failedCount = 0;
+    for (final target in targets) {
+      try {
+        final api = ref.read(contentApiProvider(target.groupId));
+        // The gif is re-uploaded per server: media ids are per-server, so one group's id
+        // means nothing (or worse, something else) on another.
+        // Gated per target exactly as the shared id is. A server predating comment media
+        // rejects the unknown mediaId field, and that rejection fails the WHOLE request -
+        // so attaching a gif would cost that group the member's words as well, when it
+        // would have taken the text on its own. It gets the comment without the picture.
+        int? mediaId;
+        if (gifBytes != null && (_account(target.groupId)?.commentMedia ?? false)) {
+          mediaId = await api.uploadImageBytes(gifBytes, filename: _pendingGifName ?? 'reply.gif');
+        }
+        final c = await api.addComment(target.postId, text,
+            parentCommentId: target.parentId,
+            mediaId: mediaId,
+            // Withheld from a server that would reject the unknown field. That copy simply
+            // does not collapse with the others - see _supportsSharedId.
+            crossCommentId: _supportsSharedId(target.groupId) ? crossCommentId : null);
+        added.add(c.withGroup(_isCrossPost ? target.groupId : null));
+      } catch (_) {
+        failedCount++;
       }
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not add comment')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _sending = false);
+    }
+    if (!mounted) return;
+    if (added.isEmpty) {
+      setState(() => _sending = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not add comment')),
+      );
+      return;
+    }
+    _comment.clear();
+    setState(() {
+      // Append in place - no re-fetch, so the post and existing comments don't flash. The
+      // copies collapse to one entry exactly as a re-fetch would render them.
+      _comments = collapseCrossComments([..._comments, ...added]);
+      _replyTo = null;
+      _pendingGifBytes = null;
+      _pendingGifName = null;
+      _sending = false;
+    });
+    if (failedCount > 0) {
+      // Partial success is worth saying out loud: the comment is up, but not everywhere the
+      // member asked for, and silently pretending otherwise would leave them believing a
+      // group had seen something it never received. Counted rather than hardcoded to "one" -
+      // saying one group failed when two did is its own small lie.
+      final groups = failedCount == 1 ? '1 group' : '$failedCount groups';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Posted, but $groups didn't get it")),
+      );
     }
   }
 
@@ -325,15 +422,13 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     try {
       final download = widget.gifDownloader ?? ApiClient.downloadExternalGif;
       final bytes = await download(picked.gifUrl);
-      final mediaId = await api.uploadImageBytes(bytes, filename: '${picked.id}.gif');
       if (!mounted) return;
       setState(() {
         _attachingGif = false;
-        // The compose target may have been switched away from [account] while the
-        // download/upload was in flight (see _setComposeGroup). Media ids are only unique
-        // per server, so a result from the group asked for is meaningless - or, on an id
-        // collision, actively wrong - once attached to whichever group is current now.
-        if (!_isCrossPost || _composeGroupId == account.id) _pendingGifMediaId = mediaId;
+        // Held as bytes, not uploaded yet: the comment may be going to several servers, and
+        // each needs its own copy re-hosted on it. Uploading happens per target in _send.
+        _pendingGifBytes = bytes;
+        _pendingGifName = '${picked.id}.gif';
       });
     } catch (_) {
       if (mounted) setState(() => _attachingGif = false);
@@ -341,21 +436,79 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     }
   }
 
-  void _removeGif() => setState(() => _pendingGifMediaId = null);
+  void _removeGif() => setState(() {
+        _pendingGifBytes = null;
+        _pendingGifName = null;
+      });
 
-  /// Where a new comment is sent: the picked group's copy for a cross-post, else the post
-  /// itself. Falls back to the representative if the picked group somehow isn't a copy.
-  ({int postId, String? groupId}) _sendTarget() {
+  /// Every copy a new comment should go to: all of them when no single group is picked,
+  /// otherwise just that one.
+  ///
+  /// A group whose server predates crossComments is dropped from a fan-out rather than sent
+  /// a field it would 400 on. It can still be commented in by picking it directly, which
+  /// simply posts there with no shared id - exactly what happened before this existed.
+  List<({int postId, String? groupId})> _sendTargets() {
     final copies = widget.copies;
-    if (_isCrossPost && copies != null) {
+    if (!_isCrossPost || copies == null) {
+      return [(postId: widget.postId, groupId: widget.groupId)];
+    }
+    if (_composeGroupId != null) {
       for (final c in copies) {
-        if (c.groupId == _composeGroupId) return (postId: c.postId, groupId: c.groupId);
+        if (c.groupId == _composeGroupId) return [(postId: c.postId, groupId: c.groupId)];
       }
       final first = copies.first;
-      return (postId: first.postId, groupId: first.groupId);
+      return [(postId: first.postId, groupId: first.groupId)];
     }
-    return (postId: widget.postId, groupId: widget.groupId);
+    return [for (final c in copies) (postId: c.postId, groupId: c.groupId)];
   }
+
+  /// Where a reply goes: every group holding the comment being answered, each paired with
+  /// the parent id that group's own server issued.
+  ///
+  /// A comment sent to several groups keeps its per-group copies (see Comment.copies), so
+  /// the reply can reach all of them. One that was only ever in one group resolves to that
+  /// group alone. A copy whose group is no longer reachable is dropped rather than guessed
+  /// at - sending another server's comment id would attach the reply to whatever unrelated
+  /// row happens to hold that number.
+  List<({int postId, String? groupId, int? parentId})> _replyTargets(Comment replyTo) {
+    final copies = widget.copies;
+    int? postIdIn(String groupId) {
+      if (copies == null) return widget.postId;
+      for (final c in copies) {
+        if (c.groupId == groupId) return c.postId;
+      }
+      return null;
+    }
+
+    if (replyTo.copies.length > 1) {
+      final out = <({int postId, String? groupId, int? parentId})>[];
+      for (final copy in replyTo.copies) {
+        final postId = postIdIn(copy.groupId);
+        if (postId != null && _account(copy.groupId) != null) {
+          out.add((postId: postId, groupId: copy.groupId, parentId: copy.commentId));
+        }
+      }
+      if (out.isNotEmpty) return out;
+    }
+    final gid = replyTo.groupId;
+    final postId = gid == null ? widget.postId : postIdIn(gid);
+    return [
+      (postId: postId ?? widget.postId, groupId: gid ?? widget.groupId, parentId: replyTo.id)
+    ];
+  }
+
+  /// Whether this target's server understands the shared id.
+  ///
+  /// A group whose server predates it still RECEIVES the comment - it is simply sent without
+  /// the id, exactly as a single-group comment always was. An earlier version dropped such a
+  /// group from the fan-out entirely, which silently reduced "everyone" to "everyone with an
+  /// up-to-date server" with no failure and no cue anywhere in the UI: the member had every
+  /// reason to think they had spoken to all their groups.
+  ///
+  /// The cost of sending anyway is that the copy on the old server carries no id, so someone
+  /// in that group AND another sees the comment twice until its host updates. A visible
+  /// duplicate is a far smaller harm than words that never arrived, and it repairs itself.
+  bool _supportsSharedId(String? groupId) => _account(groupId)?.crossComments ?? false;
 
   ServerAccount? _account(String? groupId) {
     if (groupId == null) return null;
@@ -601,10 +754,58 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
           Expanded(
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
-              child: Row(children: [for (final c in copies) _groupChip(c.groupId)]),
+              child: Row(children: [
+                _allGroupsChip(),
+                for (final c in copies) _groupChip(c.groupId),
+              ]),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// The default target on a cross-post: every group holding a copy.
+  ///
+  /// First in the row and selected to begin with, because the check-in itself went to all of
+  /// them - a reply defaulting to one of them was the odd half of that pair, and is what
+  /// made saying something to everyone a three-step chore.
+  Widget _allGroupsChip() {
+    final selected = _composeGroupId == null;
+    final color = context.accent;
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: Semantics(
+        button: true,
+        selected: selected,
+        label: 'Comment in all groups',
+        child: ExcludeSemantics(
+          child: GestureDetector(
+            onTap: () => setState(() => _setComposeGroup(null)),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+              decoration: BoxDecoration(
+                color: selected
+                    ? Color.alphaBlend(color.withValues(alpha: 0.20), kBgMain)
+                    : kBgSurface,
+                border: Border.all(color: selected ? color : kBorder),
+                borderRadius: BorderRadius.circular(9999),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.workspaces_outlined, size: 12, color: selected ? color : kFgSecondary),
+                  const SizedBox(width: 5),
+                  Text('All groups',
+                      style: TextStyle(
+                          color: selected ? kFgPrimary : kFgSecondary,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -823,8 +1024,27 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   }
 
   Widget _composer() {
-    final targetAccount = ref.watch(contentAccountProvider(_sendTarget().groupId));
-    final gifAllowed = commentGifAllowed(targetAccount);
+    // The picker searches against one server (whichever target can), but the chosen gif is
+    // uploaded to every target at send. Offered only when EVERY target accepts comment media:
+    // sending a gif-only comment to a group that cannot take one would arrive as an empty
+    // comment and be refused, so it is better not to offer it than to half-deliver it.
+    // Derived from where this send will actually go. A reply fans out over the groups
+    // holding its parent (_replyTargets), which is a different set from a fresh comment's -
+    // computing eligibility from the wrong one offered the gif button for targets that
+    // could not take it.
+    final replyTo = _replyTo;
+    final targetGroups = replyTo != null
+        ? [for (final t in _replyTargets(replyTo)) t.groupId]
+        : [for (final t in _sendTargets()) t.groupId];
+    final accounts = [for (final g in targetGroups) ref.watch(contentAccountProvider(g))];
+    final searchAccount = accounts.where((a) => a?.gifSearch ?? false).firstOrNull;
+    // Offered when ANY target can take it, not only when all can. Requiring all would let a
+    // single group whose host has not updated remove gifs from every other group as well -
+    // the same "don't reduce everyone to the least-updated server" rule the shared id
+    // follows. The gif is withheld per target at send (see _send), so the group that cannot
+    // take one still receives the comment itself.
+    final gifAllowed = searchAccount != null && accounts.any((a) => a?.commentMedia ?? false);
+    final targetAccount = searchAccount;
     return SafeArea(
       top: false,
       child: Column(
@@ -833,7 +1053,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
         children: [
           // Outside the bar's surface: an attached gif should read as the gif itself,
           // not as a panel the width of the screen.
-          if (_pendingGifMediaId != null)
+          if (_pendingGifBytes != null)
             Padding(
               padding: const EdgeInsets.only(left: 14, top: 10),
               child: _pendingGifThumbnail(),
@@ -849,9 +1069,9 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (_replyTo case final r?) _replyBanner(r),
-                // Cross-post: a comment goes to exactly one group. Let the poster pick which -
-                // the others never see it. Defaults to the first group shared to. While replying
-                // the group is pinned to the parent's, so the picker is hidden.
+                // Cross-post: a comment goes to every group by default, or to one the poster
+                // picks. While replying the group is pinned to the parent's (a parent comment
+                // id only means anything on its own server), so the picker is hidden.
                 if (_isCrossPost && widget.copies != null && _replyTo == null)
                   _groupPicker(widget.copies!),
                 Row(
@@ -906,7 +1126,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                       valueListenable: _comment,
                       builder: (_, val, __) {
                         final canSend =
-                            (val.text.trim().isNotEmpty || _pendingGifMediaId != null) && !_sending;
+                            (val.text.trim().isNotEmpty || _pendingGifBytes != null) && !_sending;
                         return IconButton(
                           onPressed: canSend ? _send : null,
                           icon: _sending
@@ -937,8 +1157,8 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   /// A small removable preview of the gif attached to the comment being composed, shown
   /// above the input until sent (or removed).
   Widget _pendingGifThumbnail() {
-    final mediaId = _pendingGifMediaId;
-    if (mediaId == null) return const SizedBox.shrink();
+    final bytes = _pendingGifBytes;
+    if (bytes == null) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(bottom: 8, left: 2),
       child: Stack(
@@ -948,7 +1168,18 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
             child: SizedBox(
               width: 84,
               height: 84,
-              child: AuthImage(mediaId: mediaId, groupId: _sendTarget().groupId),
+              // Straight from the staged bytes: nothing has been uploaded anywhere yet, so
+              // there is no media id on any server to fetch it back from. errorBuilder
+              // because these bytes came off a third-party CDN and a truncated or malformed
+              // download must degrade to a placeholder, not throw during paint.
+              child: Image.memory(
+                Uint8List.fromList(bytes),
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => const ColoredBox(
+                  color: kBgSurfaceHover,
+                  child: Icon(Icons.gif_box_outlined, color: kFgMuted),
+                ),
+              ),
             ),
           ),
           Positioned(
