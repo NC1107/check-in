@@ -28,6 +28,8 @@ package gazetteer
 
 import (
 	"bytes"
+	// Blank: the //go:embed directive below needs this package linked in, but nothing
+	// here calls it.
 	_ "embed"
 	"encoding/binary"
 	"hash/fnv"

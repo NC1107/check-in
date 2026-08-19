@@ -12,9 +12,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// postRow is the one method both a multi-row pgx.Rows and a single-row pgx.Row share, so
+// postScanner is the one method both a multi-row pgx.Rows and a single-row pgx.Row share, so
 // scanPost can serve the list queries and the pick-one queries alike.
-type postRow interface {
+type postScanner interface {
 	Scan(dest ...any) error
 }
 
@@ -26,7 +26,7 @@ type postRow interface {
 // mismatched column would compile, pass CI, and fail only against a real server. Six copies
 // of this loop meant adding one column touched six SELECT lists and six Scan calls that had
 // to agree; now the Scan half is written once.
-func scanPost(row postRow) (Post, error) {
+func scanPost(row postScanner) (Post, error) {
 	var p Post
 	var preview, media, people, recap []byte
 	if err := row.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
