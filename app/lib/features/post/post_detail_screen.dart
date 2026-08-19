@@ -361,8 +361,12 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
         final api = ref.read(contentApiProvider(target.groupId));
         // The gif is re-uploaded per server: media ids are per-server, so one group's id
         // means nothing (or worse, something else) on another.
+        // Gated per target exactly as the shared id is. A server predating comment media
+        // rejects the unknown mediaId field, and that rejection fails the WHOLE request -
+        // so attaching a gif would cost that group the member's words as well, when it
+        // would have taken the text on its own. It gets the comment without the picture.
         int? mediaId;
-        if (gifBytes != null) {
+        if (gifBytes != null && (_account(target.groupId)?.commentMedia ?? false)) {
           mediaId = await api.uploadImageBytes(gifBytes, filename: _pendingGifName ?? 'reply.gif');
         }
         final c = await api.addComment(target.postId, text,
@@ -1024,10 +1028,22 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     // uploaded to every target at send. Offered only when EVERY target accepts comment media:
     // sending a gif-only comment to a group that cannot take one would arrive as an empty
     // comment and be refused, so it is better not to offer it than to half-deliver it.
-    final targets = _sendTargets();
-    final accounts = [for (final t in targets) ref.watch(contentAccountProvider(t.groupId))];
+    // Derived from where this send will actually go. A reply fans out over the groups
+    // holding its parent (_replyTargets), which is a different set from a fresh comment's -
+    // computing eligibility from the wrong one offered the gif button for targets that
+    // could not take it.
+    final replyTo = _replyTo;
+    final targetGroups = replyTo != null
+        ? [for (final t in _replyTargets(replyTo)) t.groupId]
+        : [for (final t in _sendTargets()) t.groupId];
+    final accounts = [for (final g in targetGroups) ref.watch(contentAccountProvider(g))];
     final searchAccount = accounts.where((a) => a?.gifSearch ?? false).firstOrNull;
-    final gifAllowed = searchAccount != null && accounts.every((a) => a != null && a.commentMedia);
+    // Offered when ANY target can take it, not only when all can. Requiring all would let a
+    // single group whose host has not updated remove gifs from every other group as well -
+    // the same "don't reduce everyone to the least-updated server" rule the shared id
+    // follows. The gif is withheld per target at send (see _send), so the group that cannot
+    // take one still receives the comment itself.
+    final gifAllowed = searchAccount != null && accounts.any((a) => a?.commentMedia ?? false);
     final targetAccount = searchAccount;
     return SafeArea(
       top: false,

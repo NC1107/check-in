@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+
+	"github.com/nc1107/check-in/server/internal/db"
 )
 
 // Blocking must silence the blocked person's notifications, not just hide their posts.
@@ -55,6 +57,31 @@ func TestBlockingSilencesPushes(t *testing.T) {
 		}
 	})
 
+	t.Run("a reply by the blocked member to the blocker's own comment", func(t *testing.T) {
+		// The fourth token query, and the one that was fixed without a test. It resolves the
+		// recipient through the PARENT COMMENT's author rather than the post's, so it needs
+		// its own block check - and getting that correlation wrong is invisible on a read.
+		//
+		// The parent must be on somebody ELSE's post: the query deliberately skips a parent
+		// author who also wrote the post, since notifyReply already covers them and they
+		// would otherwise be told twice about one reply.
+		other := h.member(admin, "Sam")
+		theirPost := h.createPost(other, map[string]any{"kind": "text", "body": "Sam's"})
+		var parent db.Comment
+		h.post(fmt.Sprintf("/api/posts/%d/comments", theirPost.ID), admin.Token,
+			map[string]any{"body": "Robin's comment on Sam's post"}).
+			expect(http.StatusCreated).decode(&parent)
+
+		tokens, err := h.db.TokensForCommentReply(ctx, parent.ID, blocked.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(tokens) != 0 {
+			t.Errorf("got %d tokens, want none - a reply from someone Robin blocked must "+
+				"not reach Robin either", len(tokens))
+		}
+	})
+
 	t.Run("a like by the blocked member", func(t *testing.T) {
 		tokens, err := h.db.TokensForLike(ctx, post.ID, blocked.ID)
 		if err != nil {
@@ -98,5 +125,21 @@ func TestBlockingLeavesEveryoneElseNotified(t *testing.T) {
 	}
 	if len(tokens) != 1 {
 		t.Errorf("got %d tokens for Sam's comment, want 1", len(tokens))
+	}
+
+	// Again on someone else's post, for the reason the sibling test documents.
+	ada := h.member(admin, "Ada")
+	adaPost := h.createPost(ada, map[string]any{"kind": "text", "body": "Ada's"})
+	var parent db.Comment
+	h.post(fmt.Sprintf("/api/posts/%d/comments", adaPost.ID), admin.Token,
+		map[string]any{"body": "Robin's comment on Ada's post"}).
+		expect(http.StatusCreated).decode(&parent)
+	tokens, err = h.db.TokensForCommentReply(ctx, parent.ID, friend.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tokens) != 1 {
+		t.Errorf("got %d tokens for Sam's reply, want 1 - the block filter must not silence "+
+			"everyone", len(tokens))
 	}
 }

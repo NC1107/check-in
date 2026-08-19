@@ -37,6 +37,7 @@ import (
 
 	"github.com/nc1107/check-in/server/internal/config"
 	"github.com/nc1107/check-in/server/internal/db"
+	"github.com/nc1107/check-in/server/internal/push"
 	"github.com/nc1107/check-in/server/internal/storage"
 )
 
@@ -153,7 +154,19 @@ func newHarness(t *testing.T) *harness {
 // newHarnessWithConfig is newHarness with a chance to tweak the config before the server is
 // built - for the handful of tests that need something newHarness's fixed cfg doesn't set
 // (e.g. a Klipy key), without disturbing every other test's baseline config.
+// newHarnessWithNotifier is newHarness with a push Notifier attached, for the tests that
+// need to observe what the handlers actually hand the push layer.
+func newHarnessWithNotifier(t *testing.T, n push.Notifier) *harness {
+	t.Helper()
+	return newHarnessWith(t, nil, n)
+}
+
 func newHarnessWithConfig(t *testing.T, mutate func(*config.Config)) *harness {
+	t.Helper()
+	return newHarnessWith(t, mutate, nil)
+}
+
+func newHarnessWith(t *testing.T, mutate func(*config.Config), notifier push.Notifier) *harness {
 	t.Helper()
 	database := openTestDB(t)
 	resetDB(t, database)
@@ -173,9 +186,10 @@ func newHarnessWithConfig(t *testing.T, mutate func(*config.Config)) *harness {
 	if mutate != nil {
 		mutate(&cfg)
 	}
-	// A genuinely nil Notifier, so every notify* helper returns before touching the database.
-	// Push has its own tests; here it would only add goroutines racing the test's end.
-	srv := New(cfg, database, store, nil)
+	// Usually a genuinely nil Notifier, so every notify* helper returns before touching the
+	// database - most tests care about the response, and push would only add goroutines
+	// racing the test's end. The tests that DO care pass one in (see newHarnessWithNotifier).
+	srv := New(cfg, database, store, notifier)
 	ts := httptest.NewServer(srv.Router())
 	t.Cleanup(ts.Close)
 

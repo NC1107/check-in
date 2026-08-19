@@ -245,15 +245,28 @@ void main() {
     // available. What must never happen is the badge promising comments that do not exist:
     // a member tapping "5 comments" and finding four has been lied to, whereas finding six
     // is merely a pleasant surprise.
-    test('an estimate is never higher than the true distinct total', () {
+    test('a known undercount is pinned, not glossed over', () {
       // Three comments, each of which reached two of the three groups (a different one
-      // missed each time - a group that bounces intermittently). Truth is 3.
+      // missed each time - a group that bounces intermittently). Three distinct comments
+      // exist, and the badge says TWO.
+      //
+      // That gap cannot be closed from counts alone: every copy reports "2 of mine are
+      // shared" and none of them knows WHICH, so no arithmetic over these six numbers can
+      // recover the answer. Closing it would mean each server returning the shared ids
+      // themselves for the client to union, which is a lot of payload on every feed card to
+      // correct a badge in a case that needs alternating failures to occur at all.
+      //
+      // So the exact value is asserted rather than bounded. A loose bound here would pass
+      // just as happily on 2 as on 3 and quietly hide the very thing this documents; if the
+      // arithmetic ever changes, this should fail and be reconsidered on purpose.
       final post = crossPost([
         copy('a', comments: 2, shared: 2),
         copy('b', comments: 2, shared: 2),
         copy('c', comments: 2, shared: 2),
       ]);
-      expect(post.totalComments, lessThanOrEqualTo(3));
+      expect(post.totalComments, 2, reason: 'the true distinct total is 3 - see above');
+      expect(post.totalComments, lessThanOrEqualTo(3),
+          reason: 'it must never round the other way and promise comments that do not exist');
     });
 
     test('it is exact when every shared comment reached every group', () {
