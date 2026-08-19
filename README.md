@@ -68,7 +68,7 @@ docker-compose.yml + Caddyfile   The self-hosted stack (Postgres + server + Cadd
 ```bash
 # Backend
 cd server
-go test ./...
+scripts/test.sh        # the real suite: unit + DB-backed handler tests, with -race
 CHECKIN_DATABASE_URL=postgres://checkin:checkin@localhost:5432/checkin?sslmode=disable \
   go run ./cmd/server
 
@@ -78,14 +78,16 @@ flutter pub get
 flutter run            # against a running server; enter its URL on first launch
 ```
 
-The Go suite includes DB-backed tests that drive the real HTTP handlers end to end.
-They skip themselves unless `TESTDB_URL` points at a PostgreSQL database they may wipe, so a plain `go test ./...` still needs nothing installed.
-To run them, point that variable at a throwaway database (CI uses a service container):
+Most of the Go suite drives the real HTTP handlers against a real PostgreSQL.
+`scripts/test.sh` starts a throwaway database, runs everything with `-race`, and removes it again; it passes any arguments through to `go test`, so `scripts/test.sh ./internal/api/ -run TestFeed -v` works as expected.
+
+A bare `go test ./...` **refuses to run** rather than silently skipping those tests.
+They used to skip themselves when `TESTDB_URL` was unset, which meant a plain run printed a reassuring `ok` while the large majority of the suite never executed - that is how a real scan-order bug once survived a clean local run.
+If you genuinely have no Docker, say so explicitly and accept the reduced coverage:
 
 ```bash
-docker run --rm -d --name checkin-testdb -p 55432:5432 \
-  -e POSTGRES_USER=checkin -e POSTGRES_PASSWORD=checkin -e POSTGRES_DB=checkin_test postgres:16
-cd server
-TESTDB_URL='postgres://checkin:checkin@localhost:55432/checkin_test?sslmode=disable' go test ./... -race
+CHECKIN_SKIP_DB_TESTS=1 go test ./...
 ```
+
+CI supplies its own database as a service container, so it always runs the full suite.
 
