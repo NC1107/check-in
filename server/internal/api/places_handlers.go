@@ -14,7 +14,7 @@ func (s *Server) handlePlaces(w http.ResponseWriter, r *http.Request) {
 	viewer := userFrom(r)
 	places, err := s.db.PlacesForViewer(r.Context(), viewer.ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"places": places})
@@ -43,7 +43,7 @@ func (s *Server) handlePlacePosts(w http.ResponseWriter, r *http.Request) {
 	}
 	posts, hasMore, err := s.db.PostsForPlace(r.Context(), viewer.ID, location)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"posts": posts, "hasMore": hasMore})

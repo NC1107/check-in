@@ -26,7 +26,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	events, err := s.db.EventsForViewer(r.Context(), viewer.ID, limit)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": events})

@@ -54,7 +54,7 @@ func (s *Server) handleDebugDashboard(w http.ResponseWriter, r *http.Request) {
 // server to first-login state.
 func (s *Server) handleDebugReset(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid form")
+		writeErr(w, http.StatusBadRequest, msgInvalidForm)
 		return
 	}
 	if r.PostFormValue("confirm") != "RESET" {
@@ -73,7 +73,7 @@ func (s *Server) handleDebugReset(w http.ResponseWriter, r *http.Request) {
 // handleDebugInviteAdd adds typed numbers (comma/newline separated) to the allowlist.
 func (s *Server) handleDebugInviteAdd(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid form")
+		writeErr(w, http.StatusBadRequest, msgInvalidForm)
 		return
 	}
 	seen := map[string]struct{}{}
@@ -105,7 +105,7 @@ func (s *Server) handleDebugInviteAdd(w http.ResponseWriter, r *http.Request) {
 // handleDebugInviteRemove removes a number from the allowlist.
 func (s *Server) handleDebugInviteRemove(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid form")
+		writeErr(w, http.StatusBadRequest, msgInvalidForm)
 		return
 	}
 	phone := r.PostFormValue("phone")
@@ -182,7 +182,7 @@ func (s *Server) handleDebugCommentDelete(w http.ResponseWriter, r *http.Request
 // debugFormID parses the "id" form field shared by the per-row action forms.
 func (s *Server) debugFormID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	if err := r.ParseForm(); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid form")
+		writeErr(w, http.StatusBadRequest, msgInvalidForm)
 		return 0, false
 	}
 	id, err := strconv.ParseInt(r.PostFormValue("id"), 10, 64)

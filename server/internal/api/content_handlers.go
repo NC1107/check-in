@@ -101,7 +101,7 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 
 	posts, err := s.db.Feed(r.Context(), viewer.ID, authorID, locations, before, beforeID, limit, false)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"posts": posts})
@@ -112,7 +112,7 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLocations(w http.ResponseWriter, r *http.Request) {
 	locs, err := s.db.Locations(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"locations": locs})
@@ -128,12 +128,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	posts, err := s.db.SearchPosts(r.Context(), userFrom(r).ID, q, parseLimit(r, 30, 50))
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	people, err := s.db.SearchUsers(r.Context(), q, 10)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"posts": posts, "people": newPeerUsers(people)})
@@ -143,7 +143,7 @@ func (s *Server) handleSearchUsers(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("search"))
 	users, err := s.db.SearchUsers(r.Context(), q, parseLimit(r, 50, 200))
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"users": newPeerUsers(users)})
@@ -152,7 +152,7 @@ func (s *Server) handleSearchUsers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetUser(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	user, err := s.db.GetUser(r.Context(), id)
@@ -161,7 +161,7 @@ func (s *Server) handleGetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, newPeerUser(user))
@@ -174,7 +174,7 @@ func (s *Server) handleGetUser(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUserPosts(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	var before *time.Time
@@ -185,7 +185,7 @@ func (s *Server) handleUserPosts(w http.ResponseWriter, r *http.Request) {
 	}
 	posts, err := s.db.Feed(r.Context(), userFrom(r).ID, &id, nil, before, nil, parseLimit(r, 30, 100), true)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"posts": posts})
@@ -217,7 +217,7 @@ type createPostReq struct {
 func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 	var req createPostReq
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	req.Body = strings.TrimSpace(req.Body)
@@ -311,16 +311,16 @@ func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetPost(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	post, err := s.db.GetPost(r.Context(), userFrom(r).ID, id)
 	if errors.Is(err, db.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "post not found")
+		writeErr(w, http.StatusNotFound, msgPostNotFound)
 		return
 	}
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, post)
@@ -329,7 +329,7 @@ func (s *Server) handleGetPost(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDeletePost(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	orphans, err := s.db.DeletePost(r.Context(), id, userFrom(r).ID)
@@ -338,7 +338,7 @@ func (s *Server) handleDeletePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	// Remove now-unreferenced media files from disk (best-effort; the rows are gone).
@@ -351,20 +351,20 @@ func (s *Server) handleDeletePost(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	me := userFrom(r)
 	if visible, err := s.db.PostVisible(r.Context(), id, me.ID); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	} else if !visible {
-		writeErr(w, http.StatusNotFound, "post not found")
+		writeErr(w, http.StatusNotFound, msgPostNotFound)
 		return
 	}
 	inserted, err := s.db.LikePost(r.Context(), id, me.ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	// Only push on a genuinely new like, so re-liking an already-liked post is silent.
@@ -377,11 +377,11 @@ func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUnlike(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	if err := s.db.UnlikePost(r.Context(), id, userFrom(r).ID); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -392,16 +392,16 @@ func (s *Server) handleUnlike(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListLikers(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	authorID, err := s.db.PostAuthorID(r.Context(), id)
 	if errors.Is(err, db.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "post not found")
+		writeErr(w, http.StatusNotFound, msgPostNotFound)
 		return
 	}
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	if authorID != userFrom(r).ID {
@@ -410,7 +410,7 @@ func (s *Server) handleListLikers(w http.ResponseWriter, r *http.Request) {
 	}
 	likers, err := s.db.PostLikers(r.Context(), id)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"likers": likers})
@@ -419,7 +419,7 @@ func (s *Server) handleListLikers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	viewerID := userFrom(r).ID
@@ -429,15 +429,15 @@ func (s *Server) handleListComments(w http.ResponseWriter, r *http.Request) {
 	// GET /api/posts/{id} correctly 404s for that same post. ListComments' own predicate only
 	// ever excluded blocked *commenters*, never checked the post's own author.
 	if visible, err := s.db.PostVisible(r.Context(), id, viewerID); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	} else if !visible {
-		writeErr(w, http.StatusNotFound, "post not found")
+		writeErr(w, http.StatusNotFound, msgPostNotFound)
 		return
 	}
 	comments, err := s.db.ListComments(r.Context(), id, viewerID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"comments": comments})
@@ -463,12 +463,12 @@ type addCommentReq struct {
 func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	var req addCommentReq
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	req.Body = strings.TrimSpace(req.Body)
@@ -479,17 +479,17 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 
 	me := userFrom(r)
 	if visible, err := s.db.PostVisible(r.Context(), id, me.ID); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	} else if !visible {
-		writeErr(w, http.StatusNotFound, "post not found")
+		writeErr(w, http.StatusNotFound, msgPostNotFound)
 		return
 	}
 	// A reply must point at a real comment on this same post.
 	if req.ParentCommentID != nil {
 		parentPostID, _, found, err := s.db.ParentCommentForPost(r.Context(), *req.ParentCommentID)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "server error")
+			writeErr(w, http.StatusInternalServerError, msgServerError)
 			return
 		}
 		if !found || parentPostID != id {
@@ -550,7 +550,7 @@ func crossCommentIDFrom(raw *string) *string {
 func (s *Server) handleUpcomingBirthdays(w http.ResponseWriter, r *http.Request) {
 	birthdays, err := s.db.UpcomingBirthdays(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"birthdays": birthdays})

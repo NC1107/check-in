@@ -34,7 +34,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 	initialized, err := s.db.ServerInitialized(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	resp := map[string]any{
@@ -185,7 +185,7 @@ func (s *Server) handleUpdateServer(w http.ResponseWriter, r *http.Request) {
 		RecapOffset  *int    `json:"recapOffset"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	if req.Name == nil && req.Color == nil && req.RecapCadence == nil &&
@@ -200,7 +200,7 @@ func (s *Server) handleUpdateServer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.db.SetServerName(r.Context(), name); err != nil {
-			writeErr(w, http.StatusInternalServerError, "server error")
+			writeErr(w, http.StatusInternalServerError, msgServerError)
 			return
 		}
 	}
@@ -211,14 +211,14 @@ func (s *Server) handleUpdateServer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.db.SetServerColor(r.Context(), color); err != nil {
-			writeErr(w, http.StatusInternalServerError, "server error")
+			writeErr(w, http.StatusInternalServerError, msgServerError)
 			return
 		}
 	}
 	if req.RecapCadence != nil || req.RecapWeekday != nil || req.RecapHour != nil || req.RecapOffset != nil {
 		settings, err := s.db.GetRecapSettings(r.Context())
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "server error")
+			writeErr(w, http.StatusInternalServerError, msgServerError)
 			return
 		}
 		if req.RecapCadence != nil {
@@ -251,7 +251,7 @@ func (s *Server) handleUpdateServer(w http.ResponseWriter, r *http.Request) {
 			settings.Offset = *req.RecapOffset
 		}
 		if err := s.db.SetRecapSettings(r.Context(), settings.Cadence, settings.Weekday, settings.Hour, settings.Offset); err != nil {
-			writeErr(w, http.StatusInternalServerError, "server error")
+			writeErr(w, http.StatusInternalServerError, msgServerError)
 			return
 		}
 	}
@@ -319,7 +319,7 @@ func (s *Server) invite(ctx context.Context, phone string) (inviteState, error) 
 func (s *Server) handleCheckPhone(w http.ResponseWriter, r *http.Request) {
 	var req checkPhoneReq
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	phone := auth.NormalizePhone(req.Phone, s.cfg.DefaultCountryCode)
@@ -329,7 +329,7 @@ func (s *Server) handleCheckPhone(w http.ResponseWriter, r *http.Request) {
 	}
 	initialized, err := s.db.ServerInitialized(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	if !initialized {
@@ -342,12 +342,12 @@ func (s *Server) handleCheckPhone(w http.ResponseWriter, r *http.Request) {
 	// host, whose number is never on the allowlist.
 	registered, err := s.db.PhoneRegistered(r.Context(), phone)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	allowed, _, err := s.db.PhoneAllowed(r.Context(), phone)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -388,7 +388,7 @@ func (r signupReq) displayName() string {
 func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	var req signupReq
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	phone := auth.NormalizePhone(req.Phone, s.cfg.DefaultCountryCode)
@@ -414,7 +414,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 
 	initialized, err := s.db.ServerInitialized(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 
@@ -425,7 +425,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	} else {
 		state, err := s.invite(r.Context(), phone)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "server error")
+			writeErr(w, http.StatusInternalServerError, msgServerError)
 			return
 		}
 		switch state {
@@ -452,7 +452,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 
 	hash, err := auth.HashPassword(password)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 
@@ -466,7 +466,7 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 
 	if isAdmin {
 		if err := s.db.MarkInitialized(r.Context()); err != nil {
-			writeErr(w, http.StatusInternalServerError, "server error")
+			writeErr(w, http.StatusInternalServerError, msgServerError)
 			return
 		}
 	} else {
@@ -484,7 +484,7 @@ type loginReq struct {
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var req loginReq
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	phone := auth.NormalizePhone(req.Phone, s.cfg.DefaultCountryCode)
@@ -521,7 +521,7 @@ type resetPasswordReq struct {
 func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	var req resetPasswordReq
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	newPassword := auth.NormalizePassword(req.NewPassword)
@@ -545,18 +545,18 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	newHash, err := auth.HashPassword(newPassword)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	if err := s.db.SetPasswordAndClearReset(r.Context(), userID, newHash); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	// Sign out everywhere, then log this device in fresh.
 	_ = s.db.DeleteUserSessions(r.Context(), userID)
 	user, err := s.db.GetUser(r.Context(), userID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	s.issueSession(w, r, user)
@@ -564,7 +564,7 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.DeleteSession(r.Context(), auth.HashToken(tokenFrom(r))); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -585,7 +585,7 @@ type updateMeReq struct {
 func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 	var req updateMeReq
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	me := userFrom(r)
@@ -609,7 +609,7 @@ func (s *Server) handleUpdateMe(w http.ResponseWriter, r *http.Request) {
 	}
 	user, err := s.db.UpdateUserProfile(r.Context(), me.ID, name, first, last)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, user)
@@ -625,7 +625,7 @@ type setPhotoReq struct {
 func (s *Server) handleSetProfilePhoto(w http.ResponseWriter, r *http.Request) {
 	var req setPhotoReq
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	u := userFrom(r)
@@ -635,7 +635,7 @@ func (s *Server) handleSetProfilePhoto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	if media.OwnerID == nil || *media.OwnerID != u.ID {
@@ -647,12 +647,12 @@ func (s *Server) handleSetProfilePhoto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.db.SetUserProfileMedia(r.Context(), u.ID, req.MediaID); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	updated, err := s.db.GetUser(r.Context(), u.ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
@@ -662,12 +662,12 @@ func (s *Server) handleSetProfilePhoto(w http.ResponseWriter, r *http.Request) {
 func (s *Server) issueSession(w http.ResponseWriter, r *http.Request, user db.User) {
 	token, hash, err := auth.NewToken()
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	expires := time.Now().Add(s.cfg.SessionTTL)
 	if err := s.db.CreateSession(r.Context(), user.ID, hash, expires); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

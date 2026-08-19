@@ -20,12 +20,12 @@ const maxReportReason = 1000
 func (s *Server) handleReportPost(w http.ResponseWriter, r *http.Request) {
 	postID, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	var req reportReq
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	if req.Reason == "" || len(req.Reason) > maxReportReason {
@@ -43,14 +43,14 @@ func (s *Server) handleReportPost(w http.ResponseWriter, r *http.Request) {
 	// for the host to see. See PostVisible's own doc comment for the like/comment side of
 	// this same distinction.
 	if visible, err := s.db.ReportablePost(r.Context(), postID); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	} else if !visible {
-		writeErr(w, http.StatusNotFound, "post not found")
+		writeErr(w, http.StatusNotFound, msgPostNotFound)
 		return
 	}
 	if err := s.db.ReportPost(r.Context(), me.ID, postID, req.Reason); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -59,12 +59,12 @@ func (s *Server) handleReportPost(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleReportComment(w http.ResponseWriter, r *http.Request) {
 	commentID, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	var req reportReq
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	if req.Reason == "" || len(req.Reason) > maxReportReason {
@@ -72,14 +72,14 @@ func (s *Server) handleReportComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if exists, err := s.db.CommentExists(r.Context(), commentID); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	} else if !exists {
 		writeErr(w, http.StatusNotFound, "comment not found")
 		return
 	}
 	if err := s.db.ReportComment(r.Context(), userFrom(r).ID, commentID, req.Reason); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -88,7 +88,7 @@ func (s *Server) handleReportComment(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminListReports(w http.ResponseWriter, r *http.Request) {
 	reports, err := s.db.ListReports(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	if reports == nil {
@@ -100,14 +100,14 @@ func (s *Server) handleAdminListReports(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleAdminDismissReport(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	if err := s.db.DismissReport(r.Context(), id); errors.Is(err, db.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "report not found")
 		return
 	} else if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -122,7 +122,7 @@ type blockReq struct {
 func (s *Server) handleBlockUser(w http.ResponseWriter, r *http.Request) {
 	targetID, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	me := userFrom(r)
@@ -134,11 +134,11 @@ func (s *Server) handleBlockUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "user not found")
 		return
 	} else if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	if err := s.db.BlockUser(r.Context(), me.ID, targetID); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -147,11 +147,11 @@ func (s *Server) handleBlockUser(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUnblockUser(w http.ResponseWriter, r *http.Request) {
 	targetID, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	if err := s.db.UnblockUser(r.Context(), userFrom(r).ID, targetID); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -160,7 +160,7 @@ func (s *Server) handleUnblockUser(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListBlocks(w http.ResponseWriter, r *http.Request) {
 	ids, err := s.db.ListBlockedIDs(r.Context(), userFrom(r).ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	if ids == nil {
@@ -172,12 +172,12 @@ func (s *Server) handleListBlocks(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetBlockStatus(w http.ResponseWriter, r *http.Request) {
 	targetID, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	blocked, err := s.db.IsBlocked(r.Context(), userFrom(r).ID, targetID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"blocked": blocked})
@@ -193,7 +193,7 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	if me.IsAdmin {
 		other, err := s.db.OtherAdminExists(r.Context(), me.ID)
 		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "server error")
+			writeErr(w, http.StatusInternalServerError, msgServerError)
 			return
 		}
 		if !other {
@@ -204,7 +204,7 @@ func (s *Server) handleDeleteAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	paths, err := s.db.DeleteAccount(r.Context(), me.ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	for _, p := range paths {

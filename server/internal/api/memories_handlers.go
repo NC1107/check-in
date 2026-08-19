@@ -15,7 +15,7 @@ func (s *Server) handleRandomMemory(w http.ResponseWriter, r *http.Request) {
 	viewer := userFrom(r)
 	post, ok, err := s.db.RandomMemory(r.Context(), viewer.ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	if !ok {

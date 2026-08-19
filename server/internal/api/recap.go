@@ -215,7 +215,7 @@ type generateRecapReq struct {
 func (s *Server) handleGenerateRecap(w http.ResponseWriter, r *http.Request) {
 	var req generateRecapReq
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	start, err := time.Parse(time.RFC3339, req.PeriodStart)
@@ -258,7 +258,7 @@ func (s *Server) handleGenerateRecap(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	existingID, found, err := s.db.FindManualRecap(ctx, start, end, sorted)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	if found && !req.Replace {
@@ -276,7 +276,7 @@ func (s *Server) handleGenerateRecap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 
@@ -287,7 +287,7 @@ func (s *Server) handleGenerateRecap(w http.ResponseWriter, r *http.Request) {
 	me := userFrom(r)
 	postID, inserted, conflictID, err := s.db.CreateRecapPost(ctx, me.ID, spec, payload, replacePostID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	if !inserted {
@@ -316,7 +316,7 @@ func (s *Server) handleGenerateRecap(w http.ResponseWriter, r *http.Request) {
 	}
 	post, err := s.db.GetPost(ctx, me.ID, postID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusCreated, post)

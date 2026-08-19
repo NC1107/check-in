@@ -51,7 +51,7 @@ func (s *Server) handleUploadMedia(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSetMediaPoster(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxUploadBytes+(1<<20))
@@ -80,7 +80,7 @@ func (s *Server) handleSetMediaPoster(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		_ = s.store.Delete(saved.RelPath)
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	if previous != "" {
@@ -88,7 +88,7 @@ func (s *Server) handleSetMediaPoster(w http.ResponseWriter, r *http.Request) {
 	}
 	media, err := s.db.GetMedia(r.Context(), id)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, media)
@@ -98,7 +98,7 @@ func (s *Server) handleSetMediaPoster(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleServeMedia(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	media, err := s.db.GetVisibleMedia(r.Context(), id, userFrom(r).ID)
@@ -107,7 +107,7 @@ func (s *Server) handleServeMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	relPath, mime, ok := variantFile(media, r.URL.Query().Get("variant"))
@@ -123,7 +123,7 @@ func (s *Server) handleServeMedia(w http.ResponseWriter, r *http.Request) {
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 

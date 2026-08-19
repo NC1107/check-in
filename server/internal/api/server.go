@@ -44,6 +44,13 @@ func New(cfg config.Config, database *db.DB, store *storage.Store, notifier push
 }
 
 // Router builds the chi router with all routes and middleware.
+// Paths registered under more than one verb, named so the verbs cannot drift apart - a
+// typo in one of them would silently register a second, unreachable route rather than fail.
+const (
+	pathMe        = "/api/me"
+	pathBlockByID = "/api/me/blocks/{id}"
+)
+
 func (s *Server) Router() http.Handler {
 	r := chi.NewRouter()
 	// Reads the caller's real IP from the position in the X-Forwarded-For chain that only
@@ -108,10 +115,10 @@ func (s *Server) Router() http.Handler {
 		r.Use(s.requireAuth)
 
 		r.Post("/api/auth/logout", s.handleLogout)
-		r.Get("/api/me", s.handleMe)
-		r.Patch("/api/me", s.handleUpdateMe)
+		r.Get(pathMe, s.handleMe)
+		r.Patch(pathMe, s.handleUpdateMe)
 		r.Put("/api/me/photo", s.handleSetProfilePhoto)
-		r.Delete("/api/me", s.handleDeleteAccount)
+		r.Delete(pathMe, s.handleDeleteAccount)
 
 		r.Post("/api/me/devices", s.handleRegisterDevice)
 		r.Delete("/api/me/devices", s.handleUnregisterDevice)
@@ -148,9 +155,9 @@ func (s *Server) Router() http.Handler {
 		r.Post("/api/comments/{id}/report", s.handleReportComment)
 
 		r.Get("/api/me/blocks", s.handleListBlocks)
-		r.Get("/api/me/blocks/{id}", s.handleGetBlockStatus)
-		r.Post("/api/me/blocks/{id}", s.handleBlockUser)
-		r.Delete("/api/me/blocks/{id}", s.handleUnblockUser)
+		r.Get(pathBlockByID, s.handleGetBlockStatus)
+		r.Post(pathBlockByID, s.handleBlockUser)
+		r.Delete(pathBlockByID, s.handleUnblockUser)
 
 		r.Get("/api/birthdays/upcoming", s.handleUpcomingBirthdays)
 

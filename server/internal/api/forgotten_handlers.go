@@ -17,7 +17,7 @@ func (s *Server) handleForgottenPhoto(w http.ResponseWriter, r *http.Request) {
 	viewer := userFrom(r)
 	post, ok, err := s.db.ForgottenPhoto(r.Context(), viewer.ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	if !ok {
