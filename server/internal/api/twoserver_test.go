@@ -275,10 +275,9 @@ func TestOneCommentAcrossTwoIndependentServers(t *testing.T) {
 
 	t.Run("both derive the same collapse id, which is what folds the notifications", func(t *testing.T) {
 		// Two servers, no coordination, must produce a byte-identical collapse key or the
-		// device shows one notification per group for one sentence.
-		if collapseFor("comment", sharedComment) != collapseFor("comment", sharedComment) {
-			t.Fatal("unreachable")
-		}
+		// device shows one notification per group for one sentence. Pinning the literal is
+		// the only way to state that: comparing the function against itself is a tautology
+		// that would hold for any implementation at all, including a broken one.
 		want := "comment:" + sharedComment
 		if got := collapseFor("comment", sharedComment); got != want {
 			t.Errorf("collapse id = %q, want %q", got, want)
