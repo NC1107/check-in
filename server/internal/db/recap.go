@@ -463,38 +463,72 @@ func minuteOfDay(t time.Time) int {
 	return t.Hour()*60 + t.Minute()
 }
 
-// recapAwardCandidates turns a period's candidates plus three activity-on-others queries
-// into one awardCandidate per active member, ready for bestAwardPerMember to judge.
-func (d *DB) recapAwardCandidates(ctx context.Context, start, end time.Time, candidates []recapCandidate) ([]awardCandidate, error) {
-	members, err := d.activeMembers(ctx)
-	if err != nil {
-		return nil, err
-	}
-	commentsWritten, err := d.recapCountByUser(ctx, `
+// memberCounts holds the three activity-on-others tallies that no per-candidate loop can
+// derive, since each counts a member's actions on other people's posts.
+type memberCounts struct {
+	commentsWritten map[int64]int
+	likesGiven      map[int64]int
+	timesTagged     map[int64]int
+}
+
+// recapActivityCounts runs the three activity-on-others queries for the period.
+func (d *DB) recapActivityCounts(ctx context.Context, start, end time.Time) (memberCounts, error) {
+	var c memberCounts
+	var err error
+	if c.commentsWritten, err = d.recapCountByUser(ctx, `
 		SELECT c.user_id, count(*) FROM comments c JOIN users u ON u.id = c.user_id
 		WHERE u.status = 'active' AND c.created_at >= $1 AND c.created_at < $2
-		GROUP BY c.user_id`, start, end)
-	if err != nil {
-		return nil, err
+		GROUP BY c.user_id`, start, end); err != nil {
+		return memberCounts{}, err
 	}
-	likesGiven, err := d.recapCountByUser(ctx, `
+	if c.likesGiven, err = d.recapCountByUser(ctx, `
 		SELECT l.user_id, count(*) FROM likes l JOIN users u ON u.id = l.user_id
 		WHERE u.status = 'active' AND l.created_at >= $1 AND l.created_at < $2
-		GROUP BY l.user_id`, start, end)
-	if err != nil {
-		return nil, err
+		GROUP BY l.user_id`, start, end); err != nil {
+		return memberCounts{}, err
 	}
-	timesTagged, err := d.recapCountByUser(ctx, `
+	if c.timesTagged, err = d.recapCountByUser(ctx, `
 		SELECT pp.user_id, count(*) FROM post_people pp
 		JOIN posts p ON p.id = pp.post_id
 		JOIN users u ON u.id = pp.user_id
 		WHERE u.status = 'active' AND p.created_at >= $1 AND p.created_at < $2
 		  AND p.author_id <> pp.user_id
-		GROUP BY pp.user_id`, start, end)
-	if err != nil {
-		return nil, err
+		GROUP BY pp.user_id`, start, end); err != nil {
+		return memberCounts{}, err
 	}
+	return c, nil
+}
 
+// Each award's ranking rule, named. Ties fall through to candidateOutranks so that two
+// posts with equal standing resolve the same way everywhere.
+func moreLiked(a, b recapCandidate) bool {
+	return a.LikeCount > b.LikeCount ||
+		(a.LikeCount == b.LikeCount && candidateOutranks(a, b))
+}
+
+func longerThread(a, b recapCandidate) bool {
+	return a.CommentCount > b.CommentCount ||
+		(a.CommentCount == b.CommentCount && candidateOutranks(a, b))
+}
+
+func laterInDay(a, b recapCandidate) bool { return minuteOfDay(a.CreatedAt) > minuteOfDay(b.CreatedAt) }
+func earlierInDay(a, b recapCandidate) bool {
+	return minuteOfDay(a.CreatedAt) < minuteOfDay(b.CreatedAt)
+}
+
+// keepBest replaces cur with c when c wins by the given rule, copying so the pointer never
+// aliases the caller's loop variable.
+func keepBest(cur **recapCandidate, c recapCandidate, wins func(a, b recapCandidate) bool) {
+	if *cur == nil || wins(c, **cur) {
+		cc := c
+		*cur = &cc
+	}
+}
+
+// aggregateMemberActivity folds the period's candidates into one memberActivity per active
+// member. Candidates whose author is no longer active are skipped; recapCandidates already
+// excludes them, so this is belt-and-braces.
+func aggregateMemberActivity(members []recapMember, candidates []recapCandidate) map[int64]*memberActivity {
 	agg := make(map[int64]*memberActivity, len(members))
 	for _, m := range members {
 		agg[m.ID] = &memberActivity{places: make(map[string]struct{})}
@@ -502,36 +536,25 @@ func (d *DB) recapAwardCandidates(ctx context.Context, start, end time.Time, can
 	for _, c := range candidates {
 		a, ok := agg[c.AuthorID]
 		if !ok {
-			continue // author isn't active any more; recapCandidates already excludes them
+			continue
 		}
 		a.postCount++
 		a.likesReceived += c.LikeCount
 		if c.Location != "" {
 			a.places[c.Location] = struct{}{}
 		}
-		if a.mostLiked == nil || c.LikeCount > a.mostLiked.LikeCount ||
-			(c.LikeCount == a.mostLiked.LikeCount && candidateOutranks(c, *a.mostLiked)) {
-			cc := c
-			a.mostLiked = &cc
-		}
-		if a.longestThread == nil || c.CommentCount > a.longestThread.CommentCount ||
-			(c.CommentCount == a.longestThread.CommentCount && candidateOutranks(c, *a.longestThread)) {
-			cc := c
-			a.longestThread = &cc
-		}
-		if a.nightOwl == nil || minuteOfDay(c.CreatedAt) > minuteOfDay(a.nightOwl.CreatedAt) {
-			cc := c
-			a.nightOwl = &cc
-		}
-		if a.earlyBird == nil || minuteOfDay(c.CreatedAt) < minuteOfDay(a.earlyBird.CreatedAt) {
-			cc := c
-			a.earlyBird = &cc
-		}
+		keepBest(&a.mostLiked, c, moreLiked)
+		keepBest(&a.longestThread, c, longerThread)
+		keepBest(&a.nightOwl, c, laterInDay)
+		keepBest(&a.earlyBird, c, earlierInDay)
 	}
+	return agg
+}
 
-	// Quiet Achiever's pool is posting members at or below the average post count, so a
-	// member who checked in constantly can't win it on volume alone - it rewards a small,
-	// well-received contribution, not a large mediocre one.
+// averagePostCount is the mean over members who posted at all, which is Quiet Achiever's
+// eligibility bar - a member who checked in constantly can't win it on volume alone, since
+// it rewards a small well-received contribution rather than a large mediocre one.
+func averagePostCount(agg map[int64]*memberActivity) float64 {
 	var totalPosts, postingMembers int
 	for _, a := range agg {
 		if a.postCount > 0 {
@@ -539,69 +562,90 @@ func (d *DB) recapAwardCandidates(ctx context.Context, start, end time.Time, can
 			postingMembers++
 		}
 	}
-	avgPosts := 0.0
-	if postingMembers > 0 {
-		avgPosts = float64(totalPosts) / float64(postingMembers)
+	if postingMembers == 0 {
+		return 0
 	}
+	return float64(totalPosts) / float64(postingMembers)
+}
+
+// awardCandidateFor turns one member's aggregated activity into the entries
+// bestAwardPerMember judges. An award left zero-valued simply doesn't qualify.
+func awardCandidateFor(m recapMember, a *memberActivity, counts memberCounts, avgPosts float64) awardCandidate {
+	c := awardCandidate{UserID: m.ID, UserName: m.Name, UserPhotoID: m.PhotoID}
+
+	if a.mostLiked != nil && a.mostLiked.LikeCount > 0 {
+		c.MostLiked = awardEntry{
+			Qualifies: true, Value: a.mostLiked.LikeCount,
+			DisplayValue: pluralize(a.mostLiked.LikeCount, "like"),
+			PostID:       a.mostLiked.PostID, MediaID: a.mostLiked.MediaID,
+		}
+	}
+	if a.nightOwl != nil {
+		c.NightOwl = awardEntry{
+			Qualifies: true, Value: minuteOfDay(a.nightOwl.CreatedAt),
+			DisplayValue: a.nightOwl.CreatedAt.UTC().Format("3:04 PM"),
+			PostID:       a.nightOwl.PostID, MediaID: a.nightOwl.MediaID,
+		}
+	}
+	if a.earlyBird != nil {
+		// Inverted so "higher Value wins" (bestAwardPerMember's one ranking rule) means
+		// earliest, matching every other award's convention.
+		c.EarlyBird = awardEntry{
+			Qualifies: true, Value: 1440 - minuteOfDay(a.earlyBird.CreatedAt),
+			DisplayValue: a.earlyBird.CreatedAt.UTC().Format("3:04 PM"),
+			PostID:       a.earlyBird.PostID, MediaID: a.earlyBird.MediaID,
+		}
+	}
+	if len(a.places) > 0 {
+		c.MostTravelled = awardEntry{
+			Qualifies: true, Value: len(a.places),
+			DisplayValue: pluralize(len(a.places), "place"),
+		}
+	}
+	if n := counts.commentsWritten[m.ID]; n > 0 {
+		c.Chatterbox = awardEntry{Qualifies: true, Value: n, DisplayValue: pluralize(n, "comment")}
+	}
+	if n := counts.likesGiven[m.ID]; n > 0 {
+		c.BiggestFan = awardEntry{Qualifies: true, Value: n, DisplayValue: fmt.Sprintf("%d likes given", n)}
+	}
+	if a.postCount > 0 && float64(a.postCount) <= avgPosts {
+		avgLikes := float64(a.likesReceived) / float64(a.postCount)
+		c.QuietAchiever = awardEntry{
+			Qualifies: true, Value: int(avgLikes*100 + 0.5),
+			DisplayValue: fmt.Sprintf("%.1f likes/post", avgLikes),
+		}
+	}
+	if n := counts.timesTagged[m.ID]; n > 0 {
+		c.MostTagged = awardEntry{Qualifies: true, Value: n, DisplayValue: pluralize(n, "tag")}
+	}
+	if a.longestThread != nil && a.longestThread.CommentCount > 0 {
+		c.LongestThread = awardEntry{
+			Qualifies: true, Value: a.longestThread.CommentCount,
+			DisplayValue: pluralize(a.longestThread.CommentCount, "comment"),
+			PostID:       a.longestThread.PostID, MediaID: a.longestThread.MediaID,
+		}
+	}
+	return c
+}
+
+// recapAwardCandidates turns a period's candidates plus three activity-on-others queries
+// into one awardCandidate per active member, ready for bestAwardPerMember to judge.
+func (d *DB) recapAwardCandidates(ctx context.Context, start, end time.Time, candidates []recapCandidate) ([]awardCandidate, error) {
+	members, err := d.activeMembers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	counts, err := d.recapActivityCounts(ctx, start, end)
+	if err != nil {
+		return nil, err
+	}
+
+	agg := aggregateMemberActivity(members, candidates)
+	avgPosts := averagePostCount(agg)
 
 	out := make([]awardCandidate, 0, len(members))
 	for _, m := range members {
-		a := agg[m.ID]
-		c := awardCandidate{UserID: m.ID, UserName: m.Name, UserPhotoID: m.PhotoID}
-
-		if a.mostLiked != nil && a.mostLiked.LikeCount > 0 {
-			c.MostLiked = awardEntry{
-				Qualifies: true, Value: a.mostLiked.LikeCount,
-				DisplayValue: pluralize(a.mostLiked.LikeCount, "like"),
-				PostID:       a.mostLiked.PostID, MediaID: a.mostLiked.MediaID,
-			}
-		}
-		if a.nightOwl != nil {
-			c.NightOwl = awardEntry{
-				Qualifies: true, Value: minuteOfDay(a.nightOwl.CreatedAt),
-				DisplayValue: a.nightOwl.CreatedAt.UTC().Format("3:04 PM"),
-				PostID:       a.nightOwl.PostID, MediaID: a.nightOwl.MediaID,
-			}
-		}
-		if a.earlyBird != nil {
-			// Inverted so "higher Value wins" (bestAwardPerMember's one ranking rule) means
-			// earliest, matching every other award's convention.
-			c.EarlyBird = awardEntry{
-				Qualifies: true, Value: 1440 - minuteOfDay(a.earlyBird.CreatedAt),
-				DisplayValue: a.earlyBird.CreatedAt.UTC().Format("3:04 PM"),
-				PostID:       a.earlyBird.PostID, MediaID: a.earlyBird.MediaID,
-			}
-		}
-		if len(a.places) > 0 {
-			c.MostTravelled = awardEntry{
-				Qualifies: true, Value: len(a.places),
-				DisplayValue: pluralize(len(a.places), "place"),
-			}
-		}
-		if n := commentsWritten[m.ID]; n > 0 {
-			c.Chatterbox = awardEntry{Qualifies: true, Value: n, DisplayValue: pluralize(n, "comment")}
-		}
-		if n := likesGiven[m.ID]; n > 0 {
-			c.BiggestFan = awardEntry{Qualifies: true, Value: n, DisplayValue: fmt.Sprintf("%d likes given", n)}
-		}
-		if a.postCount > 0 && float64(a.postCount) <= avgPosts {
-			avgLikes := float64(a.likesReceived) / float64(a.postCount)
-			c.QuietAchiever = awardEntry{
-				Qualifies: true, Value: int(avgLikes*100 + 0.5),
-				DisplayValue: fmt.Sprintf("%.1f likes/post", avgLikes),
-			}
-		}
-		if n := timesTagged[m.ID]; n > 0 {
-			c.MostTagged = awardEntry{Qualifies: true, Value: n, DisplayValue: pluralize(n, "tag")}
-		}
-		if a.longestThread != nil && a.longestThread.CommentCount > 0 {
-			c.LongestThread = awardEntry{
-				Qualifies: true, Value: a.longestThread.CommentCount,
-				DisplayValue: pluralize(a.longestThread.CommentCount, "comment"),
-				PostID:       a.longestThread.PostID, MediaID: a.longestThread.MediaID,
-			}
-		}
-		out = append(out, c)
+		out = append(out, awardCandidateFor(m, agg[m.ID], counts, avgPosts))
 	}
 	return out, nil
 }

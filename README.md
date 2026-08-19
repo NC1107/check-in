@@ -10,7 +10,10 @@
 My solution for a way to check in with friends without selling my soul to monopolies
 or getting stuck doomscrolling. As the admin you whitelist your people by giving the app access to selected contacts.
 It stores their numbers on **your** server, and those people can sign up once you've
-given them the server address. 
+given them the server address.
+
+It's on the [App Store](https://apps.apple.com/us/app/check-in-social-feed/id6783974361) if
+you want screenshots and app info.
 
 ## How it works
 

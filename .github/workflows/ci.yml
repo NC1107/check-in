@@ -60,9 +60,13 @@ jobs:
         working-directory: app
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # Pinned, not just channel-pinned. "stable" moves under the pipeline, so an
+      # upstream Flutter release could change what ships - or break a release build -
+      # on a day nobody touched this repo. Bump this deliberately.
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
+          flutter-version: "3.47.0"
       - run: flutter pub get
       - name: Check formatting (dart format)
         run: dart format --output=none --set-exit-if-changed lib test

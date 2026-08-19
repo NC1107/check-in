@@ -12,9 +12,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// postRow is the one method both a multi-row pgx.Rows and a single-row pgx.Row share, so
+// postScanner is the one method both a multi-row pgx.Rows and a single-row pgx.Row share, so
 // scanPost can serve the list queries and the pick-one queries alike.
-type postRow interface {
+type postScanner interface {
 	Scan(dest ...any) error
 }
 
@@ -26,7 +26,7 @@ type postRow interface {
 // mismatched column would compile, pass CI, and fail only against a real server. Six copies
 // of this loop meant adding one column touched six SELECT lists and six Scan calls that had
 // to agree; now the Scan half is written once.
-func scanPost(row postRow) (Post, error) {
+func scanPost(row postScanner) (Post, error) {
 	var p Post
 	var preview, media, people, recap []byte
 	if err := row.Scan(&p.ID, &p.AuthorID, &p.Kind, &p.Body, &p.MediaID, &p.Location, &p.CreatedAt, &p.CrossPostID, &p.Lat, &p.Lng,
@@ -156,15 +156,29 @@ func (d *DB) SeedServerName(ctx context.Context, envName string) error {
 // ---- users ----
 
 // CreateUser inserts a new user and returns it.
-func (d *DB) CreateUser(ctx context.Context, phone, name, firstName, lastName string, birthday time.Time, profileMediaID *int64, passwordHash string, isAdmin bool) (User, error) {
-	var u User
+// NewUser is a signup's worth of user fields. A struct rather than a parameter list
+// because four of them are adjacent strings - phone, name, first and last - which a call
+// site can transpose without the compiler noticing.
+type NewUser struct {
+	Phone          string
+	Name           string
+	FirstName      string
+	LastName       string
+	Birthday       time.Time
+	ProfileMediaID *int64
+	PasswordHash   string
+	IsAdmin        bool
+}
+
+func (d *DB) CreateUser(ctx context.Context, u NewUser) (User, error) {
+	var out User
 	err := d.Pool.QueryRow(ctx, `
 		INSERT INTO users (phone, name, first_name, last_name, birthday, profile_media_id, password_hash, is_admin)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id, phone, name, first_name, last_name, birthday, profile_media_id, is_admin, status, created_at, title, title_set_at`,
-		phone, name, firstName, lastName, birthday, profileMediaID, passwordHash, isAdmin,
-	).Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt, &u.Title, &u.TitleSetAt)
-	return u, err
+		u.Phone, u.Name, u.FirstName, u.LastName, u.Birthday, u.ProfileMediaID, u.PasswordHash, u.IsAdmin,
+	).Scan(&out.ID, &out.Phone, &out.Name, &out.FirstName, &out.LastName, &out.Birthday, &out.ProfileMediaID, &out.IsAdmin, &out.Status, &out.CreatedAt, &out.Title, &out.TitleSetAt)
+	return out, err
 }
 
 // GetUserByPhone returns the user (and password hash) for login.
@@ -1017,7 +1031,24 @@ func dedupeExcluding(ids []int64, exclude int64) []int64 {
 // timeline (handleUserPosts), where a recap is a group artifact attributed to the admin
 // rather than something they personally posted, and does not belong in their history. The
 // main feed passes false: recaps belong there like any other post.
-func (d *DB) Feed(ctx context.Context, viewerID int64, authorID *int64, locations []string, before *time.Time, beforeID *int64, limit int, excludeRecap bool) ([]Post, error) {
+// FeedQuery is one feed read. A struct rather than a parameter list because the two
+// cursor halves and the two filters are all optional pointers, and a call site passing a
+// row of nils says nothing about which is which.
+type FeedQuery struct {
+	ViewerID  int64
+	AuthorID  *int64   // nil for everyone
+	Locations []string // empty or nil for no location filter
+	Before    *time.Time
+	BeforeID  *int64
+	Limit     int
+	// ExcludeRecap drops kind = 'recap' posts entirely - used for a member's personal
+	// profile; the main feed passes false, since recaps belong there like any other post.
+	ExcludeRecap bool
+}
+
+func (d *DB) Feed(ctx context.Context, q FeedQuery) ([]Post, error) {
+	viewerID, authorID, locations := q.ViewerID, q.AuthorID, q.Locations
+	before, beforeID, limit, excludeRecap := q.Before, q.BeforeID, q.Limit, q.ExcludeRecap
 	rows, err := d.Pool.Query(ctx, `
 		SELECT p.id, p.author_id, p.kind, p.body, p.media_id, p.location, p.created_at, p.cross_post_id, p.lat, p.lng,
 		       CASE WHEN p.kind = 'recap' THEN sc.name ELSE u.name END,
@@ -1719,75 +1750,35 @@ func (d *DB) OtherAdminExists(ctx context.Context, excludeUserID int64) (bool, e
 
 // DeleteAccount permanently removes a user and all their content. Returns the file paths
 // of any media that became orphaned so the caller can remove them from disk.
-func (d *DB) DeleteAccount(ctx context.Context, userID int64) ([]string, error) {
-	tx, err := d.Pool.Begin(ctx)
+// scanIDs collects a result set of one int64 column, closing rows on every path.
+func scanIDs(rows pgx.Rows, err error) ([]int64, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
-
-	// Collect media owned by this user so we can check for orphans after deletion.
-	mediaRows, err := tx.Query(ctx, `SELECT id FROM media WHERE owner_id = $1`, userID)
-	if err != nil {
-		return nil, err
-	}
-	var mediaIDs []int64
-	for mediaRows.Next() {
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
 		var id int64
-		if err := mediaRows.Scan(&id); err != nil {
-			mediaRows.Close()
+		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
-		mediaIDs = append(mediaIDs, id)
+		out = append(out, id)
 	}
-	mediaRows.Close()
-	if err := mediaRows.Err(); err != nil {
-		return nil, err
-	}
+	return out, rows.Err()
+}
 
-	// Remove auth + notification data.
-	for _, sql := range []string{
-		`DELETE FROM sessions WHERE user_id = $1`,
-		`DELETE FROM device_tokens WHERE user_id = $1`,
-	} {
-		if _, err := tx.Exec(ctx, sql, userID); err != nil {
-			return nil, err
-		}
-	}
-
-	// Remove engagement from other people's content.
-	for _, sql := range []string{
-		`DELETE FROM likes WHERE user_id = $1`,
-		`DELETE FROM comments WHERE user_id = $1`,
-		`DELETE FROM post_people WHERE user_id = $1`,
-		`DELETE FROM user_blocks WHERE blocker_id = $1 OR blocked_id = $1`,
-		`DELETE FROM content_reports WHERE reporter_id = $1`,
-	} {
-		if _, err := tx.Exec(ctx, sql, userID); err != nil {
-			return nil, err
-		}
-	}
-
-	// Collect posts before deleting them (for media cleanup).
-	postRows, err := tx.Query(ctx, `SELECT id FROM posts WHERE author_id = $1`, userID)
+// accountMediaIDs is every media id the account could be the last owner of: files it
+// uploaded, plus anything attached to its posts. Collected before anything is deleted,
+// since the posts are about to go.
+func accountMediaIDs(ctx context.Context, tx pgx.Tx, userID int64) ([]int64, error) {
+	mediaIDs, err := scanIDs(tx.Query(ctx, `SELECT id FROM media WHERE owner_id = $1`, userID))
 	if err != nil {
 		return nil, err
 	}
-	var postIDs []int64
-	for postRows.Next() {
-		var id int64
-		if err := postRows.Scan(&id); err != nil {
-			postRows.Close()
-			return nil, err
-		}
-		postIDs = append(postIDs, id)
-	}
-	postRows.Close()
-	if err := postRows.Err(); err != nil {
+	postIDs, err := scanIDs(tx.Query(ctx, `SELECT id FROM posts WHERE author_id = $1`, userID))
+	if err != nil {
 		return nil, err
 	}
-
-	// Collect post media ids for orphan check.
 	for _, pid := range postIDs {
 		more, err := collectPostMedia(ctx, tx, pid)
 		if err != nil {
@@ -1795,28 +1786,52 @@ func (d *DB) DeleteAccount(ctx context.Context, userID int64) ([]string, error) 
 		}
 		mediaIDs = append(mediaIDs, more...)
 	}
+	return mediaIDs, nil
+}
 
-	// Delete posts (cascades to post_media, post_people, likes, comments on those posts).
-	if _, err := tx.Exec(ctx, `DELETE FROM posts WHERE author_id = $1`, userID); err != nil {
+// accountDeletions is every row a departing account leaves behind.
+//
+// Most of these tables declare ON DELETE CASCADE on users(id), so the final statement would
+// clear them anyway; naming them keeps the deletion explicit and independent of a schema
+// detail a later migration could change. The order is not cosmetic though: allowed_phones
+// has no foreign key to users - it is keyed by phone - and finds the number through a
+// subquery on the users row, so it has to run BEFORE the user is deleted or it silently
+// matches nothing and leaves the number on the allowlist, letting a deleted account sign up
+// again with no fresh invite. TestDeleteAccountLeavesNoRowsBehind pins that.
+var accountDeletions = []string{
+	`DELETE FROM sessions WHERE user_id = $1`,
+	`DELETE FROM device_tokens WHERE user_id = $1`,
+	`DELETE FROM likes WHERE user_id = $1`,
+	`DELETE FROM comments WHERE user_id = $1`,
+	`DELETE FROM post_people WHERE user_id = $1`,
+	`DELETE FROM user_blocks WHERE blocker_id = $1 OR blocked_id = $1`,
+	`DELETE FROM content_reports WHERE reporter_id = $1`,
+	`DELETE FROM posts WHERE author_id = $1`,
+	`DELETE FROM allowed_phones WHERE phone = (SELECT phone FROM users WHERE id = $1)`,
+	`DELETE FROM users WHERE id = $1`,
+}
+
+func (d *DB) DeleteAccount(ctx context.Context, userID int64) ([]string, error) {
+	tx, err := d.Pool.Begin(ctx)
+	if err != nil {
 		return nil, err
 	}
+	defer tx.Rollback(ctx)
 
-	// Remove from the allowlist so the phone can't be re-used without re-invite.
-	if _, err := tx.Exec(ctx, `DELETE FROM allowed_phones WHERE phone = (SELECT phone FROM users WHERE id = $1)`, userID); err != nil {
+	mediaIDs, err := accountMediaIDs(ctx, tx, userID)
+	if err != nil {
 		return nil, err
 	}
-
-	// Delete the user record itself.
-	if _, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID); err != nil {
-		return nil, err
+	for _, sql := range accountDeletions {
+		if _, err := tx.Exec(ctx, sql, userID); err != nil {
+			return nil, err
+		}
 	}
-
-	// Clean up orphaned media files.
+	// Only now that the rows referencing them are gone can a file be judged orphaned.
 	paths, err := deleteOrphanMedia(ctx, tx, mediaIDs)
 	if err != nil {
 		return nil, err
 	}
-
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}

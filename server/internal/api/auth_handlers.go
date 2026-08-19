@@ -169,6 +169,52 @@ func validRecapCadence(raw string) bool {
 	}
 }
 
+// recapPatch is the recap half of an update-server request: every field optional, each
+// validated against the same bounds the scheduler assumes.
+type recapPatch struct {
+	cadence *string
+	weekday *int
+	hour    *int
+	offset  *int
+}
+
+// present reports whether the request touched the recap settings at all, which is what
+// decides between leaving them alone and reading-modifying-writing them.
+func (p recapPatch) present() bool {
+	return p.cadence != nil || p.weekday != nil || p.hour != nil || p.offset != nil
+}
+
+// applyTo returns settings with whichever fields were sent applied, or the message for the
+// first one that failed validation. Pure, so the bounds are testable without a database.
+func (p recapPatch) applyTo(settings db.RecapSettings) (db.RecapSettings, string) {
+	if p.cadence != nil {
+		if !validRecapCadence(*p.cadence) {
+			return settings, "recapCadence must be 'off', 'weekly' or 'monthly'"
+		}
+		settings.Cadence = *p.cadence
+	}
+	if p.weekday != nil {
+		if *p.weekday < 1 || *p.weekday > 7 {
+			return settings, "recapWeekday must be 1-7 (ISO, 1=Monday)"
+		}
+		settings.Weekday = *p.weekday
+	}
+	if p.hour != nil {
+		if *p.hour < 0 || *p.hour > 23 {
+			return settings, "recapHour must be 0-23"
+		}
+		settings.Hour = *p.hour
+	}
+	if p.offset != nil {
+		// Real UTC offsets span -12:00 to +14:00, same bound as NotifyPrefs.Normalize.
+		if *p.offset < -12*60 || *p.offset > 14*60 {
+			return settings, "recapOffset must be a plausible UTC offset in minutes"
+		}
+		settings.Offset = *p.offset
+	}
+	return settings, ""
+}
+
 // handleUpdateServer lets an admin change the group's shared settings - name, color, and
 // the standing recap cadence - for everyone at once. Every field is optional; whichever is
 // present is validated and applied. Responds with the current values of all of them.
@@ -215,40 +261,16 @@ func (s *Server) handleUpdateServer(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.RecapCadence != nil || req.RecapWeekday != nil || req.RecapHour != nil || req.RecapOffset != nil {
+	if patch := (recapPatch{req.RecapCadence, req.RecapWeekday, req.RecapHour, req.RecapOffset}); patch.present() {
 		settings, err := s.db.GetRecapSettings(r.Context())
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, msgServerError)
 			return
 		}
-		if req.RecapCadence != nil {
-			if !validRecapCadence(*req.RecapCadence) {
-				writeErr(w, http.StatusBadRequest, "recapCadence must be 'off', 'weekly' or 'monthly'")
-				return
-			}
-			settings.Cadence = *req.RecapCadence
-		}
-		if req.RecapWeekday != nil {
-			if *req.RecapWeekday < 1 || *req.RecapWeekday > 7 {
-				writeErr(w, http.StatusBadRequest, "recapWeekday must be 1-7 (ISO, 1=Monday)")
-				return
-			}
-			settings.Weekday = *req.RecapWeekday
-		}
-		if req.RecapHour != nil {
-			if *req.RecapHour < 0 || *req.RecapHour > 23 {
-				writeErr(w, http.StatusBadRequest, "recapHour must be 0-23")
-				return
-			}
-			settings.Hour = *req.RecapHour
-		}
-		if req.RecapOffset != nil {
-			// Real UTC offsets span -12:00 to +14:00, same bound as NotifyPrefs.Normalize.
-			if *req.RecapOffset < -12*60 || *req.RecapOffset > 14*60 {
-				writeErr(w, http.StatusBadRequest, "recapOffset must be a plausible UTC offset in minutes")
-				return
-			}
-			settings.Offset = *req.RecapOffset
+		settings, msg := patch.applyTo(settings)
+		if msg != "" {
+			writeErr(w, http.StatusBadRequest, msg)
+			return
 		}
 		if err := s.db.SetRecapSettings(r.Context(), settings.Cadence, settings.Weekday, settings.Hour, settings.Offset); err != nil {
 			writeErr(w, http.StatusInternalServerError, msgServerError)
@@ -456,9 +478,15 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := s.db.CreateUser(r.Context(), phone, name,
-		strings.TrimSpace(req.FirstName), strings.TrimSpace(req.LastName),
-		birthday, nil, hash, isAdmin)
+	user, err := s.db.CreateUser(r.Context(), db.NewUser{
+		Phone:        phone,
+		Name:         name,
+		FirstName:    strings.TrimSpace(req.FirstName),
+		LastName:     strings.TrimSpace(req.LastName),
+		Birthday:     birthday,
+		PasswordHash: hash,
+		IsAdmin:      isAdmin,
+	})
 	if err != nil {
 		writeErr(w, http.StatusConflict, "could not create account (phone may already exist)")
 		return

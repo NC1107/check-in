@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"sort"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -57,55 +58,81 @@ func (d *DB) Migrate(ctx context.Context) error {
 		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationLockKey)
 	}()
 
-	_, err = d.Pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+	if _, err := d.Pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		name TEXT PRIMARY KEY,
 		applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-	)`)
-	if err != nil {
+	)`); err != nil {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
 
+	names, err := migrationNames()
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		applied, err := d.migrationApplied(ctx, name)
+		if err != nil {
+			return err
+		}
+		if applied {
+			continue
+		}
+		if err := d.applyMigration(ctx, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrationNames lists the embedded .sql migrations in the order they must run. Sorted by
+// name, which is why they are numbered.
+func migrationNames() ([]string, error) {
 	entries, err := fs.ReadDir(migrations.Files, ".")
 	if err != nil {
-		return fmt.Errorf("read migrations: %w", err)
+		return nil, fmt.Errorf("read migrations: %w", err)
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if !e.IsDir() && len(e.Name()) > 4 && e.Name()[len(e.Name())-4:] == ".sql" {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
 			names = append(names, e.Name())
 		}
 	}
 	sort.Strings(names)
+	return names, nil
+}
 
-	for _, name := range names {
-		var exists bool
-		if err := d.Pool.QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE name = $1)`, name,
-		).Scan(&exists); err != nil {
-			return fmt.Errorf("check migration %s: %w", name, err)
-		}
-		if exists {
-			continue
-		}
-		sqlBytes, err := migrations.Files.ReadFile(name)
-		if err != nil {
-			return fmt.Errorf("read migration %s: %w", name, err)
-		}
-		tx, err := d.Pool.Begin(ctx)
-		if err != nil {
-			return fmt.Errorf("begin %s: %w", name, err)
-		}
-		if _, err := tx.Exec(ctx, string(sqlBytes)); err != nil {
-			_ = tx.Rollback(ctx)
-			return fmt.Errorf("apply %s: %w", name, err)
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (name) VALUES ($1)`, name); err != nil {
-			_ = tx.Rollback(ctx)
-			return fmt.Errorf("record %s: %w", name, err)
-		}
-		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("commit %s: %w", name, err)
-		}
+// migrationApplied reports whether this migration is already recorded.
+func (d *DB) migrationApplied(ctx context.Context, name string) (bool, error) {
+	var exists bool
+	if err := d.Pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE name = $1)`, name,
+	).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check migration %s: %w", name, err)
+	}
+	return exists, nil
+}
+
+// applyMigration runs one migration and records it in the same transaction, so a migration
+// can never be recorded as applied unless its statements committed.
+func (d *DB) applyMigration(ctx context.Context, name string) error {
+	sqlBytes, err := migrations.Files.ReadFile(name)
+	if err != nil {
+		return fmt.Errorf("read migration %s: %w", name, err)
+	}
+	tx, err := d.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin %s: %w", name, err)
+	}
+	if _, err := tx.Exec(ctx, string(sqlBytes)); err != nil {
+		_ = tx.Rollback(ctx)
+		return fmt.Errorf("apply %s: %w", name, err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (name) VALUES ($1)`, name); err != nil {
+		_ = tx.Rollback(ctx)
+		return fmt.Errorf("record %s: %w", name, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit %s: %w", name, err)
 	}
 	return nil
 }
