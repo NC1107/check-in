@@ -22,7 +22,7 @@ dependencies:
   video_compress: ^3.1.4   # re-encode a clip to a size target + read duration + poster frame
   native_exif: ^0.6.0      # read a picked photo's GPS (on-device)
   geocoding: ^4.0.0        # reverse-geocode lat/lng → "City, Country" (on-device)
-  gal: ^2.3.0              # save a post's photo to the device gallery
+  gal: ^2.3.3              # save a post's photo to the device gallery
   cached_network_image: ^3.4.1
   flutter_cache_manager: ^3.4.1
   flutter_contacts: ^2.2.2
