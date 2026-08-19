@@ -217,4 +217,76 @@ void main() {
       expect(collapsed.single.isShared, isFalse);
     });
   });
+
+  group('the comment count never claims more than exists', () {
+    Post crossPost(List<PostCopy> copies) => Post(
+          id: 1,
+          authorId: 1,
+          authorName: 'Nick',
+          kind: 'text',
+          body: 'hi',
+          createdAt: DateTime.utc(2026, 1, 1),
+          likeCount: 0,
+          commentCount: copies.first.commentCount,
+          likedByViewer: false,
+        ).withCopies(copies);
+
+    PostCopy copy(String g, {required int comments, required int shared}) => (
+          groupId: g,
+          postId: 1,
+          likeCount: 0,
+          commentCount: comments,
+          sharedCommentCount: shared,
+          likedByViewer: false,
+        );
+
+    // The property that actually matters. The badge is an estimate assembled from counts
+    // alone - no copy knows which shared comments the others hold - so exactness is not
+    // available. What must never happen is the badge promising comments that do not exist:
+    // a member tapping "5 comments" and finding four has been lied to, whereas finding six
+    // is merely a pleasant surprise.
+    test('an estimate is never higher than the true distinct total', () {
+      // Three comments, each of which reached two of the three groups (a different one
+      // missed each time - a group that bounces intermittently). Truth is 3.
+      final post = crossPost([
+        copy('a', comments: 2, shared: 2),
+        copy('b', comments: 2, shared: 2),
+        copy('c', comments: 2, shared: 2),
+      ]);
+      expect(post.totalComments, lessThanOrEqualTo(3));
+    });
+
+    test('it is exact when every shared comment reached every group', () {
+      // The ordinary case, and the one the whole feature is built for.
+      final post = crossPost([
+        copy('a', comments: 4, shared: 2), // 2 group-only + 2 shared
+        copy('b', comments: 3, shared: 2), // 1 group-only + 2 shared
+      ]);
+      expect(post.totalComments, 5);
+    });
+
+    test('a group that has not been reached at all never inflates the total', () {
+      final post = crossPost([
+        copy('a', comments: 3, shared: 3),
+        copy('b', comments: 0, shared: 0),
+      ]);
+      expect(post.totalComments, 3);
+    });
+
+    test('the merged total is never below what a single group already shows', () {
+      // The lower bound that is actually observable by a member: someone in group B alone
+      // sees B's own comment count. If joining group A made that number go DOWN, the merged
+      // view would be visibly claiming comments had disappeared.
+      for (final copies in [
+        [copy('a', comments: 2, shared: 2), copy('b', comments: 7, shared: 2)],
+        [copy('a', comments: 9, shared: 0), copy('b', comments: 1, shared: 1)],
+        [copy('a', comments: 0, shared: 0), copy('b', comments: 4, shared: 4)],
+      ]) {
+        final largestSingleGroup =
+            copies.fold(0, (m, c) => c.commentCount > m ? c.commentCount : m);
+        expect(crossPost(copies).totalComments, greaterThanOrEqualTo(largestSingleGroup),
+            reason: 'merging groups must never make the count smaller than one group alone');
+      }
+    });
+  });
 }

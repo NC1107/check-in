@@ -790,9 +790,16 @@ final apiProvider = Provider<ApiClient>((ref) {
 /// Post.groupId). Null falls back to the current group, so single-group screens work
 /// unchanged.
 final contentAccountProvider = Provider.family<ServerAccount?, String?>((ref, groupId) {
+  // A NAMED group that is no longer signed in resolves to nothing, never to whichever group
+  // happens to be current. Post ids, comment ids and media ids are only unique per server,
+  // so substituting a different one does not fail - it addresses whatever unrelated row on
+  // that server happens to hold the same number, and nothing afterwards can tell. A member
+  // who signs out of a group while a reply to it is half-written is enough to reach this.
+  //
+  // A NULL groupId is different: it means "no particular group, use whatever is current",
+  // which is a deliberate absence rather than a stale reference, so it still falls back.
   if (groupId != null) {
-    final g = ref.watch(multiSessionProvider.select((s) => s.byId(groupId)));
-    if (g != null) return g;
+    return ref.watch(multiSessionProvider.select((s) => s.byId(groupId)));
   }
   return ref.watch(currentAccountProvider);
 });
