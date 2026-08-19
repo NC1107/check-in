@@ -19,7 +19,7 @@ cd "$(dirname "$0")/.."
 slug="${1:-}"
 name="${2:-}"
 
-if [ -z "$slug" ] || [ -z "$name" ]; then
+if [[ -z "$slug" ]] || [[ -z "$name" ]]; then
   echo "usage: $0 <slug> \"Display Name\"" >&2
   exit 1
 fi
@@ -27,11 +27,11 @@ if ! [[ "$slug" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
   echo "error: slug must be lowercase letters, digits, hyphens" >&2
   exit 1
 fi
-if [ "$slug" = "main" ]; then
+if [[ "$slug" = "main" ]]; then
   echo "error: 'main' is reserved for the original group" >&2
   exit 1
 fi
-if [ -e "groups/$slug.env" ]; then
+if [[ -e "groups/$slug.env" ]]; then
   echo "error: groups/$slug.env already exists" >&2
   exit 1
 fi
@@ -48,7 +48,7 @@ echo "registered groups/$slug.env"
 # Create the database now if the stack is already running; otherwise it must be created
 # before first boot of the new server (the server migrates schemas, not databases).
 compose_file=docker-compose.generated.yml
-[ -f "$compose_file" ] || compose_file=docker-compose.yml
+[[ -f "$compose_file" ]] || compose_file=docker-compose.yml
 if docker compose -f "$compose_file" ps db --status running 2>/dev/null | grep -q db; then
   docker compose -f "$compose_file" exec -T db \
     createdb -U "${POSTGRES_USER:-checkin}" "checkin_$slug" \

@@ -137,3 +137,18 @@ func (s *Server) rateLimitUser(lim *rateLimiter) func(http.Handler) http.Handler
 		})
 	}
 }
+
+// Shared response messages.
+//
+// Defined once because each of these is written from a dozen or more handlers, and a client
+// reading them cannot tell "server error" from "Server error" apart from noticing the
+// inconsistency. Naming them also makes every site that can produce one greppable, which
+// matters most for the internal-error case: it is the one a member can do nothing about, so
+// its wording should never quietly diverge between endpoints.
+const (
+	msgServerError  = "server error"
+	msgInvalidID    = "invalid id"
+	msgInvalidBody  = "invalid body"
+	msgInvalidForm  = "invalid form"
+	msgPostNotFound = "post not found"
+)

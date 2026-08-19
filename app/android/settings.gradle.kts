@@ -26,3 +26,7 @@ plugins {
 }
 
 include(":app")
+
+// Pinned rather than derived from the checkout directory name, so the build is the same
+// wherever the repository happens to be cloned.
+rootProject.name = "check-in"

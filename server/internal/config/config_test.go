@@ -113,3 +113,28 @@ func TestTrustedProxyHopsRejectsInvalidValues(t *testing.T) {
 		})
 	}
 }
+
+// A missing database URL must fail loudly rather than fall back to a guess.
+//
+// It used to default to a localhost connection string with a password in it. That put a
+// credential in source control - however placeholder it looks, secret scanners are right to
+// flag it - and it made the required-check dead code, so a deployment that forgot the
+// variable silently tried localhost instead of saying what was missing.
+func TestDatabaseURLIsRequired(t *testing.T) {
+	t.Setenv("CHECKIN_DATABASE_URL", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("Load succeeded with no database URL - it must refuse rather than guess one")
+	}
+}
+
+// And the binary must not carry a credential to fall back to.
+func TestNoDatabaseCredentialIsBakedIn(t *testing.T) {
+	t.Setenv("CHECKIN_DATABASE_URL", "postgres://real:secret@db:5432/checkin?sslmode=disable")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.DatabaseURL != "postgres://real:secret@db:5432/checkin?sslmode=disable" {
+		t.Errorf("DatabaseURL = %q, want exactly what the environment supplied", cfg.DatabaseURL)
+	}
+}

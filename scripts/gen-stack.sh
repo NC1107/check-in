@@ -32,11 +32,11 @@ slugs=()
 declare -A display_names debug_tokens
 
 for f in groups/*.env; do
-  [ -e "$f" ] || continue
+  [[ -e "$f" ]] || continue
   # shellcheck disable=SC1090
   SLUG='' DISPLAY_NAME='' CHECKIN_DEBUG_TOKEN=''
   source "$f"
-  if [ -z "$SLUG" ]; then
+  if [[ -z "$SLUG" ]]; then
     echo "error: $f has no SLUG" >&2
     exit 1
   fi
@@ -44,7 +44,7 @@ for f in groups/*.env; do
     echo "error: $f: slug '$SLUG' must be lowercase letters, digits, hyphens" >&2
     exit 1
   fi
-  if [ "$SLUG" = "main" ]; then
+  if [[ "$SLUG" = "main" ]]; then
     echo "error: $f: slug 'main' is reserved for the original group" >&2
     exit 1
   fi
@@ -54,9 +54,9 @@ for f in groups/*.env; do
 done
 
 # Fail on duplicate slugs (two files claiming the same subdomain/database).
-if [ "${#slugs[@]}" -gt 0 ]; then
+if [[ "${#slugs[@]}" -gt 0 ]]; then
   dupes=$(printf '%s\n' "${slugs[@]}" | sort | uniq -d)
-  if [ -n "$dupes" ]; then
+  if [[ -n "$dupes" ]]; then
     echo "error: duplicate slug(s) in groups/: $dupes" >&2
     exit 1
   fi

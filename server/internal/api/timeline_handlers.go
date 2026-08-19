@@ -37,7 +37,7 @@ func (s *Server) handleTimeline(w http.ResponseWriter, r *http.Request) {
 	viewer := userFrom(r)
 	months, err := s.db.Timeline(r.Context(), viewer.ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"months": months})
@@ -71,7 +71,7 @@ func (s *Server) handleTimelineMonth(w http.ResponseWriter, r *http.Request) {
 	}
 	posts, hasMore, err := s.db.TimelineMonthPosts(r.Context(), viewer.ID, year, month)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"posts": posts, "hasMore": hasMore})

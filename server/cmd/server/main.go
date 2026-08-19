@@ -20,6 +20,11 @@ import (
 	"github.com/nc1107/check-in/server/internal/storage"
 )
 
+// Where a self-hoster goes to understand any of the push start-up messages below. One
+// constant so a moved anchor is fixed in a single place rather than in whichever copies
+// somebody remembers to grep for.
+const pushDocsRef = "docs/self-hosting/configuration.md#push-notifications"
+
 func main() {
 	// `server -healthcheck` hits the local health endpoint and exits 0/1. Used as the
 	// container healthcheck since the distroless image has no shell or curl.
@@ -122,12 +127,12 @@ func directPushLog(projectID string) string {
 	if projectID == publishedFirebaseProject {
 		return fmt.Sprintf("push: direct FCM through Firebase project %q, the one the published "+
 			"apps were built against, so members running those receive notifications. "+
-			"See docs/self-hosting/configuration.md#push-notifications", projectID)
+			"See "+pushDocsRef, projectID)
 	}
 	return fmt.Sprintf("push: direct FCM through Firebase project %q. This only reaches an app "+
 		"built against that project; the published apps were not, so members running those get "+
 		"nothing. Clear CHECKIN_FCM_CREDENTIALS_FILE to deliver through the relay instead. "+
-		"See docs/self-hosting/configuration.md#push-notifications", projectID)
+		"See "+pushDocsRef, projectID)
 }
 
 // setupPush selects and builds the push Notifier from config, logging the chosen mode. It
@@ -158,19 +163,19 @@ func setupPush(ctx context.Context, cfg config.Config, database *db.DB) push.Not
 		key, err := ensureRelayKey(ctx, cfg, database)
 		if err != nil {
 			log.Printf("push: relay registration with %s failed (%v); push disabled. Members will "+
-				"not receive notifications. See docs/self-hosting/configuration.md#push-notifications",
+				"not receive notifications. See "+pushDocsRef,
 				cfg.RelayURL, err)
 			return nil
 		}
 		log.Printf("push: relay via %s. Members running the published apps receive notifications "+
 			"through the maintainer's relay, which sees only a short title/body plus the device "+
 			"tokens - never post content. Clear CHECKIN_RELAY_URL to turn this off. "+
-			"See docs/self-hosting/configuration.md#push-notifications", cfg.RelayURL)
+			"See "+pushDocsRef, cfg.RelayURL)
 		return push.NewRelaySender(cfg.RelayURL, key)
 	}
 
 	log.Println("push: disabled (no FCM credentials and no relay URL). Members will not receive " +
-		"notifications. See docs/self-hosting/configuration.md#push-notifications")
+		"notifications. See " + pushDocsRef)
 	return nil
 }
 

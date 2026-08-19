@@ -24,7 +24,7 @@ type deviceReq struct {
 func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 	var req deviceReq
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	if strings.TrimSpace(req.Token) == "" {
@@ -32,7 +32,7 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.db.UpsertDeviceToken(r.Context(), userFrom(r).ID, req.Token, req.Platform); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -42,11 +42,11 @@ func (s *Server) handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUnregisterDevice(w http.ResponseWriter, r *http.Request) {
 	var req deviceReq
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	if err := s.db.DeleteDeviceToken(r.Context(), req.Token); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -55,7 +55,7 @@ func (s *Server) handleUnregisterDevice(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleGetNotificationPrefs(w http.ResponseWriter, r *http.Request) {
 	prefs, err := s.db.NotificationPrefs(r.Context(), userFrom(r).ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, prefs)
@@ -77,12 +77,12 @@ type notifyPrefsReq struct {
 func (s *Server) handleUpdateNotificationPrefs(w http.ResponseWriter, r *http.Request) {
 	var req notifyPrefsReq
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	prefs, err := s.db.NotificationPrefs(r.Context(), userFrom(r).ID)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	if req.Posts != nil {
@@ -105,7 +105,7 @@ func (s *Server) handleUpdateNotificationPrefs(w http.ResponseWriter, r *http.Re
 	}
 	prefs = prefs.Normalize()
 	if err := s.db.SetNotificationPrefs(r.Context(), userFrom(r).ID, prefs); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, prefs)

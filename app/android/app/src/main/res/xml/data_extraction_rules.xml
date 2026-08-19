@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ counterpart to allowBackup="false": both cloud backup and device-to-device
+     transfer are refused outright.
+
+     This app's local state is the member's session tokens for one or more private servers
+     and the media cached from them. None of it should leave the device through a channel
+     the member never chose - a group's host cannot be expected to know that a member's
+     phone backup carried their group's photos into someone else's cloud account. Signing in
+     again on a new device costs one step and re-fetches everything legitimately. -->
+<data-extraction-rules>
+    <cloud-backup disableIfNoEncryptionCapabilities="true">
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

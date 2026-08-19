@@ -30,7 +30,7 @@ Under Compose, sensible values are already wired up; override only if you need t
 | `CHECKIN_SERVER_NAME` | `Check-In` | Initial group name, seeded into the database on first boot. After that, an admin renames the group in-app (Settings → Group name) and that stored name is what clients see via `/api/server-info` and in push titles; changing this variable later has no effect once a name is set. |
 | `CHECKIN_PUBLIC_URL` | *(empty)* | This server's public base URL (e.g. `https://alpha.check-in.example.com`). Surfaced via `/api/server-info` and stamped into push payloads so an app connected to several servers can attribute notifications. Set automatically by the multi-group generator; optional for single-group installs. |
 | `CHECKIN_HTTP_ADDR` | `:8080` | Address the API listens on inside the container. |
-| `CHECKIN_DATABASE_URL` | `postgres://checkin:checkin@localhost:5432/checkin?sslmode=disable` | Full PostgreSQL connection string. Set automatically by Compose; only override for a custom/external database. |
+| `CHECKIN_DATABASE_URL` | _(required)_ | Full PostgreSQL connection string. Set automatically by Compose from `POSTGRES_PASSWORD`; only set it yourself for a custom or external database. The server refuses to start without it rather than guessing a local one. |
 | `CHECKIN_MEDIA_DIR` | `./data/media` (`/data/media` in the image) | Where uploaded images are stored. Backed by the `media_data` volume in Compose. |
 | `CHECKIN_SESSION_TTL` | `720h` (30 days) | How long a login session stays valid. Accepts Go durations (e.g. `168h`, `720h`). |
 | `CHECKIN_MAX_UPLOAD_BYTES` | `10485760` (10 MiB) | Maximum accepted size for an uploaded image. |

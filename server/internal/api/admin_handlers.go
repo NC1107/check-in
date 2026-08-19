@@ -21,7 +21,7 @@ type uploadContactsReq struct {
 func (s *Server) handleUploadContacts(w http.ResponseWriter, r *http.Request) {
 	var req uploadContactsReq
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	if len(req.Phones) == 0 {
@@ -61,7 +61,7 @@ func (s *Server) handleUploadContacts(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminListAllowed(w http.ResponseWriter, r *http.Request) {
 	allowed, err := s.db.ListAllowedPhones(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	if allowed == nil {
@@ -80,7 +80,7 @@ type removeAllowedReq struct {
 func (s *Server) handleAdminRemoveAllowed(w http.ResponseWriter, r *http.Request) {
 	var req removeAllowedReq
 	if err := decodeJSON(w, r, &req); err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid body")
+		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
 	phone := auth.NormalizePhone(req.Phone, s.cfg.DefaultCountryCode)
@@ -94,7 +94,7 @@ func (s *Server) handleAdminRemoveAllowed(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -103,7 +103,7 @@ func (s *Server) handleAdminRemoveAllowed(w http.ResponseWriter, r *http.Request
 func (s *Server) handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := s.db.ListAllUsers(r.Context())
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"users": users})
@@ -114,7 +114,7 @@ func (s *Server) handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminRevokeUser(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	if id == userFrom(r).ID {
@@ -127,7 +127,7 @@ func (s *Server) handleAdminRevokeUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	// Invalidate all existing sessions so the revoked user is kicked immediately.
@@ -141,7 +141,7 @@ func (s *Server) handleAdminRevokeUser(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminIssueResetCode(w http.ResponseWriter, r *http.Request) {
 	id, err := pathInt(r, "id")
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "invalid id")
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
 	user, err := s.db.GetUser(r.Context(), id)
@@ -150,22 +150,22 @@ func (s *Server) handleAdminIssueResetCode(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	code, err := auth.NewResetCode()
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	hash, err := auth.HashPassword(code)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	expires := time.Now().Add(24 * time.Hour)
 	if err := s.db.SetResetCode(r.Context(), id, hash, expires); err != nil {
-		writeErr(w, http.StatusInternalServerError, "server error")
+		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

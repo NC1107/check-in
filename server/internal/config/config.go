@@ -89,8 +89,13 @@ const DefaultKlipyBaseURL = "https://api.klipy.com"
 // server runs out of the box for local development.
 func Load() (Config, error) {
 	cfg := Config{
-		HTTPAddr:           getenv("CHECKIN_HTTP_ADDR", ":8080"),
-		DatabaseURL:        getenv("CHECKIN_DATABASE_URL", "postgres://checkin:checkin@localhost:5432/checkin?sslmode=disable"),
+		HTTPAddr: getenv("CHECKIN_HTTP_ADDR", ":8080"),
+		// No default. A connection string with a password baked into the binary is a
+		// credential in source control however placeholder it looks, and it also made the
+		// required-check below dead code - an unset variable silently became "try localhost
+		// with a guessed password" rather than an error naming what is missing. Compose sets
+		// this from POSTGRES_PASSWORD, and the README passes it explicitly.
+		DatabaseURL:        os.Getenv("CHECKIN_DATABASE_URL"),
 		MediaDir:           getenv("CHECKIN_MEDIA_DIR", "./data/media"),
 		GazetteerPath:      getenv("CHECKIN_GAZETTEER_PATH", "/app/data/places.bin"),
 		ServerName:         getenv("CHECKIN_SERVER_NAME", "Check-In"),
@@ -107,7 +112,8 @@ func Load() (Config, error) {
 		TrustedProxyHops:   getPositiveInt("CHECKIN_TRUSTED_PROXY_HOPS", 1),
 	}
 	if cfg.DatabaseURL == "" {
-		return cfg, fmt.Errorf("CHECKIN_DATABASE_URL is required")
+		return cfg, fmt.Errorf(
+			"CHECKIN_DATABASE_URL is required, e.g. postgres://user:password@host:5432/checkin?sslmode=disable")
 	}
 	return cfg, nil
 }
