@@ -18,7 +18,14 @@ import (
 func TestMain(m *testing.M) {
 	gazetteertest.UseFixture()
 	requireTestDB()
-	os.Exit(m.Run())
+	code := m.Run()
+	// The two-server tests create a second database on the same Postgres. Dropped here
+	// rather than in a t.Cleanup because its pool is shared by every test that asked for
+	// one - and dropped even when the run failed, so a red suite never leaves a stray
+	// database behind for the next one to inherit. os.Exit skips deferred functions, so
+	// this cannot be a defer.
+	dropSecondTestDB()
+	os.Exit(code)
 }
 
 // skipOptOutEnv lets a machine with no Postgres run what it can, deliberately.

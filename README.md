@@ -91,3 +91,7 @@ CHECKIN_SKIP_DB_TESTS=1 go test ./...
 
 CI supplies its own database as a service container, so it always runs the full suite.
 
+Some tests stand up **two** independent servers against two databases, because a "group" in Check-In is a whole separate server and the cross-group features are the client talking to several of them (see `server/internal/api/twoserver_test.go`).
+The second database is created on the same PostgreSQL and dropped again when the test binary exits - including when the run fails.
+A run killed outright cannot clean up after itself, so the next run drops any leftover before creating its own.
+
