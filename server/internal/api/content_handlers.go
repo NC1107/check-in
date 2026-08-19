@@ -214,84 +214,125 @@ type createPostReq struct {
 	Lng *float64 `json:"lng"`
 }
 
+// createPostFields is a create-post request after validation: the media list the claimed
+// kind actually implies, plus the optional fields once trimmed and bounded.
+type createPostFields struct {
+	body        string
+	mediaIDs    []int64
+	location    *string
+	crossPostID *string
+	lat, lng    *float64
+}
+
+// normalizeMediaIDs collapses the new mediaIds list and the legacy single mediaId into one
+// ordered list, so everything downstream sees the same shape.
+func normalizeMediaIDs(req createPostReq) []int64 {
+	if len(req.MediaIDs) > 0 {
+		return req.MediaIDs
+	}
+	if req.MediaID != nil {
+		return []int64{*req.MediaID}
+	}
+	return nil
+}
+
+// checkPostKind treats the client's kind as a claim to check rather than a value to store:
+// CreatePost derives the stored kind from what is actually attached, so a post can never
+// describe itself as something it is not.
+func checkPostKind(kind, body string, mediaCount int) string {
+	switch kind {
+	case "text":
+		if body == "" {
+			return "text posts need a body"
+		}
+	case "image", "video":
+		if mediaCount == 0 {
+			return "media posts need at least one attachment"
+		}
+		if mediaCount > 10 {
+			return "too many attachments (max 10)"
+		}
+	default:
+		return "kind must be 'text', 'image' or 'video'"
+	}
+	return ""
+}
+
+// boundedCrossPostID bounds the opaque client-generated group id and drops it if blank, so
+// a stray empty string doesn't create a one-member "cross-post".
+func boundedCrossPostID(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	id := strings.TrimSpace(*v)
+	if id == "" || len(id) > 64 {
+		return nil
+	}
+	return &id
+}
+
+// boundedLocation trims and caps the coarse place label, dropping it if blank.
+func boundedLocation(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	loc := strings.TrimSpace(*v)
+	if loc == "" {
+		return nil
+	}
+	if len(loc) > 120 {
+		loc = loc[:120]
+	}
+	return &loc
+}
+
+// validateCreatePost checks and normalizes the request, returning the message for the first
+// failure. Pure, so every bound here is testable without a request or a database.
+func validateCreatePost(req createPostReq) (createPostFields, string) {
+	f := createPostFields{
+		body:     strings.TrimSpace(req.Body),
+		mediaIDs: normalizeMediaIDs(req),
+	}
+	if msg := checkPostKind(req.Kind, f.body, len(f.mediaIDs)); msg != "" {
+		return f, msg
+	}
+	if req.Kind == "text" {
+		f.mediaIDs = nil
+	}
+	if len(f.body) > 5000 {
+		return f, "body too long"
+	}
+	if len(req.PeopleIDs) > 30 {
+		return f, "too many tagged people (max 30)"
+	}
+	f.crossPostID = boundedCrossPostID(req.CrossPostID)
+	// Location and coordinates are allowed on any post with an attachment, and are dropped
+	// together when there is none to have carried GPS in the first place. Video mirrors
+	// photos: the member chose to share where the clip was taken, and the file itself is
+	// stripped either way. Whatever the client sent is clamped and rounded to 2 decimal
+	// places in CreatePost itself, not here - so a modified client or a raw API call cannot
+	// smuggle full-precision GPS past this handler by any other path into CreatePost.
+	if len(f.mediaIDs) > 0 {
+		f.location = boundedLocation(req.Location)
+		f.lat, f.lng = req.Lat, req.Lng
+	}
+	return f, ""
+}
+
 func (s *Server) handleCreatePost(w http.ResponseWriter, r *http.Request) {
 	var req createPostReq
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
-	req.Body = strings.TrimSpace(req.Body)
-	// Normalize to one ordered media list (new mediaIds, falling back to legacy mediaId).
-	mediaIDs := req.MediaIDs
-	if len(mediaIDs) == 0 && req.MediaID != nil {
-		mediaIDs = []int64{*req.MediaID}
-	}
-	// The client's kind is a claim to check, not a value to store: CreatePost derives the
-	// stored kind from what is actually attached, so a post can never describe itself as
-	// something it is not.
-	switch req.Kind {
-	case "text":
-		if req.Body == "" {
-			writeErr(w, http.StatusBadRequest, "text posts need a body")
-			return
-		}
-		mediaIDs = nil
-	case "image", "video":
-		if len(mediaIDs) == 0 {
-			writeErr(w, http.StatusBadRequest, "media posts need at least one attachment")
-			return
-		}
-		if len(mediaIDs) > 10 {
-			writeErr(w, http.StatusBadRequest, "too many attachments (max 10)")
-			return
-		}
-	default:
-		writeErr(w, http.StatusBadRequest, "kind must be 'text', 'image' or 'video'")
+	f, msg := validateCreatePost(req)
+	if msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
 		return
-	}
-	if len(req.Body) > 5000 {
-		writeErr(w, http.StatusBadRequest, "body too long")
-		return
-	}
-	if len(req.PeopleIDs) > 30 {
-		writeErr(w, http.StatusBadRequest, "too many tagged people (max 30)")
-		return
-	}
-
-	// Opaque client-generated group id; bound its length and drop it if blank so a stray
-	// empty string doesn't create a one-member "cross-post".
-	var crossPostID *string
-	if req.CrossPostID != nil {
-		if id := strings.TrimSpace(*req.CrossPostID); id != "" && len(id) <= 64 {
-			crossPostID = &id
-		}
-	}
-
-	// Coarse, optional place label, allowed on any post with an attachment. Video mirrors
-	// photos here: the member chose to share where the clip was taken, and the file itself
-	// is stripped either way. Trim, cap length, and drop if blank.
-	var location *string
-	if req.Location != nil && len(mediaIDs) > 0 {
-		if loc := strings.TrimSpace(*req.Location); loc != "" {
-			if len(loc) > 120 {
-				loc = loc[:120]
-			}
-			location = &loc
-		}
-	}
-
-	// Coordinates ride along with location and are dropped the same way when there's no
-	// attachment to have carried GPS in the first place. Whatever the client sent is
-	// clamped and rounded to 2 decimal places in CreatePost itself, not here - so a
-	// modified client or a raw API call cannot smuggle full-precision GPS past this
-	// handler by any other path into CreatePost.
-	var lat, lng *float64
-	if len(mediaIDs) > 0 {
-		lat, lng = req.Lat, req.Lng
 	}
 
 	me := userFrom(r)
-	post, err := s.db.CreatePost(r.Context(), me.ID, req.Body, mediaIDs, location, req.PeopleIDs, crossPostID, lat, lng)
+	post, err := s.db.CreatePost(r.Context(), me.ID, f.body, f.mediaIDs, f.location, req.PeopleIDs, f.crossPostID, f.lat, f.lng)
 	if errors.Is(err, db.ErrNotOwned) {
 		writeErr(w, http.StatusBadRequest, "one or more attachments are not yours")
 		return
