@@ -43,6 +43,9 @@ class FakeVideoPlatform extends VideoPlayerPlatform {
       throw PlatformException(code: 'VideoError', message: 'no player for $uri');
     }
     final id = ++_nextId;
+    // Closed in dispose(playerId) below. close_sinks cannot see that: the controller is
+    // handed straight to a map rather than kept in a field it can follow.
+    // ignore: close_sinks
     final events = StreamController<VideoEvent>.broadcast();
     // Announce readiness only once someone is listening: a broadcast stream drops whatever
     // was sent before that, and the controller subscribes after create returns.

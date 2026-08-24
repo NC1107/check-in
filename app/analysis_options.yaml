@@ -7,6 +7,26 @@ linter:
   rules:
     prefer_const_constructors: true
     avoid_print: true
+
+    # Correctness rules, not style ones. Each of these catches a class of bug that compiles
+    # and runs and silently does the wrong thing - a leaked stream, a remove() that matches
+    # nothing because the type is wrong, a comma missing from a list of strings. They were
+    # all clean when added, so they cost nothing now and only ever fire on something new.
+    #
+    # unawaited_futures is deliberately NOT here: its fourteen findings were every one a
+    # deliberate fire-and-forget, mostly HapticFeedback, and wrapping them would be noise
+    # rather than safety.
+    cancel_subscriptions: true
+    close_sinks: true
+    collection_methods_unrelated_type: true
+    no_adjacent_strings_in_list: true
+    literal_only_boolean_expressions: true
+    throw_in_finally: true
+    unnecessary_statements: true
+    unnecessary_null_checks: true
+    avoid_dynamic_calls: true
+    avoid_slow_async_io: true
+    avoid_returning_null_for_void: true
 analyzer:
   exclude:
     - build/**
