@@ -300,6 +300,10 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           color: _serverInfo?.color,
           token: auth.token,
           user: auth.user,
+          // The same server-info the name and colour come from also carries what this
+          // server can do, so the group arrives with its capabilities rather than
+          // pretending it has none until the next launch.
+          info: _serverInfo,
         );
     if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop();
   }

@@ -560,9 +560,9 @@ func (s *Server) handleAddComment(w http.ResponseWriter, r *http.Request) {
 	if comment.CrossCommentID != nil {
 		sharedComment = *comment.CrossCommentID
 	}
-	go s.notifyReply(me.Name, id, me.ID, sharedComment)
+	go s.notifyReply(me.Name, id, comment.ID, me.ID, sharedComment)
 	if req.ParentCommentID != nil {
-		go s.notifyCommentReply(me.Name, id, *req.ParentCommentID, me.ID, sharedComment)
+		go s.notifyCommentReply(me.Name, id, comment.ID, *req.ParentCommentID, me.ID, sharedComment)
 	}
 	writeJSON(w, http.StatusCreated, comment)
 }

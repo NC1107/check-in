@@ -19,6 +19,14 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.25',
+    highlights: [
+      "There's a bell on your profile now with everything that happened while you weren't looking. Comments on your check-ins, replies to your comments, likes, all of it, going back as far as you've been in the group. So a notification you swiped away isn't gone.",
+      "Tapping a notification takes you to the actual comment now instead of the top of the thread. It scrolls to it and lights it up for a second so you can tell which one it meant.",
+      "If you're in more than one group, a notification opens the right group's check-in. It used to guess when it couldn't tell, which meant you sometimes landed on a completely unrelated post.",
+    ],
+  ),
+  ReleaseNote(
     version: '1.24',
     highlights: [
       'You can put photos and a video in the same check-in now. It used to be one or the other for no particular reason.',

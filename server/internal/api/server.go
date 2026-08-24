@@ -124,6 +124,10 @@ func (s *Server) Router() http.Handler {
 		r.Delete("/api/me/devices", s.handleUnregisterDevice)
 		r.Get("/api/me/notifications", s.handleGetNotificationPrefs)
 		r.Patch("/api/me/notifications", s.handleUpdateNotificationPrefs)
+		// The log of what happened about you, distinct from the preferences above - hence
+		// /activity rather than the /notifications path those already hold.
+		r.Get("/api/me/activity", s.handleActivity)
+		r.Post("/api/me/activity/seen", s.handleMarkActivitySeen)
 
 		r.Get("/api/feed", s.handleFeed)
 		r.With(s.rateLimitUser(s.content.memories)).Get("/api/memories/random", s.handleRandomMemory)

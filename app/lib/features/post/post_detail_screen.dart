@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'dart:math';
@@ -10,6 +11,7 @@ import 'package:intl/intl.dart';
 
 import '../../api/api_client.dart';
 import '../../api/models.dart';
+import '../../notifications/notification_route.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
@@ -51,6 +53,7 @@ class PostDetailScreen extends ConsumerStatefulWidget {
     required this.postId,
     this.groupId,
     this.focusComments = false,
+    this.highlightCommentId,
     this.copies,
     this.gifDownloader,
   });
@@ -60,7 +63,15 @@ class PostDetailScreen extends ConsumerStatefulWidget {
 
   /// When true (e.g. opened from a "commented on your check-in" notification), the view
   /// scrolls straight to the comment thread once it loads instead of landing on the post.
+  ///
+  /// This is the fallback for a notification that names no particular comment - an older
+  /// server that predates [highlightCommentId], or a like. Prefer that when there is one.
   final bool focusComments;
+
+  /// The comment a notification was about: the view scrolls to it and flashes it, so the
+  /// member lands on the reply they were told about rather than at the top of the thread.
+  /// Null when the notification was about the post itself.
+  final int? highlightCommentId;
 
   /// The copies of a collapsed cross-post (one per group the viewer can see it in). When
   /// set, the thread merges every group's comments and likers, each tagged with its group,
@@ -71,6 +82,20 @@ class PostDetailScreen extends ConsumerStatefulWidget {
   /// [ApiClient.downloadExternalGif] (a real fetch from Klipy's CDN); overridable so a
   /// widget test can drive the attach flow without a network.
   final Future<List<int>> Function(String url)? gifDownloader;
+
+  /// The route a notification's target opens, whether the member tapped the notification
+  /// itself or found it later in the activity list. Shared so the two land in exactly the
+  /// same place; how the route is STACKED is deliberately left to the caller, because a
+  /// push should replace the last one it opened while the activity list should push on top
+  /// of itself so back returns to the list.
+  static Route<void> routeForNotification(NotificationRoute route) => MaterialPageRoute<void>(
+        builder: (_) => PostDetailScreen(
+          postId: route.postId,
+          groupId: route.groupId,
+          highlightCommentId: route.commentId,
+          focusComments: route.focusComments,
+        ),
+      );
 
   @override
   ConsumerState<PostDetailScreen> createState() => _PostDetailScreenState();
@@ -92,6 +117,19 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   final _commentFocus = FocusNode();
   final _scroll = ScrollController();
   final _commentsKey = GlobalKey();
+
+  /// One key per comment row, so the thread can be scrolled to a particular one.
+  ///
+  /// Keyed by group AND id, never by id alone: comment ids are only unique per server, so a
+  /// merged cross-post thread can hold two different comments both numbered 1, and handing
+  /// them the same GlobalKey is a framework error rather than a cosmetic clash.
+  ///
+  /// A key only has a context once its row is actually built, and a ListView builds only
+  /// what is near the viewport even when every child widget is passed to it up front. A
+  /// comment far down a long thread therefore has no context to scroll to on the first
+  /// frame - which is exactly the case that matters, since a short thread needs no
+  /// scrolling at all. _scrollToRow walks the list down until the row exists.
+  final _commentKeys = <String, GlobalKey>{};
   // Loaded post + thread held in state so sending a comment appends to the list in place
   // instead of re-fetching the whole screen (which blanked to a spinner and flashed).
   Post? _post;
@@ -100,6 +138,11 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   Object? _error;
   bool _sending = false;
   bool _didFocusComments = false;
+
+  /// The row currently flashing (a _rowKeyFor value), cleared once the highlight has
+  /// faded. Held in state rather than driven by an animation so it can simply stop.
+  String? _highlighted;
+  Timer? _highlightTimer;
   // Cross-post only: which group a new comment posts to (defaults to the first copy). Like
   // state is read from the app-wide likesProvider, so it stays in step with the feed card.
   /// Which group a new comment goes to, or null for "every group holding a copy".
@@ -255,23 +298,100 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
 
   @override
   void dispose() {
+    _highlightTimer?.cancel();
     _comment.dispose();
     _commentFocus.dispose();
     _scroll.dispose();
     super.dispose();
   }
 
-  /// After the thread loads from a comment notification, bring the comments into view so the
-  /// user lands on the reply rather than the top of the post. Runs once.
+  /// After the thread loads from a notification, bring what the notification was about
+  /// into view. Runs once.
+  ///
+  /// A named comment is scrolled to and flashed, so the member lands on the reply they were
+  /// told about and can see which one it is. Without a named comment - a like, or a push
+  /// from a server predating the comment id - the best available is the top of the thread,
+  /// which on a long thread is why "it didn't take me to the comment" was the complaint.
   void _maybeFocusComments() {
-    if (!widget.focusComments || _didFocusComments) return;
+    final target = widget.highlightCommentId;
+    if ((!widget.focusComments && target == null) || _didFocusComments) return;
     _didFocusComments = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      final named =
+          target == null ? null : _comments.where((c) => _isTargetComment(c, target)).firstOrNull;
+      if (named != null) {
+        unawaited(_scrollToRow(_rowKeyFor(named)));
+        return;
+      }
+      // No particular comment to go to: a like, a push from a server predating the comment
+      // id, or a comment that has since been deleted. The top of the thread is the best
+      // available answer.
       final ctx = _commentsKey.currentContext;
       if (ctx != null) {
         Scrollable.ensureVisible(ctx,
             duration: const Duration(milliseconds: 350), curve: Curves.easeOut);
       }
+    });
+  }
+
+  /// Brings one comment into view and flashes it.
+  ///
+  /// The stepping is not defensive padding. A ListView builds only the rows near the
+  /// viewport, even though every child widget is handed to it up front, so a comment forty
+  /// replies down has no context to scroll to until the list has been scrolled far enough
+  /// to build it. Each pass moves most of a screen and waits for the frame that builds the
+  /// next stretch; the final ensureVisible does the precise positioning. It stops the
+  /// moment the row exists, so a comment already on screen costs nothing.
+  Future<void> _scrollToRow(String rowKey) async {
+    // Generous, and bounded: the loop exits as soon as the row is built, and the cap only
+    // matters if something else is wrong - in which case stopping beats scrolling forever.
+    for (var pass = 0; pass < 60; pass++) {
+      // Checked at the top of every pass, not just the first: each pass ends on a frame
+      // boundary, and the member can leave the thread while this is still walking it.
+      if (!mounted || !_scroll.hasClients) return;
+      final ctx = _commentKeys[rowKey]?.currentContext;
+      // ctx.mounted as well as the State's: the row is reached through a GlobalKey, so it
+      // can be torn down independently of this screen while the walk is between frames.
+      if (ctx != null && ctx.mounted) {
+        await Scrollable.ensureVisible(ctx,
+            duration: const Duration(milliseconds: 350),
+            curve: Curves.easeOut,
+            // A little below the top edge, so the replies under it are visible too rather
+            // than the comment sitting flush against the app bar.
+            alignment: 0.3);
+        if (mounted) _flash(rowKey);
+        return;
+      }
+      final pos = _scroll.position;
+      if (pos.pixels >= pos.maxScrollExtent) return; // the end, and it is not here
+      _scroll.jumpTo(min(pos.pixels + pos.viewportDimension * 0.8, pos.maxScrollExtent));
+      await WidgetsBinding.instance.endOfFrame;
+    }
+  }
+
+  /// A row's identity in this thread: its group and its id there. See [_commentKeys] for
+  /// why the group half is not optional.
+  String _rowKeyFor(Comment c) => '${c.groupId ?? widget.groupId ?? ''}:${c.id}';
+
+  /// Whether [c] is the comment a notification named. The notification came from
+  /// [PostDetailScreen.groupId]'s server, so its id only means anything there.
+  ///
+  /// A collapsed cross-comment stands in for one copy per group and keeps just one of their
+  /// ids as its own, so the copies are what say which id it holds on which server - without
+  /// checking them, a notification from the group whose copy did not win would scroll to
+  /// the top of the thread instead of to the comment.
+  bool _isTargetComment(Comment c, int commentId) {
+    if (c.id == commentId && (c.groupId ?? widget.groupId) == widget.groupId) return true;
+    return c.copies.any((copy) => copy.commentId == commentId && copy.groupId == widget.groupId);
+  }
+
+  /// Briefly tints one comment, so a thread that scrolled to the right place says WHICH
+  /// comment it scrolled to instead of leaving the member to guess.
+  void _flash(String rowKey) {
+    setState(() => _highlighted = rowKey);
+    _highlightTimer?.cancel();
+    _highlightTimer = Timer(const Duration(milliseconds: 1800), () {
+      if (mounted) setState(() => _highlighted = null);
     });
   }
 
@@ -916,109 +1036,120 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     // A merged comment opens the commenter's profile on its own group's server.
     final gid = c.groupId ?? widget.groupId;
     final me = ref.read(contentAccountProvider(gid))?.user;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          GestureDetector(
-            onTap: () => _openProfileIn(c.authorId, gid),
-            child: UserAvatar(
-                name: c.authorName,
-                mediaId: c.authorPhotoId,
-                size: 32,
-                colorSeed: c.id,
-                groupId: gid),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Flexible(
-                      child: GestureDetector(
-                        onTap: () => _openProfileIn(c.authorId, gid),
-                        behavior: HitTestBehavior.opaque,
-                        child: Text(c.authorName,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                                color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 13)),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Tooltip(
-                      message: _fullLocalTime(c.createdAt),
-                      child: Semantics(
-                        label: _fullLocalTime(c.createdAt),
-                        excludeSemantics: true,
-                        child: Text(_relativeTime(c.createdAt),
-                            style: const TextStyle(color: kFgMuted, fontSize: 11)),
-                      ),
-                    ),
-                    if (_isCrossPost && c.groupId != null) ...[
-                      const SizedBox(width: 8),
-                      _groupBadge(c.groupId),
-                    ],
-                  ],
-                ),
-                if (_parentAuthorName(c) case final parent?) ...[
-                  const SizedBox(height: 3),
+    final rowKey = _rowKeyFor(c);
+    final key = _commentKeys.putIfAbsent(rowKey, GlobalKey.new);
+    final lit = _highlighted == rowKey;
+    // A plain Container rather than an AnimatedContainer: with a null colour it is exactly
+    // the Padding this row has always been, so an ordinary thread gains no widget and no
+    // animation controller per comment. The tint arriving at once is also the point - it is
+    // there to catch the eye on arrival, not to be a transition.
+    return Container(
+      key: key,
+      color: lit ? context.accent.withValues(alpha: 0.16) : null,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            GestureDetector(
+              onTap: () => _openProfileIn(c.authorId, gid),
+              child: UserAvatar(
+                  name: c.authorName,
+                  mediaId: c.authorPhotoId,
+                  size: 32,
+                  colorSeed: c.id,
+                  groupId: gid),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                   Row(
                     children: [
-                      const Icon(Icons.subdirectory_arrow_right, size: 13, color: kFgMuted),
-                      const SizedBox(width: 3),
                       Flexible(
-                        child: Text('Replying to $parent',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: kFgMuted, fontSize: 11.5)),
+                        child: GestureDetector(
+                          onTap: () => _openProfileIn(c.authorId, gid),
+                          behavior: HitTestBehavior.opaque,
+                          child: Text(c.authorName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                  color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 13)),
+                        ),
                       ),
+                      const SizedBox(width: 8),
+                      Tooltip(
+                        message: _fullLocalTime(c.createdAt),
+                        child: Semantics(
+                          label: _fullLocalTime(c.createdAt),
+                          excludeSemantics: true,
+                          child: Text(_relativeTime(c.createdAt),
+                              style: const TextStyle(color: kFgMuted, fontSize: 11)),
+                        ),
+                      ),
+                      if (_isCrossPost && c.groupId != null) ...[
+                        const SizedBox(width: 8),
+                        _groupBadge(c.groupId),
+                      ],
                     ],
                   ),
-                ],
-                const SizedBox(height: 2),
-                if (c.body.isNotEmpty)
-                  Text(c.body,
-                      style: const TextStyle(color: kFgSecondary, fontSize: 14, height: 1.35)),
-                if (c.mediaId case final mediaId?) ...[
-                  if (c.body.isNotEmpty) const SizedBox(height: 6),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(10),
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 200),
-                      child: AuthImage(mediaId: mediaId, groupId: gid, fit: BoxFit.contain),
+                  if (_parentAuthorName(c) case final parent?) ...[
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        const Icon(Icons.subdirectory_arrow_right, size: 13, color: kFgMuted),
+                        const SizedBox(width: 3),
+                        Flexible(
+                          child: Text('Replying to $parent',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(color: kFgMuted, fontSize: 11.5)),
+                        ),
+                      ],
                     ),
-                  ),
-                ],
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => _startReply(c),
-                      child: const Text('Reply',
-                          style: TextStyle(
-                              color: kFgMuted, fontSize: 12, fontWeight: FontWeight.w600)),
+                  ],
+                  const SizedBox(height: 2),
+                  if (c.body.isNotEmpty)
+                    Text(c.body,
+                        style: const TextStyle(color: kFgSecondary, fontSize: 14, height: 1.35)),
+                  if (c.mediaId case final mediaId?) ...[
+                    if (c.body.isNotEmpty) const SizedBox(height: 6),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 200),
+                        child: AuthImage(mediaId: mediaId, groupId: gid, fit: BoxFit.contain),
+                      ),
                     ),
-                    if (me != null && me.id != c.authorId) ...[
-                      const SizedBox(width: 14),
+                  ],
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
                       GestureDetector(
                         behavior: HitTestBehavior.opaque,
-                        onTap: () => _reportComment(c),
-                        child: const Text('Report',
+                        onTap: () => _startReply(c),
+                        child: const Text('Reply',
                             style: TextStyle(
                                 color: kFgMuted, fontSize: 12, fontWeight: FontWeight.w600)),
                       ),
+                      if (me != null && me.id != c.authorId) ...[
+                        const SizedBox(width: 14),
+                        GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => _reportComment(c),
+                          child: const Text('Report',
+                              style: TextStyle(
+                                  color: kFgMuted, fontSize: 12, fontWeight: FontWeight.w600)),
+                        ),
+                      ],
                     ],
-                  ],
-                ),
-              ],
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

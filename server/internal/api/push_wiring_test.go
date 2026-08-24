@@ -17,26 +17,30 @@ import (
 // uncollapsed, which is precisely the bug the shared id exists to prevent.
 type recordingNotifier struct {
 	mu   sync.Mutex
-	sent []struct {
-		Title      string
-		CollapseID string
-	}
+	sent []sentPush
+}
+
+// sentPush is one notification as the push layer received it. Data is kept as well as the
+// collapse id because the data payload is what routes a tap: a notification that arrives
+// perfectly but names the wrong post - or names no comment - lands the member somewhere
+// other than the thing they were told about.
+type sentPush struct {
+	Title      string
+	Data       map[string]string
+	CollapseID string
 }
 
 func (r *recordingNotifier) Send(_ context.Context, tokens []string, title, body string,
-	_ map[string]string, collapseID string) {
+	data map[string]string, collapseID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.sent = append(r.sent, struct {
-		Title      string
-		CollapseID string
-	}{Title: title, CollapseID: collapseID})
+	r.sent = append(r.sent, sentPush{Title: title, Data: data, CollapseID: collapseID})
 }
 
-// collapseIDs waits briefly for the handlers' notify goroutines, then returns what was sent.
-// The notify* helpers deliberately run off the request path, so a response arriving does not
-// mean the push has been handed over yet.
-func (r *recordingNotifier) collapseIDs(t *testing.T, want int) []string {
+// await waits briefly for the handlers' notify goroutines and returns everything sent. The
+// notify* helpers run off the request path, so a response arriving does not mean the push
+// has been handed over yet.
+func (r *recordingNotifier) await(t *testing.T, want int) []sentPush {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -50,8 +54,17 @@ func (r *recordingNotifier) collapseIDs(t *testing.T, want int) []string {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	out := make([]string, 0, len(r.sent))
-	for _, s := range r.sent {
+	return append([]sentPush(nil), r.sent...)
+}
+
+// collapseIDs waits briefly for the handlers' notify goroutines, then returns what was sent.
+// The notify* helpers deliberately run off the request path, so a response arriving does not
+// mean the push has been handed over yet.
+func (r *recordingNotifier) collapseIDs(t *testing.T, want int) []string {
+	t.Helper()
+	sent := r.await(t, want)
+	out := make([]string, 0, len(sent))
+	for _, s := range sent {
 		out = append(out, s.CollapseID)
 	}
 	return out

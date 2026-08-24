@@ -9,6 +9,7 @@ import '../../theme/tokens.dart';
 import '../../widgets/photo_viewer.dart';
 import '../../widgets/skeletons.dart';
 import '../../widgets/user_avatar.dart';
+import '../activity/activity_bell.dart';
 import '../feed/post_card.dart';
 import '../settings/settings_screen.dart';
 
@@ -84,6 +85,10 @@ class _MyProfileScreenState extends ConsumerState<MyProfileScreen> {
       appBar: AppBar(
         backgroundColor: kBgMain,
         elevation: 0,
+        // The profile is a tab rather than a pushed route, so the leading slot is free -
+        // which is where the bell was asked for, and where it stays out of the way of
+        // Settings on the right.
+        leading: const ActivityBell(),
         title: const Text('My profile',
             style: TextStyle(color: kFgPrimary, fontWeight: FontWeight.w700, fontSize: 18)),
         actions: [

@@ -34,6 +34,7 @@ class ServerAccount {
     this.timelineCapable = false,
     this.forgottenCapable = false,
     this.placesCapable = false,
+    this.activityCapable = false,
   });
 
   /// Stable id derived from the server's host (one subdomain per group). Used to key
@@ -109,6 +110,11 @@ class ServerAccount {
   /// has no such route and would 404 the request.
   final bool placesCapable;
 
+  /// Whether this group's server has GET /api/me/activity (see
+  /// [ServerInfo.activityCapable]). Gates whether this group contributes to the activity
+  /// list and its unread count - an older server has no such route and would 404.
+  final bool activityCapable;
+
   bool get isSignedIn => token != null;
 
   /// What the UI calls this group: the local nickname when set, else the server's name.
@@ -140,6 +146,7 @@ class ServerAccount {
     bool? timelineCapable,
     bool? forgottenCapable,
     bool? placesCapable,
+    bool? activityCapable,
   }) {
     return ServerAccount(
       id: id,
@@ -159,6 +166,7 @@ class ServerAccount {
       timelineCapable: timelineCapable ?? this.timelineCapable,
       forgottenCapable: forgottenCapable ?? this.forgottenCapable,
       placesCapable: placesCapable ?? this.placesCapable,
+      activityCapable: activityCapable ?? this.activityCapable,
     );
   }
 }
@@ -375,6 +383,7 @@ class MultiSessionController extends Notifier<MultiSession> {
             timelineCapable: false,
             forgottenCapable: false,
             placesCapable: false,
+            activityCapable: false,
           )
         ];
         await prefs.setString(_kGroups, _encodeGroups(entries));
@@ -402,6 +411,7 @@ class MultiSessionController extends Notifier<MultiSession> {
           timelineCapable: e.timelineCapable,
           forgottenCapable: e.forgottenCapable,
           placesCapable: e.placesCapable,
+          activityCapable: e.activityCapable,
           token: token));
     }
     final ids = {for (final g in accounts) g.id};
@@ -459,6 +469,7 @@ class MultiSessionController extends Notifier<MultiSession> {
       final timelineChanged = info.timelineCapable != g.timelineCapable;
       final forgottenChanged = info.forgottenCapable != g.forgottenCapable;
       final placesChanged = info.placesCapable != g.placesCapable;
+      final activityChanged = info.activityCapable != g.activityCapable;
       if (nameChanged ||
           colorChanged ||
           mediaChanged ||
@@ -468,7 +479,8 @@ class MultiSessionController extends Notifier<MultiSession> {
           eventsChanged ||
           timelineChanged ||
           forgottenChanged ||
-          placesChanged) {
+          placesChanged ||
+          activityChanged) {
         _update(
             g.id,
             (a) => a.copyWith(
@@ -485,6 +497,7 @@ class MultiSessionController extends Notifier<MultiSession> {
                   timelineCapable: info.timelineCapable,
                   forgottenCapable: info.forgottenCapable,
                   placesCapable: info.placesCapable,
+                  activityCapable: info.activityCapable,
                 ));
         await _persistGroups();
       }
@@ -526,6 +539,7 @@ class MultiSessionController extends Notifier<MultiSession> {
             timelineCapable: g.timelineCapable,
             forgottenCapable: g.forgottenCapable,
             placesCapable: g.placesCapable,
+            activityCapable: g.activityCapable,
           )
       ]),
     );
@@ -538,17 +552,40 @@ class MultiSessionController extends Notifier<MultiSession> {
 
   /// Connects (or re-connects) a group after a successful login/signup and makes it
   /// active. Re-adding an existing group replaces its entry (the re-login path).
+  ///
+  /// [info] is the server-info the caller already fetched to reach this point. Passing it
+  /// is what gives the new group its capabilities immediately: without it every flag stays
+  /// false until the next launch runs _hydrate, so a member who has just connected sees
+  /// none of the features their server actually supports until they restart the app.
   Future<void> addGroup({
     required String baseUrl,
     required String serverName,
     required String token,
     required User user,
     String? color,
+    ServerInfo? info,
   }) async {
     final id = groupIdFor(baseUrl);
     await _secure.write(key: _tokenKey(id), value: token);
     final account = ServerAccount(
-        id: id, baseUrl: baseUrl, serverName: serverName, color: color, token: token, user: user);
+      id: id,
+      baseUrl: baseUrl,
+      serverName: serverName,
+      color: color,
+      token: token,
+      user: user,
+      mediaTypes: info?.mediaTypes ?? const ['image'],
+      gifSearch: info?.gifSearch ?? false,
+      commentMedia: info?.commentMedia ?? false,
+      crossComments: info?.crossComments ?? false,
+      recapCapable: info?.recapCapable ?? false,
+      memoriesCapable: info?.memoriesCapable ?? false,
+      eventsCapable: info?.eventsCapable ?? false,
+      timelineCapable: info?.timelineCapable ?? false,
+      forgottenCapable: info?.forgottenCapable ?? false,
+      placesCapable: info?.placesCapable ?? false,
+      activityCapable: info?.activityCapable ?? false,
+    );
     final others = [
       for (final g in state.groups)
         if (g.id != id) g
@@ -666,7 +703,8 @@ class MultiSessionController extends Notifier<MultiSession> {
         bool eventsCapable,
         bool timelineCapable,
         bool forgottenCapable,
-        bool placesCapable
+        bool placesCapable,
+        bool activityCapable
       })> _decodeGroups(String? raw) {
     if (raw == null || raw.isEmpty) return const [];
     try {
@@ -697,6 +735,7 @@ class MultiSessionController extends Notifier<MultiSession> {
             // existed) means unknown, not capable - the next hydrate refreshes it.
             forgottenCapable: e['forgottenCapable'] as bool? ?? false,
             placesCapable: e['placesCapable'] as bool? ?? false,
+            activityCapable: e['activityCapable'] as bool? ?? false,
           )
       ];
     } catch (_) {
@@ -721,7 +760,8 @@ class MultiSessionController extends Notifier<MultiSession> {
                 bool eventsCapable,
                 bool timelineCapable,
                 bool forgottenCapable,
-                bool placesCapable
+                bool placesCapable,
+                bool activityCapable
               })>
           entries) {
     return jsonEncode([
@@ -742,6 +782,7 @@ class MultiSessionController extends Notifier<MultiSession> {
           'timelineCapable': e.timelineCapable,
           'forgottenCapable': e.forgottenCapable,
           'placesCapable': e.placesCapable,
+          'activityCapable': e.activityCapable,
         }
     ]);
   }

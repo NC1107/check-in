@@ -29,11 +29,25 @@ func (h *harness) forgottenCandidatePost(a actor, when time.Time) db.Post {
 	return post
 }
 
-// comment posts a plain-text comment as [a], failing the test unless the server accepts it.
-func (h *harness) comment(a actor, postID int64, body string) {
+// comment posts a plain-text comment as [a], failing the test unless the server accepts it,
+// and returns what the server created. Most callers only care that it worked; the ones
+// asking where a notification about it would land need its id.
+func (h *harness) comment(a actor, postID int64, body string) db.Comment {
 	h.t.Helper()
+	var c db.Comment
 	h.post("/api/posts/"+itoa(postID)+"/comments", a.Token, map[string]any{"body": body}).
-		expect(http.StatusCreated)
+		expect(http.StatusCreated).decode(&c)
+	return c
+}
+
+// reply is comment, threaded under an existing comment on the same post.
+func (h *harness) reply(a actor, postID, parentID int64, body string) db.Comment {
+	h.t.Helper()
+	var c db.Comment
+	h.post("/api/posts/"+itoa(postID)+"/comments", a.Token,
+		map[string]any{"body": body, "parentCommentId": parentID}).
+		expect(http.StatusCreated).decode(&c)
+	return c
 }
 
 type forgottenPhotoResp struct {
