@@ -19,6 +19,12 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.26',
+    highlights: [
+      "Settings has a blocked people list now, so you can see who you've blocked and unblock them. Before this the unblock button only lived on the person's profile, and blocking someone hides their check-ins, so there wasn't really a way back to it unless you remembered their name and searched for it.",
+    ],
+  ),
+  ReleaseNote(
     version: '1.25',
     highlights: [
       "There's a bell on your profile now with everything that happened while you weren't looking. Comments on your check-ins, replies to your comments, likes, all of it, going back as far as you've been in the group. So a notification you swiped away isn't gone.",
