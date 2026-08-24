@@ -978,7 +978,10 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                 mediaId: post.authorPhotoId,
                 size: 42,
                 colorSeed: post.authorId,
-                groupId: widget.groupId),
+                groupId: widget.groupId,
+                // Tappable, so it is announced as whose profile it opens rather than as the
+                // single letter drawn on it.
+                semanticLabel: post.authorName),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -1058,7 +1061,8 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                   mediaId: c.authorPhotoId,
                   size: 32,
                   colorSeed: c.id,
-                  groupId: gid),
+                  groupId: gid,
+                  semanticLabel: c.authorName),
             ),
             const SizedBox(width: 10),
             Expanded(
