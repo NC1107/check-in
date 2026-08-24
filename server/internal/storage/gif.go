@@ -38,8 +38,16 @@ var errBadGIF = errors.New("malformed gif")
 // preserved: it carries the loop count and nothing else, and blanking it makes every stored
 // GIF play exactly once.
 func sanitizeGIF(data []byte) (frames int, err error) {
-	// Header: "GIF87a"/"GIF89a" + 7-byte logical screen descriptor.
-	if len(data) < 13 || string(data[0:3]) != "GIF" {
+	// Header: "GIF87a"/"GIF89a" + 7-byte logical screen descriptor. The version matters, not
+	// just the "GIF" prefix: checking three bytes accepted anything starting with them, so a
+	// 14-byte file of "GIF" plus rubbish plus a trailer walked straight through as a valid
+	// gif with no frames in it. Found by fuzzing.
+	if len(data) < 13 {
+		return 0, errBadGIF
+	}
+	switch string(data[0:6]) {
+	case "GIF87a", "GIF89a":
+	default:
 		return 0, errBadGIF
 	}
 	p := 13
@@ -53,6 +61,12 @@ func sanitizeGIF(data []byte) (frames int, err error) {
 		}
 		switch data[p] {
 		case gifTrailer:
+			// A gif with no image descriptor has nothing to show. It is not a file any
+			// encoder produces, and storing one leaves a member with an attachment that
+			// renders as blank, so it is rejected rather than kept.
+			if frames == 0 {
+				return 0, errBadGIF
+			}
 			return frames, nil
 		case gifImageDescriptor:
 			frames++
