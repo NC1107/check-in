@@ -284,6 +284,26 @@ class _CountryPickerSheetState extends State<_CountryPickerSheet> {
   }
 }
 
+/// Renders a stored phone number for a human to read.
+///
+/// The server stores numbers as bare digits with the country code and no "+", so anywhere
+/// one is shown verbatim it arrives as an unbroken run like "15550000002" - unreadable, and
+/// impossible to match against a contact at a glance, which is exactly what the host is
+/// doing when they look at a member or invite list.
+///
+/// Only +1 gets national grouping, for the same reason [PhoneNumberFormatter] limits it to
+/// +1: guessing a grouping for a country whose convention we do not know would present the
+/// number wrongly rather than plainly. Anything else keeps its digits and gains the "+".
+String formatStoredPhone(String stored) {
+  final digits = stored.replaceAll(RegExp(r'\D'), '');
+  if (digits.isEmpty) return stored;
+  if (digits.length == 11 && digits.startsWith('1')) {
+    final n = digits.substring(1);
+    return '+1 (${n.substring(0, 3)}) ${n.substring(3, 6)}-${n.substring(6)}';
+  }
+  return '+$digits';
+}
+
 /// Keeps the national number clean for its [country]: digits only, capped to the
 /// country's max length, +1 numbers grouped as "(415) 555-0148". A pasted or
 /// autofilled number that still carries the country code has it stripped.
