@@ -168,7 +168,7 @@ func (s *Server) notifyPost(authorID int64, authorName string, postID int64, cro
 // comment which is ALSO a reply cannot collapse its two different notifications ("commented
 // on your check-in" and "replied to your comment") into a single one, which would silently
 // drop whichever arrived first.
-func (s *Server) notifyReply(commenterName string, postID, commenterID int64, crossCommentID string) {
+func (s *Server) notifyReply(commenterName string, postID, commentID, commenterID int64, crossCommentID string) {
 	if s.push == nil {
 		return
 	}
@@ -184,7 +184,7 @@ func (s *Server) notifyReply(commenterName string, postID, commenterID int64, cr
 		return
 	}
 	s.push.Send(ctx, tokens, s.serverName(ctx), commenterName+" commented on your check-in",
-		s.pushData("comment", postID), collapseFor("comment", crossCommentID))
+		s.pushDataComment("comment", postID, commentID), collapseFor("comment", crossCommentID))
 }
 
 // notifyCommentReply pushes a reply notification to the author of the comment being replied
@@ -193,7 +193,7 @@ func (s *Server) notifyReply(commenterName string, postID, commenterID int64, cr
 //
 // crossCommentID collapses the copies the same way notifyReply's does, under its own
 // prefix - see that function's doc comment.
-func (s *Server) notifyCommentReply(replierName string, postID, parentCommentID, replierID int64, crossCommentID string) {
+func (s *Server) notifyCommentReply(replierName string, postID, commentID, parentCommentID, replierID int64, crossCommentID string) {
 	if s.push == nil {
 		return
 	}
@@ -209,7 +209,7 @@ func (s *Server) notifyCommentReply(replierName string, postID, parentCommentID,
 		return
 	}
 	s.push.Send(ctx, tokens, s.serverName(ctx), replierName+" replied to your comment",
-		s.pushData("reply", postID), collapseFor("reply", crossCommentID))
+		s.pushDataComment("reply", postID, commentID), collapseFor("reply", crossCommentID))
 }
 
 // notifyLike pushes a like notification to the post's author.
@@ -240,5 +240,21 @@ func (s *Server) pushData(kind string, postID int64) map[string]string {
 	if s.cfg.PublicURL != "" {
 		data["server"] = s.cfg.PublicURL
 	}
+	return data
+}
+
+// pushDataComment is pushData for a notification about one particular comment, naming it so
+// the tap lands on that comment instead of the top of the thread. Without this the app can
+// only scroll the comment section into view, which on any thread long enough to scroll is
+// indistinguishable from not having followed the notification at all.
+//
+// commentID is always the NEW comment - for a reply that is the reply itself, not the parent
+// being replied to, because the reply is the thing the member is being told about.
+//
+// FCM data payloads are an untyped string map, so an app too old to know this key ignores
+// it and falls back to the section scroll. Nothing needs a capability gate.
+func (s *Server) pushDataComment(kind string, postID, commentID int64) map[string]string {
+	data := s.pushData(kind, postID)
+	data["commentId"] = strconv.FormatInt(commentID, 10)
 	return data
 }

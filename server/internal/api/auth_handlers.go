@@ -98,6 +98,11 @@ func (s *Server) handleServerInfo(w http.ResponseWriter, r *http.Request) {
 		// has no such route at all, so the client hides that hub entry rather than opening
 		// a list that can never load anything. Independent of the other four.
 		"places": true,
+		// activity is the capability signal for GET /api/me/activity and its seen marker,
+		// backing the bell on the profile. Same story as the hub entries above: a server
+		// predating it has no such routes, so the client leaves that group out of the merged
+		// activity list (and out of the unread count) rather than 404ing on every refresh.
+		"activity": true,
 	}
 	if settings, err := s.db.GetRecapSettings(r.Context()); err == nil {
 		resp["recapCadence"] = settings.Cadence
