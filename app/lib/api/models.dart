@@ -23,6 +23,7 @@ class ServerInfo {
     this.timelineCapable = false,
     this.forgottenCapable = false,
     this.placesCapable = false,
+    this.activityCapable = false,
   });
 
   final String name;
@@ -106,6 +107,12 @@ class ServerInfo {
   /// Independent of the other four.
   final bool placesCapable;
 
+  /// Whether this group's server has GET /api/me/activity and its seen marker - the log
+  /// behind the bell on the profile. Same story as the hub entries above: a server
+  /// predating it has no such routes, so the client leaves that group out of the merged
+  /// activity list (and out of the unread count) rather than 404ing on every refresh.
+  final bool activityCapable;
+
   factory ServerInfo.fromJson(Map<String, dynamic> j) => ServerInfo(
         name: j['name'] as String? ?? 'Check-In',
         initialized: j['initialized'] as bool? ?? false,
@@ -126,6 +133,7 @@ class ServerInfo {
         timelineCapable: j['timeline'] as bool? ?? false,
         forgottenCapable: j['forgotten'] as bool? ?? false,
         placesCapable: j['places'] as bool? ?? false,
+        activityCapable: j['activity'] as bool? ?? false,
       );
 }
 
@@ -1302,5 +1310,95 @@ class AuthResult {
   factory AuthResult.fromJson(Map<String, dynamic> j) => AuthResult(
         token: j['token'] as String,
         user: User.fromJson(j['user'] as Map<String, dynamic>),
+      );
+}
+
+/// One line of the activity list: something that happened about you on one group's server.
+///
+/// The server derives these from the likes and comments that already exist rather than
+/// logging them when a notification is sent, so this is a view of what is really there -
+/// a deleted check-in takes its activity with it - and it covers a member's whole history
+/// rather than only what happened since the feature shipped.
+class ActivityItem {
+  ActivityItem({
+    required this.kind,
+    required this.postId,
+    required this.actorId,
+    required this.actorName,
+    required this.createdAt,
+    this.commentId,
+    this.actorPhotoId,
+    this.preview = '',
+    this.groupId,
+  });
+
+  /// 'comment' (on your check-in), 'reply' (to your comment), or 'like' (on your check-in).
+  final String kind;
+
+  final int postId;
+
+  /// The comment this is about, so a tap lands on that comment rather than the top of the
+  /// thread. Null on a like, which is about the post itself.
+  final int? commentId;
+
+  final int actorId;
+  final String actorName;
+  final int? actorPhotoId;
+
+  /// The comment's text, or 'GIF' for a gif-only comment. Empty for a like.
+  final String preview;
+
+  final DateTime createdAt;
+
+  /// Which group's server this came from. Client-stamped when the list is merged across
+  /// groups (the same way [Post.groupId] is), because ids are only unique per server and a
+  /// tap has to go back to the right one.
+  final String? groupId;
+
+  factory ActivityItem.fromJson(Map<String, dynamic> j) => ActivityItem(
+        kind: j['kind'] as String? ?? '',
+        postId: (j['postId'] as num?)?.toInt() ?? 0,
+        commentId: (j['commentId'] as num?)?.toInt(),
+        actorId: (j['actorId'] as num?)?.toInt() ?? 0,
+        actorName: j['actorName'] as String? ?? '',
+        actorPhotoId: (j['actorPhotoId'] as num?)?.toInt(),
+        preview: j['preview'] as String? ?? '',
+        createdAt: DateTime.tryParse(j['createdAt'] as String? ?? '')?.toLocal() ??
+            DateTime.fromMillisecondsSinceEpoch(0),
+      );
+
+  ActivityItem withGroup(String id) => ActivityItem(
+        kind: kind,
+        postId: postId,
+        commentId: commentId,
+        actorId: actorId,
+        actorName: actorName,
+        actorPhotoId: actorPhotoId,
+        preview: preview,
+        createdAt: createdAt,
+        groupId: id,
+      );
+}
+
+/// One page of activity from a single group's server, with that group's own unread count.
+class ActivityPage {
+  ActivityPage({required this.items, required this.unreadCount, this.nextCursor});
+
+  final List<ActivityItem> items;
+
+  /// How many items on this server are newer than the member's seen marker there. Summed
+  /// across groups for the badge on the bell.
+  final int unreadCount;
+
+  /// Opaque position to continue from, or null at the end of the list. Never parsed by the
+  /// client: what makes a position unique is the server's business.
+  final String? nextCursor;
+
+  factory ActivityPage.fromJson(Map<String, dynamic> j) => ActivityPage(
+        items: ((j['items'] as List?) ?? [])
+            .map((e) => ActivityItem.fromJson(e as Map<String, dynamic>))
+            .toList(),
+        unreadCount: (j['unreadCount'] as num?)?.toInt() ?? 0,
+        nextCursor: j['nextCursor'] as String?,
       );
 }

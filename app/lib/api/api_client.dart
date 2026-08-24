@@ -176,6 +176,25 @@ class ApiClient {
   Future<void> unregisterDevice(String token) =>
       _dio.delete('/api/me/devices', data: {'token': token});
 
+  /// activity fetches one page of the log of what happened about this member on this
+  /// server: comments on their check-ins, replies to their comments, likes on their
+  /// check-ins. Only ever called against a group whose server-info advertised
+  /// [ServerInfo.activityCapable]; an older server has no such route.
+  ///
+  /// [cursor] comes back verbatim from a previous page's `nextCursor` - it is opaque, and
+  /// the client never builds or parses one.
+  Future<ActivityPage> activity({String? cursor, int? limit}) async {
+    final r = await _dio.get('/api/me/activity', queryParameters: {
+      if (cursor != null && cursor.isNotEmpty) 'cursor': cursor,
+      if (limit != null) 'limit': limit,
+    });
+    return ActivityPage.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  /// markActivitySeen clears this member's unread count on this server. Server-side rather
+  /// than per-device, so reading the list on a phone also clears the bell on a tablet.
+  Future<void> markActivitySeen() => _dio.post('/api/me/activity/seen');
+
   /// notificationPrefs returns the per-account push settings.
   Future<NotifyPrefs> notificationPrefs() async {
     final r = await _dio.get('/api/me/notifications');

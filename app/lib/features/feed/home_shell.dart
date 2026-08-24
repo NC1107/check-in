@@ -17,6 +17,7 @@ import '../../api/api_client.dart';
 import '../../api/models.dart';
 import '../../media/video_native.dart';
 import '../../notifications/birthday_notifier.dart';
+import '../../notifications/notification_route.dart';
 import '../../notifications/push_messaging.dart';
 import '../../state/app_state.dart';
 import '../../state/taggable_people.dart';
@@ -270,6 +271,10 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
   // the open animation) starts moving off 0, not just once it settles fully open.
   bool _memoriesOpen = false;
 
+  /// The screen the last notification tap opened, so the next one can replace it instead of
+  /// stacking. Only ever a route pushed by openNotificationTarget.
+  Route<void>? _notificationRoute;
+
   void _onMemoriesValueChanged() {
     final open = _memoriesController.value > 0;
     if (open != _memoriesOpen) setState(() => _memoriesOpen = open);
@@ -337,30 +342,63 @@ class _HomeShellState extends ConsumerState<HomeShell> with SingleTickerProvider
     }
   }
 
-  /// A push payload carries the origin server's public URL (see the Go side's
-  /// pushData); match it to a connected group, make that group active, and open the
-  /// post there - post ids are only unique per server.
-  void _onPushTap(Map<String, dynamic> data) {
-    final postId = int.tryParse('${data['postId']}');
-    if (postId == null) return;
-    final session = ref.read(multiSessionProvider);
-    final server = data['server'] as String?;
-    ServerAccount? target;
-    if (server != null && server.isNotEmpty) {
-      target = session.byId(MultiSessionController.groupIdFor(server));
+  /// Routes a notification tap to the thing it was about.
+  ///
+  /// The hard part is which GROUP: post ids are only unique per server, so opening the id
+  /// on the wrong one shows a stranger's unrelated check-in and reads, to the member, as
+  /// the notification having lied. resolvePushGroup fails safe rather than guessing, and
+  /// this shows the feed when it cannot tell.
+  Future<void> _onPushTap(Map<String, dynamic> data) async {
+    final postId = pushPostId(data);
+    if (postId == null) {
+      // The daily digest names no post - it says how many were missed, not which. The feed
+      // is what it is about, and is a better answer than the nothing this used to do.
+      _showFeed();
+      return;
     }
-    final t = target ?? session.current;
-    if (t == null || !t.isSignedIn || !mounted) return;
-    // Make sure the tapped group is visible in the feed when you return to it.
-    ref.read(multiSessionProvider.notifier).showGroup(t.id);
-    // A comment or reply notification should land on the thread, not the top of the post.
-    final focusComments = data['type'] == 'comment' || data['type'] == 'reply';
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) =>
-            PostDetailScreen(postId: postId, groupId: t.id, focusComments: focusComments),
+    final session = ref.read(multiSessionProvider);
+    final target = await resolvePushGroup(session, data, postId,
+        (g) => ref.read(apiForGroupProvider(g.id)).getPost(postId).then((_) => true));
+    if (!mounted) return;
+    if (target == null) {
+      _showFeed();
+      return;
+    }
+    final commentId = pushCommentId(data);
+    openNotificationTarget(
+      NotificationRoute(
+        groupId: target.id,
+        postId: postId,
+        // A like is about the post itself, so it carries none and lands at the top.
+        commentId: commentId,
+        // No comment id on a comment-shaped notification means the server predates the
+        // field. The top of the thread is the best that can be done for it.
+        focusComments: commentId == null && (data['type'] == 'comment' || data['type'] == 'reply'),
       ),
     );
+  }
+
+  /// Brings the feed forward, for a notification that names nothing more specific.
+  void _showFeed() {
+    if (mounted && _index != 0) setState(() => _index = 0);
+  }
+
+  /// Opens one notification's target. Shared with the activity list, so a tap from the tray
+  /// and a tap from the bell land in exactly the same place rather than being two code
+  /// paths that drift apart.
+  void openNotificationTarget(NotificationRoute route) {
+    if (!mounted) return;
+    // Make sure the group is visible in the feed when you come back to it.
+    ref.read(multiSessionProvider.notifier).showGroup(route.groupId);
+    final nav = Navigator.of(context);
+    final previous = _notificationRoute;
+    final next = PostDetailScreen.routeForNotification(route);
+    _notificationRoute = next;
+    nav.push(next);
+    // Drop the screen an earlier notification opened, so tapping three in a row doesn't
+    // leave three to back out through. Only ever a route this handler itself pushed - a
+    // half-written compose sheet the member opened must survive being interrupted.
+    if (previous != null && previous.isActive) nav.removeRoute(previous);
   }
 
   void _showCompose() {
