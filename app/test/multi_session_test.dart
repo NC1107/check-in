@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:checkin/api/models.dart';
 import 'package:checkin/state/app_state.dart';
 
 /// Multi-session persistence: the legacy single-session migration and per-group
@@ -189,6 +190,60 @@ void main() {
     expect(secureStore.containsKey('token_a.invalid'), isFalse);
     // Removing a hidden group clears it from the hidden set too.
     expect(container.session.hiddenGroupIds, isEmpty);
+  });
+
+  test('addGroup carries the server capabilities across from server-info', () async {
+    // Without this every flag stayed false until the next launch ran _hydrate, so a member
+    // who had just connected saw none of the features their server actually supports -
+    // no activity bell, no Memories, no Places - until they restarted the app.
+    SharedPreferences.setMockInitialValues({});
+    final container = await restoredContainer();
+    await container.read(multiSessionProvider.notifier).addGroup(
+          baseUrl: 'https://alpha.invalid',
+          serverName: 'Alpha',
+          token: 't1',
+          user: User(id: 1, name: 'Nick', phone: '+15550001111', isAdmin: true),
+          info: ServerInfo(
+            name: 'Alpha',
+            initialized: true,
+            mediaTypes: const ['image', 'gif', 'video'],
+            gifSearch: true,
+            commentMedia: true,
+            crossComments: true,
+            recapCapable: true,
+            memoriesCapable: true,
+            eventsCapable: true,
+            timelineCapable: true,
+            forgottenCapable: true,
+            placesCapable: true,
+            activityCapable: true,
+          ),
+        );
+
+    final g = container.session.byId('alpha.invalid')!;
+    expect(g.activityCapable, isTrue);
+    expect(g.placesCapable, isTrue);
+    expect(g.memoriesCapable, isTrue);
+    expect(g.gifSearch, isTrue);
+    expect(g.mediaTypes, contains('video'));
+  });
+
+  test('a group connected with no server-info claims no capabilities', () async {
+    // Unknown must mean "not capable", never "anything goes": offering a feature a server
+    // does not have sends the member into a view that can only fail.
+    SharedPreferences.setMockInitialValues({});
+    final container = await restoredContainer();
+    await container.read(multiSessionProvider.notifier).addGroup(
+          baseUrl: 'https://beta.invalid',
+          serverName: 'Beta',
+          token: 't2',
+          user: User(id: 1, name: 'Nick', phone: '+15550001111', isAdmin: true),
+        );
+
+    final g = container.session.byId('beta.invalid')!;
+    expect(g.activityCapable, isFalse);
+    expect(g.placesCapable, isFalse);
+    expect(g.mediaTypes, const ['image']);
   });
 
   test('groupIdFor derives the host', () {

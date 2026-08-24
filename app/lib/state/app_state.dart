@@ -552,17 +552,40 @@ class MultiSessionController extends Notifier<MultiSession> {
 
   /// Connects (or re-connects) a group after a successful login/signup and makes it
   /// active. Re-adding an existing group replaces its entry (the re-login path).
+  ///
+  /// [info] is the server-info the caller already fetched to reach this point. Passing it
+  /// is what gives the new group its capabilities immediately: without it every flag stays
+  /// false until the next launch runs _hydrate, so a member who has just connected sees
+  /// none of the features their server actually supports until they restart the app.
   Future<void> addGroup({
     required String baseUrl,
     required String serverName,
     required String token,
     required User user,
     String? color,
+    ServerInfo? info,
   }) async {
     final id = groupIdFor(baseUrl);
     await _secure.write(key: _tokenKey(id), value: token);
     final account = ServerAccount(
-        id: id, baseUrl: baseUrl, serverName: serverName, color: color, token: token, user: user);
+      id: id,
+      baseUrl: baseUrl,
+      serverName: serverName,
+      color: color,
+      token: token,
+      user: user,
+      mediaTypes: info?.mediaTypes ?? const ['image'],
+      gifSearch: info?.gifSearch ?? false,
+      commentMedia: info?.commentMedia ?? false,
+      crossComments: info?.crossComments ?? false,
+      recapCapable: info?.recapCapable ?? false,
+      memoriesCapable: info?.memoriesCapable ?? false,
+      eventsCapable: info?.eventsCapable ?? false,
+      timelineCapable: info?.timelineCapable ?? false,
+      forgottenCapable: info?.forgottenCapable ?? false,
+      placesCapable: info?.placesCapable ?? false,
+      activityCapable: info?.activityCapable ?? false,
+    );
     final others = [
       for (final g in state.groups)
         if (g.id != id) g

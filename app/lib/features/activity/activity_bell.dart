@@ -42,13 +42,28 @@ class ActivityBell extends ConsumerStatefulWidget {
   ConsumerState<ActivityBell> createState() => _ActivityBellState();
 }
 
-class _ActivityBellState extends ConsumerState<ActivityBell> {
+class _ActivityBellState extends ConsumerState<ActivityBell> with WidgetsBindingObserver {
   int _unread = 0;
 
   @override
   void initState() {
     super.initState();
+    // Coming back to the app is when a member has most likely missed something: a
+    // notification arrived while they were elsewhere, and the bell should already be
+    // showing it rather than waiting for the next visit to this screen.
+    WidgetsBinding.instance.addObserver(this);
     _refresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refresh();
   }
 
   Future<void> _refresh() async {
@@ -67,6 +82,17 @@ class _ActivityBellState extends ConsumerState<ActivityBell> {
 
   @override
   Widget build(BuildContext context) {
+    // Which groups can answer changes under this widget: a restored group's capabilities
+    // are only known once server-info comes back, and groups get added and removed. The
+    // count has to be re-read when that set changes, or a bell built before the first
+    // server-info lands shows nothing for the rest of the session - which is exactly what
+    // it did, since the fetch only ran once in initState.
+    ref.listen<String>(
+      multiSessionProvider.select((s) => [for (final g in activityGroups(s)) g.id].join(',')),
+      (prev, next) {
+        if (prev != next) _refresh();
+      },
+    );
     // Nothing to show when no connected group can answer: an older self-hosted server has
     // no such route, and a bell that opens an empty list is worse than no bell.
     if (activityGroups(ref.watch(multiSessionProvider)).isEmpty) {

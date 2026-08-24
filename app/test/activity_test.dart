@@ -297,6 +297,40 @@ void main() {
       expect(find.text('0'), findsNothing);
     });
 
+    testWidgets('the count is re-read when a group becomes able to answer', (tester) async {
+      // A restored group's capabilities are unknown until server-info comes back, so the
+      // bell is often built before any group can answer. Fetching once in initState left
+      // it blank for the rest of the session even after the group turned out to be
+      // capable - which is how it first shipped, and how the device pass caught it.
+      final api = _FakeApi(page: ActivityPage(items: const [], unreadCount: 4));
+      final controller = MultiSessionController.seeded(MultiSession(
+        groups: [account('alpha.invalid', activityCapable: false)],
+        restored: true,
+      ));
+      await tester.pumpWidget(ProviderScope(
+        overrides: [
+          multiSessionProvider.overrideWith(() => controller),
+          apiForGroupProvider('alpha.invalid').overrideWithValue(api),
+        ],
+        child: const MaterialApp(home: Scaffold(body: ActivityBell())),
+      ));
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('4'), findsNothing, reason: 'nothing can answer yet');
+
+      // server-info lands and the group turns out to support activity.
+      controller.state = MultiSession(
+        groups: [account('alpha.invalid')],
+        restored: true,
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.pumpAndSettle(const Duration(milliseconds: 50));
+
+      expect(find.text('4'), findsOneWidget,
+          reason: 'the badge must appear once a group can report a count');
+    });
+
     testWidgets('the bell hides entirely when no group can answer', (tester) async {
       await pumpBell(
         tester,

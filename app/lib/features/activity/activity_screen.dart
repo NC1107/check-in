@@ -148,6 +148,9 @@ class _ActivityScreenState extends ConsumerState<ActivityScreen> {
             onRefresh: _refresh,
             child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
+              // The rows carry their own padding, but with none here the first one crowds
+              // the title bar and the last sits flush against the bottom edge.
+              padding: const EdgeInsets.only(top: 6, bottom: 16),
               children: [
                 if (unreachable.isNotEmpty)
                   Padding(
