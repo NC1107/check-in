@@ -115,10 +115,6 @@ func (s *Server) handleAdminDismissReport(w http.ResponseWriter, r *http.Request
 
 // ---- blocks ----
 
-type blockReq struct {
-	UserID int64 `json:"userId"`
-}
-
 func (s *Server) handleBlockUser(w http.ResponseWriter, r *http.Request) {
 	targetID, err := pathInt(r, "id")
 	if err != nil {

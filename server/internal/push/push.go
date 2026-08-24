@@ -81,16 +81,30 @@ func New(ctx context.Context, credentialsJSON []byte) (*Sender, error) {
 	if len(credentialsJSON) == 0 {
 		return nil, nil
 	}
-	creds, err := google.CredentialsFromJSON(ctx, credentialsJSON, fcmScope)
+	// JWTConfigFromJSON, not CredentialsFromJSON: that one is deprecated precisely because it
+	// accepts any credential configuration without validating it, including the
+	// externally-sourced kinds whose token URL is named inside the file itself. This server
+	// only ever wants a Firebase service-account key, and asking for exactly that makes
+	// anything else fail to load rather than merely go unused - it rejects a file whose
+	// "type" is not service_account before any of it is trusted.
+	cfg, err := google.JWTConfigFromJSON(credentialsJSON, fcmScope)
 	if err != nil {
 		return nil, fmt.Errorf("parse FCM credentials: %w", err)
 	}
-	if creds.ProjectID == "" {
+	// The project id is not part of a JWT config, and FCM's endpoint is per project, so it
+	// is read from the same file directly.
+	var key struct {
+		ProjectID string `json:"project_id"`
+	}
+	if err := json.Unmarshal(credentialsJSON, &key); err != nil {
+		return nil, fmt.Errorf("parse FCM credentials: %w", err)
+	}
+	if key.ProjectID == "" {
 		return nil, fmt.Errorf("FCM credentials missing project_id")
 	}
 	return &Sender{
-		tokens:    creds.TokenSource,
-		projectID: creds.ProjectID,
+		tokens:    cfg.TokenSource(ctx),
+		projectID: key.ProjectID,
 		http:      &http.Client{Timeout: 15 * time.Second},
 		endpoint:  fcmEndpoint,
 	}, nil
