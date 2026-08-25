@@ -353,6 +353,14 @@ jobs:
           xcodebuild -version
       - name: Install CocoaPods
         run: gem install cocoapods -v 1.17.0
+      # The runner ships a CocoaPods CDN index that is however old its image is, and a
+      # plugin bump can point at a pod version published after it. That is not a stale
+      # cache to shrug at: pod install does not refresh the index on its own, so it simply
+      # reports the version does not exist and the whole iOS build fails - which is exactly
+      # how a firebase_core 4.13 -> 4.14 bump broke this, wanting Firebase 12.18.0 against
+      # an index that stopped at 12.17.0. Refreshing here is cheap next to an archive.
+      - name: Refresh the CocoaPods spec index
+        run: pod repo update
       - name: Set up code signing
         env:
           IOS_CERTIFICATE_BASE64: ${{ secrets.IOS_CERTIFICATE_BASE64 }}
