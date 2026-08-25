@@ -20,13 +20,13 @@ dependencies:
   flutter_image_compress: ^2.3.0  # transcode HEIC→JPEG + downscale photos before upload
   video_player: ^2.9.2     # play a posted clip in the full-screen viewer (AVPlayer/ExoPlayer)
   video_compress: ^3.1.4   # re-encode a clip to a size target + read duration + poster frame
-  native_exif: ^0.6.0      # read a picked photo's GPS (on-device)
+  native_exif: ^0.8.0      # read a picked photo's GPS (on-device)
   geocoding: ^4.0.0        # reverse-geocode lat/lng → "City, Country" (on-device)
   gal: ^2.3.0              # save a post's photo to the device gallery
   cached_network_image: ^3.4.1
   flutter_cache_manager: ^3.4.1
   flutter_contacts: ^2.2.2
-  flutter_local_notifications: ^17.2.3
+  flutter_local_notifications: ^18.0.0
   timezone: ^0.9.4
   intl: ^0.20.3
   firebase_core: ^4.11.0      # initialise Firebase from the native google-services config
