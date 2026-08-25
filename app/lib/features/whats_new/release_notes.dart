@@ -22,6 +22,8 @@ const releaseNotes = <ReleaseNote>[
     version: '1.26',
     highlights: [
       "Settings has a blocked people list now, so you can see who you've blocked and unblock them. Before this the unblock button only lived on the person's profile, and blocking someone hides their check-ins, so there wasn't really a way back to it unless you remembered their name and searched for it.",
+      "Comments are tidier. The Reply and Report links under every one are gone; tap a comment to get a reply button, and the report option sits in a small menu on the right. They were also tiny targets before, about a third the size they should be, so they should be a lot easier to hit now.",
+      "You can report a check-in from the check-in itself now. That was only possible from the feed before, so once you opened something there was no way to report it.",
     ],
   ),
   ReleaseNote(

@@ -8,6 +8,8 @@ import 'package:checkin/features/post/post_detail_screen.dart';
 import 'package:checkin/state/app_state.dart';
 import 'package:checkin/theme/tokens.dart';
 
+import 'support/comment_actions.dart';
+
 /// A group-scoped ApiClient stub: getPost/comments answer this group's own thread, gifSearch
 /// hands back one canned result, and uploadImageBytes records that this group's server (not
 /// some other group's) is the one that actually received the upload.
@@ -280,8 +282,7 @@ void main() {
     await attachAGif(tester);
     expect(pendingGifThumb(), findsOneWidget, reason: 'the pending gif thumbnail');
 
-    await tester.tap(find.text('Reply'));
-    await tester.pump();
+    await tapCommentReply(tester, find.text('nice').first);
 
     expect(find.text('Replying to Robin'), findsOneWidget);
     expect(pendingGifThumb(), findsOneWidget,

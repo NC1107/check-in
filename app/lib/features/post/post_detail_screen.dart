@@ -142,6 +142,13 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   /// The row currently flashing (a _rowKeyFor value), cleared once the highlight has
   /// faded. Held in state rather than driven by an animation so it can simply stop.
   String? _highlighted;
+
+  /// The one comment showing its Reply and Report controls, or null when none is.
+  ///
+  /// A thread is read far more often than it is acted on, so the controls stay out of it
+  /// until a comment is tapped. Only one at a time: tapping another moves them, so a thread
+  /// cannot end up full of chrome again.
+  String? _openActions;
   Timer? _highlightTimer;
   // Cross-post only: which group a new comment posts to (defaults to the first copy). Like
   // state is read from the app-wide likesProvider, so it stays in step with the feed card.
@@ -214,6 +221,29 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     if (reason == null || !mounted) return;
     try {
       await ref.read(contentApiProvider(gid)).reportComment(c.id, reason);
+      if (mounted) _snack('Report sent. The host will review it.');
+    } catch (_) {
+      if (mounted) _snack('Could not send report. Try again.');
+    }
+  }
+
+  /// Reports the check-in itself.
+  ///
+  /// This existed only on the feed card, so opening a thread took away the one way to
+  /// report the thing you were reading. The comment menus below are no help for that: they
+  /// report a comment, not the check-in it sits under.
+  Future<void> _reportPost(Post post) async {
+    final reason = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: kBgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+      ),
+      builder: (_) => const ReportSheet(subject: 'check-in'),
+    );
+    if (reason == null || !mounted) return;
+    try {
+      await ref.read(contentApiProvider(widget.groupId)).reportPost(post.id, reason);
       if (mounted) _snack('Report sent. The host will review it.');
     } catch (_) {
       if (mounted) _snack('Could not send report. Try again.');
@@ -1030,6 +1060,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
               tooltip: 'Save video',
               onPressed: () => _saveVideo(post.videoMedia.first.id),
             ),
+          _postMenu(post),
         ],
       ),
     );
@@ -1042,121 +1073,220 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     final rowKey = _rowKeyFor(c);
     final key = _commentKeys.putIfAbsent(rowKey, GlobalKey.new);
     final lit = _highlighted == rowKey;
+    final open = _openActions == rowKey;
     // A plain Container rather than an AnimatedContainer: with a null colour it is exactly
     // the Padding this row has always been, so an ordinary thread gains no widget and no
     // animation controller per comment. The tint arriving at once is also the point - it is
     // there to catch the eye on arrival, not to be a transition.
-    return Container(
-      key: key,
-      color: lit ? context.accent.withValues(alpha: 0.16) : null,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            GestureDetector(
-              onTap: () => _openProfileIn(c.authorId, gid),
-              child: UserAvatar(
-                  name: c.authorName,
-                  mediaId: c.authorPhotoId,
-                  size: 32,
-                  colorSeed: c.id,
-                  groupId: gid,
-                  semanticLabel: c.authorName),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: GestureDetector(
-                          onTap: () => _openProfileIn(c.authorId, gid),
-                          behavior: HitTestBehavior.opaque,
-                          child: Text(c.authorName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 13)),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Tooltip(
-                        message: _fullLocalTime(c.createdAt),
-                        child: Semantics(
-                          label: _fullLocalTime(c.createdAt),
-                          excludeSemantics: true,
-                          child: Text(_relativeTime(c.createdAt),
-                              style: const TextStyle(color: kFgMuted, fontSize: 11)),
-                        ),
-                      ),
-                      if (_isCrossPost && c.groupId != null) ...[
-                        const SizedBox(width: 8),
-                        _groupBadge(c.groupId),
-                      ],
-                    ],
-                  ),
-                  if (_parentAuthorName(c) case final parent?) ...[
-                    const SizedBox(height: 3),
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => setState(() => _openActions = open ? null : rowKey),
+      child: Container(
+        key: key,
+        color: lit ? context.accent.withValues(alpha: 0.16) : null,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              GestureDetector(
+                onTap: () => _openProfileIn(c.authorId, gid),
+                child: UserAvatar(
+                    name: c.authorName,
+                    mediaId: c.authorPhotoId,
+                    size: 32,
+                    colorSeed: c.id,
+                    groupId: gid,
+                    semanticLabel: c.authorName),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Row(
                       children: [
-                        const Icon(Icons.subdirectory_arrow_right, size: 13, color: kFgMuted),
-                        const SizedBox(width: 3),
                         Flexible(
-                          child: Text('Replying to $parent',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(color: kFgMuted, fontSize: 11.5)),
+                          child: GestureDetector(
+                            onTap: () => _openProfileIn(c.authorId, gid),
+                            behavior: HitTestBehavior.opaque,
+                            child: Text(c.authorName,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 13)),
+                          ),
                         ),
+                        const SizedBox(width: 8),
+                        Tooltip(
+                          message: _fullLocalTime(c.createdAt),
+                          child: Semantics(
+                            label: _fullLocalTime(c.createdAt),
+                            excludeSemantics: true,
+                            child: Text(_relativeTime(c.createdAt),
+                                style: const TextStyle(color: kFgMuted, fontSize: 11)),
+                          ),
+                        ),
+                        if (_isCrossPost && c.groupId != null) ...[
+                          const SizedBox(width: 8),
+                          _groupBadge(c.groupId),
+                        ],
                       ],
                     ),
-                  ],
-                  const SizedBox(height: 2),
-                  if (c.body.isNotEmpty)
-                    Text(c.body,
-                        style: const TextStyle(color: kFgSecondary, fontSize: 14, height: 1.35)),
-                  if (c.mediaId case final mediaId?) ...[
-                    if (c.body.isNotEmpty) const SizedBox(height: 6),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(10),
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxHeight: 200),
-                        child: AuthImage(mediaId: mediaId, groupId: gid, fit: BoxFit.contain),
+                    if (_parentAuthorName(c) case final parent?) ...[
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          const Icon(Icons.subdirectory_arrow_right, size: 13, color: kFgMuted),
+                          const SizedBox(width: 3),
+                          Flexible(
+                            child: Text('Replying to $parent',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: kFgMuted, fontSize: 11.5)),
+                          ),
+                        ],
                       ),
-                    ),
-                  ],
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () => _startReply(c),
-                        child: const Text('Reply',
-                            style: TextStyle(
-                                color: kFgMuted, fontSize: 12, fontWeight: FontWeight.w600)),
-                      ),
-                      if (me != null && me.id != c.authorId) ...[
-                        const SizedBox(width: 14),
-                        GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () => _reportComment(c),
-                          child: const Text('Report',
-                              style: TextStyle(
-                                  color: kFgMuted, fontSize: 12, fontWeight: FontWeight.w600)),
-                        ),
-                      ],
                     ],
-                  ),
+                    const SizedBox(height: 2),
+                    if (c.body.isNotEmpty)
+                      Text(c.body,
+                          style: const TextStyle(color: kFgSecondary, fontSize: 14, height: 1.35)),
+                    if (c.mediaId case final mediaId?) ...[
+                      if (c.body.isNotEmpty) const SizedBox(height: 6),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(10),
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxHeight: 200),
+                          child: AuthImage(mediaId: mediaId, groupId: gid, fit: BoxFit.contain),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              // Reply and Report sit to the right of the comment rather than as small text
+              // under it. The row's height is set by the name and body beside them, so a
+              // full-size target costs nothing here - as text they were 17dp tall, and making
+              // them tappable in place would have added about 20dp to every comment.
+              // The slot is held whether the controls show or not: letting the row reflow on
+              // tap rewraps the comment text under your finger, which reads as the thread
+              // jumping rather than as something opening.
+              SizedBox(
+                width: 88,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    // Reply waits for a tap; the menu does not. Reporting is the one action
+                    // that has to be findable without knowing a comment can be tapped at
+                    // all, and there is nowhere else in a thread to report anything from.
+                    if (open) _replyButton(c) else const SizedBox(width: 44),
+                    // Your own comment has nothing to report, but its slot is held so the
+                    // reply arrows line up down the thread.
+                    if (me != null && me.id != c.authorId)
+                      _commentMenu(c)
+                    else
+                      const SizedBox(width: 44),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// One of the small text actions under a comment.
+  ///
+  /// The padding is the point. As bare text these were 17dp tall - a third of the 48dp both
+  /// platforms ask for - and Reply and Report sat 14dp apart, which is a fiddly pair to hit
+  /// accurately one-handed. The text itself is unchanged; only the area that answers a tap
+  /// grew, and the row's old 4dp top gap is folded into it so the thread gains as little
+  /// height as possible.
+  /// The check-in's own menu. Report only for now, and only on someone else's - the same
+  /// place a feed card keeps it, so the action is where a member already expects it.
+  Widget _postMenu(Post post) {
+    final me = ref.read(contentAccountProvider(widget.groupId))?.user;
+    if (me == null || me.id == post.authorId) return const SizedBox.shrink();
+    return SizedBox(
+      height: 44,
+      width: 44,
+      child: PopupMenuButton<String>(
+        icon: const Icon(Icons.more_horiz,
+            size: 20, color: kFgSecondary, semanticLabel: 'More on this check-in'),
+        tooltip: 'Check-in options',
+        padding: EdgeInsets.zero,
+        color: kBgSurface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: kBorder),
+        ),
+        onSelected: (v) {
+          if (v == 'report') _reportPost(post);
+        },
+        itemBuilder: (_) => const [
+          PopupMenuItem(
+            value: 'report',
+            child: Row(
+              children: [
+                Icon(Icons.flag_outlined, size: 19, color: kFgPrimary),
+                SizedBox(width: 10),
+                Text('Report check-in', style: TextStyle(color: kFgPrimary)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Reply to a comment: a full-size target in the empty space beside it.
+  Widget _replyButton(Comment c) => SizedBox(
+        height: 44,
+        width: 44,
+        child: IconButton(
+          icon: Icon(Icons.reply_outlined,
+              size: 19, color: kFgMuted, semanticLabel: 'Reply to ${c.authorName}'),
+          tooltip: 'Reply to ${c.authorName}',
+          padding: EdgeInsets.zero,
+          onPressed: () => _startReply(c),
+        ),
+      );
+
+  /// The same menu a check-in carries, for the actions that are not the common one. Report
+  /// is the only entry today; it belongs behind a menu rather than beside Reply, where the
+  /// two sat close enough to be mistaken for each other.
+  Widget _commentMenu(Comment c) => SizedBox(
+        height: 44,
+        width: 44,
+        child: PopupMenuButton<String>(
+          icon: Icon(Icons.more_horiz,
+              size: 19, color: kFgMuted, semanticLabel: 'More on ${c.authorName}\'s comment'),
+          tooltip: 'Comment options',
+          padding: EdgeInsets.zero,
+          color: kBgSurface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: const BorderSide(color: kBorder),
+          ),
+          onSelected: (v) {
+            if (v == 'report') _reportComment(c);
+          },
+          itemBuilder: (_) => const [
+            PopupMenuItem(
+              value: 'report',
+              child: Row(
+                children: [
+                  Icon(Icons.flag_outlined, size: 19, color: kFgPrimary),
+                  SizedBox(width: 10),
+                  Text('Report comment', style: TextStyle(color: kFgPrimary)),
                 ],
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
+      );
 
   Widget _composer() {
     // The picker searches against one server (whichever target can), but the chosen gif is

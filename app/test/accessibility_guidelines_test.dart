@@ -143,14 +143,14 @@ void main() {
 
     // Skipped, and deliberately left here rather than quietly deleted.
     //
-    // Everything tappable in a comment row is under 48dp: the avatar is 32 (42 on the post
-    // header), the author-name link is 19dp tall, and "Reply" and "Report" are 17dp and sit
-    // 14dp apart - close enough to hit Report while reaching for Reply, which is the worst
-    // way for this to fail.
+    // Reply and Report are dealt with - 45dp tall now, above Apple's 44 - but the rest of a
+    // comment row is still under 48dp: the avatar is 32 (42 on the post header) and the
+    // author-name link is 19dp tall.
     //
-    // Fixing it is a spacing decision, not a lint fix: reaching 48dp costs roughly 27dp of
-    // extra height per comment, which is a real choice about how dense a thread should read.
-    // Left in place so it turns green the moment someone makes that call.
+    // Those two are far less worth changing. A name link is short but ~150dp wide, so it is
+    // easy enough to hit, and missing it just opens a profile. Growing the avatars means
+    // growing the avatars, which is a look rather than a fix. Left failing and visible so
+    // the numbers stay honest.
     testWidgets('a post and its comment thread', (tester) async {
       final handle = tester.ensureSemantics();
       await pump(
