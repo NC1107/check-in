@@ -7,6 +7,8 @@ import 'package:checkin/api/models.dart';
 import 'package:checkin/features/post/post_detail_screen.dart';
 import 'package:checkin/state/app_state.dart';
 
+import 'support/comment_actions.dart';
+
 /// Where a comment actually goes when a check-in was shared to several groups.
 ///
 /// Each group is a separate server, so the fan-out is the client sending the same words to
@@ -287,8 +289,7 @@ void main() {
       account('beta.invalid', crossComments: true),
     ]);
 
-    await tester.tap(find.text('Reply').first);
-    await tester.pump();
+    await tapCommentReply(tester, find.text('where was this?').first);
     await sendComment(tester, 'Mathias');
 
     expect(alpha.received, hasLength(1));
@@ -319,8 +320,7 @@ void main() {
       account('beta.invalid', crossComments: true),
     ]);
 
-    await tester.tap(find.text('Reply').first);
-    await tester.pump();
+    await tapCommentReply(tester, find.text('just here').first);
     await sendComment(tester, 'nice');
 
     expect(alpha.received, hasLength(1));
@@ -447,8 +447,7 @@ void main() {
       account('beta.invalid', crossComments: true),
     ]);
 
-    await tester.tap(find.text('Reply').first);
-    await tester.pump();
+    await tapCommentReply(tester, find.text('just here').first);
     await tester.tap(find.byIcon(Icons.close).last); // cancel the reply
     await tester.pump();
 

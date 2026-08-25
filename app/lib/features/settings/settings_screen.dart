@@ -6,6 +6,7 @@ import '../../notifications/push_messaging.dart';
 import '../../state/app_state.dart';
 import '../../theme/tokens.dart';
 import '../profile/edit_profile_sheet.dart';
+import 'blocked_people_screen.dart';
 import 'edit_group_screen.dart';
 import 'notification_settings_screen.dart';
 
@@ -135,6 +136,17 @@ class SettingsScreen extends ConsumerWidget {
               label: 'Edit groups',
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const EditGroupsScreen()),
+              ),
+            ),
+          // Blocking happens on someone's profile, and blocking them removes their check-ins
+          // from every view - so without a list there was no way back to that profile except
+          // remembering their name and searching for it.
+          if (session.signedIn.isNotEmpty)
+            _tile(
+              icon: Icons.person_off_outlined,
+              label: 'Blocked people',
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const BlockedPeopleScreen()),
               ),
             ),
           const Divider(color: kBorder, height: 24),

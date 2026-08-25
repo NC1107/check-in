@@ -115,10 +115,6 @@ func (s *Server) handleAdminDismissReport(w http.ResponseWriter, r *http.Request
 
 // ---- blocks ----
 
-type blockReq struct {
-	UserID int64 `json:"userId"`
-}
-
 func (s *Server) handleBlockUser(w http.ResponseWriter, r *http.Request) {
 	targetID, err := pathInt(r, "id")
 	if err != nil {
@@ -157,16 +153,28 @@ func (s *Server) handleUnblockUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleListBlocks returns who the caller has blocked.
+//
+// "blocked" carries names and photos, which is what makes a block list something a member
+// can read and undo. Ids alone cannot be shown to anyone, and resolving them one at a time
+// is a request per row - which is why, until this, the app never called this route and a
+// member had no way to see who they had blocked.
+//
+// "blockedIds" stays for anything scripted against the API. Nothing in the app reads it;
+// the feed filters blocked authors in SQL rather than from a list the client holds.
 func (s *Server) handleListBlocks(w http.ResponseWriter, r *http.Request) {
-	ids, err := s.db.ListBlockedIDs(r.Context(), userFrom(r).ID)
+	blocked, err := s.db.BlockedUsers(r.Context(), userFrom(r).ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
-	if ids == nil {
-		ids = []int64{}
+	ids := make([]int64, 0, len(blocked))
+	people := make([]peerUser, 0, len(blocked))
+	for _, u := range blocked {
+		ids = append(ids, u.ID)
+		people = append(people, newPeerUser(u))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"blockedIds": ids})
+	writeJSON(w, http.StatusOK, map[string]any{"blockedIds": ids, "blocked": people})
 }
 
 func (s *Server) handleGetBlockStatus(w http.ResponseWriter, r *http.Request) {

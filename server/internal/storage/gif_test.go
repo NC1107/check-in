@@ -207,3 +207,50 @@ func animation(frames int) *gif.GIF {
 	}
 	return out
 }
+
+// The header check used to compare only the first three bytes, so anything beginning "GIF"
+// was treated as a gif. Combined with accepting a frameless stream, a 14-byte file of "GIF"
+// plus rubbish plus a trailer was stored as a valid attachment that renders as nothing.
+// Fuzzing found it; these pin both halves.
+func TestSanitizeGIFRequiresARealSignature(t *testing.T) {
+	body := []byte{1, 0, 1, 0, 0x00, 0, 0}
+	for _, tc := range []struct {
+		name   string
+		header string
+		ok     bool
+	}{
+		{"87a", "GIF87a", true},
+		{"89a", "GIF89a", true},
+		{"digits for a version", "GIF000", false},
+		{"plausible but wrong", "GIF88a", false},
+		{"lowercase", "gif89a", false},
+		{"not a gif at all", "PNG89a", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := append(append([]byte(tc.header), body...), gifFrame()...)
+			data = append(data, gifTrailer)
+			_, err := sanitizeGIF(data)
+			if tc.ok && err != nil {
+				t.Errorf("a %s file was rejected: %v", tc.header, err)
+			}
+			if !tc.ok && err == nil {
+				t.Errorf("%q was accepted as a gif header", tc.header)
+			}
+		})
+	}
+}
+
+func TestSanitizeGIFRejectsAFramelessStream(t *testing.T) {
+	if _, err := sanitizeGIF(gifStream()); err == nil {
+		t.Error("a gif with no image descriptor was accepted; it renders as nothing, and " +
+			"no encoder produces one")
+	}
+	// The exact 14 bytes the fuzzer found.
+	if _, err := sanitizeGIF([]byte("GIF0000000000;")); err == nil {
+		t.Error("the fuzzer's input is still accepted")
+	}
+	// One frame is still fine, which is what a still gif is.
+	if frames, err := sanitizeGIF(gifStream(gifFrame())); err != nil || frames != 1 {
+		t.Errorf("a single-frame gif: frames = %d, err = %v", frames, err)
+	}
+}

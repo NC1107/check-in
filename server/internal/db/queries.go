@@ -1608,6 +1608,40 @@ func (d *DB) ListBlockedIDs(ctx context.Context, blockerID int64) ([]int64, erro
 	return ids, rows.Err()
 }
 
+// BlockedUsers is who the viewer has blocked, most recently blocked first, with enough of
+// each person to recognise them.
+//
+// The ids alone were never enough to show a member their own block list: a list of numbers
+// cannot be read, and looking each one up separately is a request per row. Blocking is the
+// one moderation action a member takes on their own, so being able to see and undo it
+// without remembering a name to search for is the difference between a reversible action
+// and a permanent one.
+//
+// Revoked accounts are left out. Their content is already gone from every view, so listing
+// them offers a member nothing to act on and only makes the list longer.
+func (d *DB) BlockedUsers(ctx context.Context, blockerID int64) ([]User, error) {
+	rows, err := d.Pool.Query(ctx, `
+		SELECT u.id, u.phone, u.name, u.first_name, u.last_name, u.birthday, u.profile_media_id,
+		       u.is_admin, u.status, u.created_at, u.title, u.title_set_at
+		FROM user_blocks b JOIN users u ON u.id = b.blocked_id
+		WHERE b.blocker_id = $1 AND u.status = 'active'
+		ORDER BY b.created_at DESC`, blockerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []User
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday,
+			&u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt, &u.Title, &u.TitleSetAt); err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
 // blockedSet returns the ids blocked by viewerID as a set. Used where a query's own SQL
 // predicate can't reach the thing that needs filtering - currently only a recap post's
 // frozen payload (see applyRecapVisibility and FilterRecapForViewer in recap.go), since its

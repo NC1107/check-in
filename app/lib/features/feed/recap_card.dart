@@ -713,7 +713,7 @@ class _BubbleClusterState extends State<_BubbleCluster> with TickerProviderState
     }
 
     return AnimatedBuilder(
-      animation: _float == null ? _entrance : Listenable.merge([_entrance, _float!]),
+      animation: _float == null ? _entrance : Listenable.merge([_entrance, _float]),
       builder: (context, _) => SizedBox(
         width: maxX - minX,
         height: maxY - minY,

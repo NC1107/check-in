@@ -412,32 +412,72 @@ func (r signupReq) displayName() string {
 // handleSignup registers a new user. The first signup on a fresh server becomes the
 // admin (bypassing the allowlist, which is empty); subsequent signups require the
 // normalized phone to be on the allowlist and unused.
+// signupFields is one validated signup: what the handler needs once the request has been
+// checked, already normalized into the types the rest of the flow uses.
+type signupFields struct {
+	Phone     string
+	Name      string
+	FirstName string
+	LastName  string
+	Birthday  time.Time
+	Password  string
+}
+
+// validateSignup checks a signup request and returns the fields it yields, or the message
+// for the first rule it breaks. Pure - no clock beyond "now", no database - so every rule
+// here is testable without standing a server up, which is what the handler's size was
+// costing before.
+//
+// The mediaId rejection lives here rather than after the invite check where it used to. It
+// is a malformed-request rule, so answering it before a database round trip is the right
+// order; the only observable change is that a request carrying BOTH an unknown phone and a
+// mediaId now answers 400 rather than 403, and no client has ever sent the field at all.
+func validateSignup(req signupReq, defaultCountry string, now time.Time) (signupFields, string) {
+	f := signupFields{
+		Phone:     auth.NormalizePhone(req.Phone, defaultCountry),
+		Name:      req.displayName(),
+		FirstName: strings.TrimSpace(req.FirstName),
+		LastName:  strings.TrimSpace(req.LastName),
+		Password:  auth.NormalizePassword(req.Password),
+	}
+	if f.Phone == "" || f.Name == "" || len(f.Password) < 8 {
+		return f, "phone, name and an 8+ char password are required"
+	}
+	if len(f.Name) > 100 {
+		return f, "name too long (max 100 characters)"
+	}
+	birthday, err := time.Parse("2006-01-02", req.Birthday)
+	if err != nil {
+		return f, "birthday must be YYYY-MM-DD"
+	}
+	if birthday.Year() < 1900 || birthday.After(now) {
+		return f, "birthday is not a valid date"
+	}
+	f.Birthday = birthday
+	// A signup can never legitimately reference media: uploading requires a session, and the
+	// account does not exist yet, so any id arriving here is by definition somebody else's
+	// file - accepting it would let a brand-new member claim another member's upload as
+	// their avatar, which the profile-photo visibility rule then shows to the whole group.
+	// The apps have never sent this field; the photo is uploaded right after signup with the
+	// fresh token instead.
+	if req.MediaID != nil {
+		return f, "attach the profile photo after signing up"
+	}
+	return f, ""
+}
+
 func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 	var req signupReq
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
-	phone := auth.NormalizePhone(req.Phone, s.cfg.DefaultCountryCode)
-	name := req.displayName()
-	password := auth.NormalizePassword(req.Password)
-	if phone == "" || name == "" || len(password) < 8 {
-		writeErr(w, http.StatusBadRequest, "phone, name and an 8+ char password are required")
+	fields, msg := validateSignup(req, s.cfg.DefaultCountryCode, time.Now())
+	if msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
-	if len(name) > 100 {
-		writeErr(w, http.StatusBadRequest, "name too long (max 100 characters)")
-		return
-	}
-	birthday, err := time.Parse("2006-01-02", req.Birthday)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "birthday must be YYYY-MM-DD")
-		return
-	}
-	if birthday.Year() < 1900 || birthday.After(time.Now()) {
-		writeErr(w, http.StatusBadRequest, "birthday is not a valid date")
-		return
-	}
+	phone := fields.Phone
 
 	initialized, err := s.db.ServerInitialized(r.Context())
 	if err != nil {
@@ -466,29 +506,18 @@ func (s *Server) handleSignup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// A signup can never legitimately reference media: uploading requires a session, and
-	// the account does not exist yet, so any id arriving here is by definition somebody
-	// else's file - accepting it would let a brand-new member claim another member's
-	// upload as their avatar, which the profile-photo visibility rule then shows to the
-	// whole group. The apps have never sent this field; the photo is uploaded right after
-	// signup with the fresh token instead.
-	if req.MediaID != nil {
-		writeErr(w, http.StatusBadRequest, "attach the profile photo after signing up")
-		return
-	}
-
-	hash, err := auth.HashPassword(password)
+	hash, err := auth.HashPassword(fields.Password)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, msgServerError)
 		return
 	}
 
 	user, err := s.db.CreateUser(r.Context(), db.NewUser{
-		Phone:        phone,
-		Name:         name,
-		FirstName:    strings.TrimSpace(req.FirstName),
-		LastName:     strings.TrimSpace(req.LastName),
-		Birthday:     birthday,
+		Phone:        fields.Phone,
+		Name:         fields.Name,
+		FirstName:    fields.FirstName,
+		LastName:     fields.LastName,
+		Birthday:     fields.Birthday,
 		PasswordHash: hash,
 		IsAdmin:      isAdmin,
 	})

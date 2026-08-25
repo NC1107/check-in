@@ -7,6 +7,8 @@ import 'package:checkin/api/models.dart';
 import 'package:checkin/features/post/post_detail_screen.dart';
 import 'package:checkin/state/app_state.dart';
 
+import 'support/comment_actions.dart';
+
 /// A group-scoped ApiClient stub that answers a fixed thread and records every
 /// reportComment call, so a test can assert the exact (commentId, reason) sent.
 class _FakeApi extends ApiClient {
@@ -77,20 +79,61 @@ void main() {
     return api;
   }
 
-  testWidgets('Report appears on someone else\'s comment but not on your own', (tester) async {
+  /// The menu belonging to one comment, rather than whichever one a finder reaches first -
+  /// the check-in carries its own now, and so does every other comment in the thread.
+  Finder menuOn(String body) => find.descendant(
+        of: find.ancestor(of: find.text(body), matching: find.byType(Row)).last,
+        matching: find.byIcon(Icons.more_horiz),
+      );
+
+  // Reply is the only thing that waits for a tap. Reporting has to be findable by someone
+  // who has no idea a comment can be tapped at all, because there is nowhere else in a
+  // thread to report a comment from.
+  testWidgets('a thread offers reporting at rest, and reply only once tapped', (tester) async {
     await pump(tester);
 
-    // Exactly one comment (Robin's) offers Report; the viewer's own (Nick's) does not.
-    expect(find.text('Report'), findsOneWidget);
-    // Both Reply links are still there - Report is additive, not a replacement.
-    expect(find.text('Reply'), findsNWidgets(2));
+    expect(find.byIcon(Icons.reply_outlined), findsNothing);
+    expect(menuOn('nice'), findsOneWidget, reason: "Robin's comment can be reported at rest");
+
+    await openCommentActions(tester, find.text('nice'));
+    expect(find.byIcon(Icons.reply_outlined), findsOneWidget);
+    expect(menuOn('nice'), findsOneWidget, reason: 'and reporting did not go anywhere');
+  });
+
+  testWidgets('your own comment can be replied to but not reported', (tester) async {
+    await pump(tester);
+
+    expect(menuOn('ha'), findsNothing, reason: 'reporting your own comment is not a thing');
+
+    await openCommentActions(tester, find.text('ha'));
+    expect(find.byIcon(Icons.reply_outlined), findsOneWidget);
+    expect(menuOn('ha'), findsNothing);
+  });
+
+  // Only one reply arrow at a time, so a thread cannot fill back up with chrome.
+  testWidgets('tapping another comment moves the reply arrow to it', (tester) async {
+    await pump(tester);
+
+    await openCommentActions(tester, find.text('nice'));
+    await openCommentActions(tester, find.text('ha'));
+    expect(find.byIcon(Icons.reply_outlined), findsOneWidget,
+        reason: 'exactly one, on the comment just tapped');
+  });
+
+  testWidgets('tapping the same comment again puts the reply arrow away', (tester) async {
+    await pump(tester);
+
+    await openCommentActions(tester, find.text('nice'));
+    expect(find.byIcon(Icons.reply_outlined), findsOneWidget);
+
+    await openCommentActions(tester, find.text('nice'));
+    expect(find.byIcon(Icons.reply_outlined), findsNothing);
   });
 
   testWidgets('opening Report shows the reason list', (tester) async {
     await pump(tester);
 
-    await tester.tap(find.text('Report'));
-    await tester.pumpAndSettle();
+    await tapCommentReport(tester, find.text('nice'));
 
     expect(find.text('Report this comment'), findsOneWidget);
     expect(find.text('Inappropriate or offensive content'), findsOneWidget);
@@ -103,8 +146,7 @@ void main() {
   testWidgets('choosing a reason reports the right comment', (tester) async {
     final api = await pump(tester);
 
-    await tester.tap(find.text('Report'));
-    await tester.pumpAndSettle();
+    await tapCommentReport(tester, find.text('nice'));
     await tester.tap(find.text('Spam'));
     await tester.pumpAndSettle();
 

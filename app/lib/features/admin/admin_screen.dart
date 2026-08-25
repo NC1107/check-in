@@ -7,6 +7,7 @@ import '../../api/models.dart';
 import '../../state/app_state.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
+import '../onboarding/phone_field.dart';
 import '../../widgets/app_widgets.dart';
 import '../../widgets/user_avatar.dart';
 import '../onboarding/invite_links.dart';
@@ -298,7 +299,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
               size: 20, color: inv.used ? kSuccess : kFgMuted),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(inv.phone,
+            child: Text(formatStoredPhone(inv.phone),
                 style:
                     const TextStyle(color: kFgPrimary, fontSize: 14, fontWeight: FontWeight.w500)),
           ),
@@ -376,7 +377,7 @@ class _AdminScreenState extends ConsumerState<AdminScreen> {
                 Text(u.name,
                     style: const TextStyle(
                         color: kFgPrimary, fontWeight: FontWeight.w600, fontSize: 14)),
-                Text(u.isAdmin ? 'Host' : u.phone,
+                Text(u.isAdmin ? 'Host' : formatStoredPhone(u.phone),
                     style: const TextStyle(color: kFgMuted, fontSize: 12)),
               ],
             ),

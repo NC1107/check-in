@@ -48,6 +48,31 @@ class RecapEmptyPeriod implements Exception {
 
 /// ApiClient wraps all HTTP calls to a Check-In server. The base URL (server address)
 /// and bearer token are injected after the user connects and logs in.
+/// Reads a blocks response into the people it names.
+///
+/// A server new enough to send "blocked" has already done the work. One that predates it
+/// sends ids only, and a column of numbers is not something a member can act on - so each is
+/// resolved through [resolve], a request per row. That is only ever the old-server path and
+/// only ever runs over the handful of people anyone blocks.
+///
+/// An id that cannot be resolved is dropped rather than shown as a blank row: it means the
+/// account is gone, and there is nothing left to unblock.
+Future<List<User>> blocksFrom(
+  Map<String, dynamic> body,
+  Future<User?> Function(int id) resolve,
+) async {
+  final named = body['blocked'] as List?;
+  if (named != null) {
+    return named.map((e) => User.fromJson(e as Map<String, dynamic>)).toList();
+  }
+  final ids = (body['blockedIds'] as List? ?? []).map((e) => (e as num).toInt()).toList();
+  final people = await Future.wait([for (final id in ids) resolve(id)]);
+  return [
+    for (final u in people)
+      if (u != null) u
+  ];
+}
+
 class ApiClient {
   ApiClient({required String baseUrl, String? token, void Function()? onUnauthorized})
       : _dio = Dio(BaseOptions(
@@ -648,6 +673,20 @@ class ApiClient {
   Future<void> blockUser(int userId) => _dio.post('/api/me/blocks/$userId');
 
   Future<void> unblockUser(int userId) => _dio.delete('/api/me/blocks/$userId');
+
+  /// blockedUsers lists who this member has blocked on this server, most recently blocked
+  /// first, with enough of each person to recognise them.
+  ///
+  /// A server that predates the named list answers with ids only. Rather than showing a
+  /// column of numbers, those are resolved one at a time - a request per row, which is fine
+  /// for the handful of people anyone blocks and is only ever the old-server path.
+  Future<List<User>> blockedUsers() async {
+    final r = await _dio.get('/api/me/blocks');
+    return blocksFrom(
+      r.data as Map<String, dynamic>,
+      (id) => getUser(id).then<User?>((u) => u).catchError((_) => null),
+    );
+  }
 
   // ---- account deletion ----
 

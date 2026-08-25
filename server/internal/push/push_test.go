@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -192,4 +193,56 @@ func TestSendIsANoOpWhenDisabled(t *testing.T) {
 	if s.ProjectID() != "" {
 		t.Error("a nil Sender should report no project")
 	}
+}
+
+// New is the only place the server reads a host-supplied credentials file, and it had no
+// tests. What matters is what it refuses: the old call accepted any credential
+// configuration, including externally-sourced kinds that name their own token URL inside
+// the file. Only a Firebase service-account key should load.
+func TestNewRejectsAnythingButAServiceAccountKey(t *testing.T) {
+	// A syntactically valid RSA test key. Content is irrelevant - New must fail before it
+	// would ever be used for these cases.
+	const key = "-----BEGIN PRIVATE KEY-----\nMIIBVAIBADANBgkqhkiG9w0BAQEFAASCAT4wggE6AgEAAkEA\n-----END PRIVATE KEY-----\n"
+
+	for _, tc := range []struct {
+		name string
+		json string
+	}{
+		{"an external account config", `{"type":"external_account","audience":"//iam.googleapis.com/x","token_url":"https://evil.example.com/token","project_id":"p"}`},
+		{"an authorized user", `{"type":"authorized_user","client_id":"x","client_secret":"y","refresh_token":"z"}`},
+		{"no type at all", `{"project_id":"p","client_email":"a@b.c"}`},
+		{"not json", `not json`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if s, err := New(context.Background(), []byte(tc.json)); err == nil {
+				t.Errorf("loaded %s (sender=%v); only a service-account key should be accepted",
+					tc.name, s != nil)
+			}
+		})
+	}
+
+	// A service-account key with no project id cannot address FCM's per-project endpoint, so
+	// it is refused rather than left to fail on every send with a confusing 404.
+	noProject := `{"type":"service_account","client_email":"a@b.c","private_key_id":"k","private_key":` +
+		strconv.Quote(key) + `}`
+	if _, err := New(context.Background(), []byte(noProject)); err == nil {
+		t.Error("accepted a service-account key with no project_id")
+	}
+}
+
+// Empty credentials mean "push is not configured", which is a normal way to run the server
+// and must not read as an error.
+func TestNewTreatsEmptyCredentialsAsPushDisabled(t *testing.T) {
+	s, err := New(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("empty credentials returned an error: %v", err)
+	}
+	if s != nil {
+		t.Error("expected a nil Sender, which every call site treats as push being off")
+	}
+	// A nil Sender has to stay safe to use, since that is the whole point of returning one.
+	if got := s.ProjectID(); got != "" {
+		t.Errorf("ProjectID on a nil Sender = %q, want empty", got)
+	}
+	s.Send(context.Background(), []string{"tok"}, "t", "b", nil, "")
 }

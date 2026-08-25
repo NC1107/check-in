@@ -26,6 +26,7 @@ class UserAvatar extends StatelessWidget {
     this.mediaId,
     this.colorSeed,
     this.groupId,
+    this.semanticLabel,
   });
 
   final String name;
@@ -39,31 +40,46 @@ class UserAvatar extends StatelessWidget {
   /// The connected group the photo's media id belongs to (null = the current group).
   final String? groupId;
 
+  /// What a screen reader should announce, for an avatar that is itself tappable - the
+  /// person's name, since what the tap does is open their profile.
+  ///
+  /// Null, the usual case, means decorative: the name is shown beside the avatar everywhere
+  /// it appears, so announcing anything here only repeats it. Either way the initial itself
+  /// is never announced - a bare "S" tells nobody anything, and it is a generated colour
+  /// underneath rather than text anyone chose, so judging it as text is wrong twice over.
+  final String? semanticLabel;
+
   @override
   Widget build(BuildContext context) {
-    if (mediaId != null) {
-      return ClipOval(
+    return Semantics(
+      label: semanticLabel,
+      button: semanticLabel != null,
+      excludeSemantics: true,
+      child: mediaId != null ? _photo() : _initial(),
+    );
+  }
+
+  Widget _photo() => ClipOval(
         child: SizedBox(
             width: size, height: size, child: AuthImage(mediaId: mediaId!, groupId: groupId)),
       );
-    }
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: avatarColor(colorSeed ?? name.hashCode),
-        shape: BoxShape.circle,
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        name.isNotEmpty ? name[0].toUpperCase() : '?',
-        style: TextStyle(
-          color: Colors.white,
-          fontWeight: FontWeight.w700,
-          fontSize: size * 0.4,
-          height: 1,
+
+  Widget _initial() => Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          color: avatarColor(colorSeed ?? name.hashCode),
+          shape: BoxShape.circle,
         ),
-      ),
-    );
-  }
+        alignment: Alignment.center,
+        child: Text(
+          name.isNotEmpty ? name[0].toUpperCase() : '?',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+            fontSize: size * 0.4,
+            height: 1,
+          ),
+        ),
+      );
 }

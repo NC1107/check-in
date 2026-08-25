@@ -19,6 +19,14 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.26',
+    highlights: [
+      "Settings has a blocked people list now, so you can see who you've blocked and unblock them. Before this the unblock button only lived on the person's profile, and blocking someone hides their check-ins, so there wasn't really a way back to it unless you remembered their name and searched for it.",
+      "Comments are tidier. The Reply and Report links under every one are gone; tap a comment to get a reply button, and the report option sits in a small menu on the right. They were also tiny targets before, about a third the size they should be, so they should be a lot easier to hit now.",
+      "You can report a check-in from the check-in itself now. That was only possible from the feed before, so once you opened something there was no way to report it.",
+    ],
+  ),
+  ReleaseNote(
     version: '1.25',
     highlights: [
       "There's a bell on your profile now with everything that happened while you weren't looking. Comments on your check-ins, replies to your comments, likes, all of it, going back as far as you've been in the group. So a notification you swiped away isn't gone.",
