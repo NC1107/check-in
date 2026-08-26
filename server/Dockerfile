@@ -1,5 +1,5 @@
 # Multi-stage build producing a tiny static binary on a distroless base.
-FROM golang:1.26-alpine AS build
+FROM golang:1.27-alpine AS build
 WORKDIR /src
 
 # Fetches, filters, and packs the places gazetteer's dataset from a pinned GeoNames URL
