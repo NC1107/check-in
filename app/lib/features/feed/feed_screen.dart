@@ -259,6 +259,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
 
   // Filter state.
   List<Post> _allPosts = [];
+
+  /// Post count at the last viewport-filling page request, so one that brings in
+  /// nothing new stops rather than retrying against the same answer.
+  int _lastFillCount = -1;
   final Set<String> _people = {}; // selected person keys (PersonDirectory.keyFor)
   bool _includeTagged = true; // also match posts the selected people are tagged in
   _DateFilter? _dateFilter;
@@ -412,6 +416,28 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   /// this method (i.e. it sits at a different page depth in each group) can show as two
   /// cards rather than one - a rare edge case, accepted the same way the single-group
   /// version always accepted "no cross-group cursor" as a simplification.
+  /// Pages again when what has loaded does not fill the screen.
+  ///
+  /// Paging is otherwise driven entirely by the scroll listener, which can only fire once
+  /// there is something to scroll. A first page shorter than the viewport therefore never
+  /// asks for a second one, and the feed stops early with more to show - reachable whenever
+  /// posts are few or short. Each pass either grows the list or marks a group finished, so
+  /// this settles rather than looping.
+  void _maybeFillViewport() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _loadingMore || _reachedEnd) return;
+      if (_dateFilter is _PresetDate || !_scrollCtrl.hasClients) return;
+      if (_scrollCtrl.position.maxScrollExtent > 0) return;
+      // Only keep going while the list is actually growing. Unlike the scroll listener,
+      // this drives itself - load, rebuild, check again - so a page that comes back
+      // non-empty but entirely of posts already held (every group re-sending its last
+      // page) would otherwise spin here forever without the list ever getting taller.
+      if (_allPosts.length == _lastFillCount) return;
+      _lastFillCount = _allPosts.length;
+      _loadMore();
+    });
+  }
+
   Future<void> _loadMore() async {
     if (_loadingMore || _reachedEnd || _allPosts.isEmpty) return;
     final groups = ref.read(multiSessionProvider).shownGroups;
@@ -981,6 +1007,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                           ]),
                           data: (result) {
                             _allPosts = [...result.posts, ..._morePosts];
+                            _maybeFillViewport();
                             final posts = _applyFilter(_allPosts);
                             if (_allPosts.isEmpty) {
                               final s = ref.read(multiSessionProvider);

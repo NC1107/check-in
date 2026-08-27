@@ -53,6 +53,7 @@ class PostDetailScreen extends ConsumerStatefulWidget {
     required this.postId,
     this.groupId,
     this.focusComments = false,
+    this.focusComposer = false,
     this.highlightCommentId,
     this.copies,
     this.gifDownloader,
@@ -67,6 +68,11 @@ class PostDetailScreen extends ConsumerStatefulWidget {
   /// This is the fallback for a notification that names no particular comment - an older
   /// server that predates [highlightCommentId], or a like. Prefer that when there is one.
   final bool focusComments;
+
+  /// When true, the composer takes focus as soon as the thread loads, so tapping "Add a
+  /// comment" in the feed lands ready to type rather than asking for a second tap. Separate
+  /// from [focusComments], which is about where the thread is SCROLLED, not what has focus.
+  final bool focusComposer;
 
   /// The comment a notification was about: the view scrolls to it and flashes it, so the
   /// member lands on the reply they were told about rather than at the top of the thread.
@@ -138,6 +144,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   Object? _error;
   bool _sending = false;
   bool _didFocusComments = false;
+  bool _didFocusComposer = false;
 
   /// The row currently flashing (a _rowKeyFor value), cleared once the highlight has
   /// faded. Held in state rather than driven by an animation so it can simply stop.
@@ -224,6 +231,89 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
       if (mounted) _snack('Report sent. The host will review it.');
     } catch (_) {
       if (mounted) _snack('Could not send report. Try again.');
+    }
+  }
+
+  /// Removes the check-in this screen is showing, then leaves - there is nothing left to
+  /// look at. Same permissions as the feed card's own delete: your own, or anyone's when
+  /// you are the group's admin.
+  Future<void> _deletePost(Post post) async {
+    final me = ref.read(contentAccountProvider(widget.groupId))?.user;
+    final mine = me != null && me.id == post.authorId;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kBgSurface,
+        title: Text(mine ? 'Delete this check-in?' : "Delete ${post.authorName}'s check-in?",
+            style: const TextStyle(color: kFgPrimary)),
+        content: Text(
+            mine
+                ? 'This permanently removes the check-in for everyone.'
+                : "This permanently removes someone else's check-in for everyone. They are "
+                    'not told who removed it.',
+            style: const TextStyle(color: kFgSecondary)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: kFgSecondary)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: kLike, foregroundColor: Colors.white),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await ref.read(contentApiProvider(widget.groupId)).deletePost(post.id);
+      ref.invalidate(feedProvider);
+      if (mounted) Navigator.of(context).pop();
+    } catch (_) {
+      if (mounted) _snack('Could not delete the check-in. Try again.');
+    }
+  }
+
+  /// Removes a comment: the author's own, or anyone's when the viewer is the group's
+  /// admin. The row goes immediately rather than after a reload, because a member who just
+  /// confirmed a deletion should not still be looking at the thing they deleted.
+  Future<void> _deleteComment(Comment c) async {
+    final me = ref.read(contentAccountProvider(c.groupId ?? widget.groupId))?.user;
+    final mine = me != null && me.id == c.authorId;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: kBgSurface,
+        title: Text(mine ? 'Delete your comment?' : "Delete ${c.authorName}'s comment?",
+            style: const TextStyle(color: kFgPrimary)),
+        content: Text(
+            mine
+                ? 'This permanently removes it for everyone, along with any replies to it.'
+                : "This permanently removes someone else's comment for everyone, along with "
+                    'any replies to it. They are not told who removed it.',
+            style: const TextStyle(color: kFgSecondary)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel', style: TextStyle(color: kFgSecondary)),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: FilledButton.styleFrom(backgroundColor: kLike, foregroundColor: Colors.white),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final gid = c.groupId ?? widget.groupId;
+    try {
+      await ref.read(contentApiProvider(gid)).deleteComment(c.id);
+      if (!mounted) return;
+      setState(() => _comments.removeWhere((x) => x.id == c.id && x.groupId == c.groupId));
+    } catch (_) {
+      if (mounted) _snack('Could not delete the comment. Try again.');
     }
   }
 
@@ -364,6 +454,16 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
     });
   }
 
+  /// Puts the cursor in the composer when the screen was opened to write, rather than to
+  /// read. Runs once: refocusing on a later reload would steal focus back mid-typing.
+  void _maybeFocusComposer() {
+    if (!widget.focusComposer || _didFocusComposer) return;
+    _didFocusComposer = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _commentFocus.requestFocus();
+    });
+  }
+
   /// Brings one comment into view and flashes it.
   ///
   /// The stepping is not defensive padding. A ListView builds only the rows near the
@@ -462,6 +562,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
         _loading = false;
       });
       _maybeFocusComments();
+      _maybeFocusComposer();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -1069,7 +1170,6 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   Widget _commentRow(Comment c) {
     // A merged comment opens the commenter's profile on its own group's server.
     final gid = c.groupId ?? widget.groupId;
-    final me = ref.read(contentAccountProvider(gid))?.user;
     final rowKey = _rowKeyFor(c);
     final key = _commentKeys.putIfAbsent(rowKey, GlobalKey.new);
     final lit = _highlighted == rowKey;
@@ -1183,10 +1283,7 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                     if (open) _replyButton(c) else const SizedBox(width: 44),
                     // Your own comment has nothing to report, but its slot is held so the
                     // reply arrows line up down the thread.
-                    if (me != null && me.id != c.authorId)
-                      _commentMenu(c)
-                    else
-                      const SizedBox(width: 44),
+                    if (_commentHasMenu(c)) _commentMenu(c) else const SizedBox(width: 44),
                   ],
                 ),
               ),
@@ -1208,7 +1305,11 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
   /// place a feed card keeps it, so the action is where a member already expects it.
   Widget _postMenu(Post post) {
     final me = ref.read(contentAccountProvider(widget.groupId))?.user;
-    if (me == null || me.id == post.authorId) return const SizedBox.shrink();
+    if (me == null) return const SizedBox.shrink();
+    // Report is for other people's check-ins, delete is for your own or (as admin) for
+    // anyone's - so between them there is always at least one entry to show.
+    final mine = me.id == post.authorId;
+    final canDelete = mine || me.isAdmin;
     return SizedBox(
       height: 44,
       width: 44,
@@ -1224,18 +1325,31 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
         ),
         onSelected: (v) {
           if (v == 'report') _reportPost(post);
+          if (v == 'delete') _deletePost(post);
         },
-        itemBuilder: (_) => const [
-          PopupMenuItem(
-            value: 'report',
-            child: Row(
-              children: [
-                Icon(Icons.flag_outlined, size: 19, color: kFgPrimary),
-                SizedBox(width: 10),
-                Text('Report check-in', style: TextStyle(color: kFgPrimary)),
-              ],
+        itemBuilder: (_) => [
+          if (!mine)
+            const PopupMenuItem(
+              value: 'report',
+              child: Row(
+                children: [
+                  Icon(Icons.flag_outlined, size: 19, color: kFgPrimary),
+                  SizedBox(width: 10),
+                  Text('Report check-in', style: TextStyle(color: kFgPrimary)),
+                ],
+              ),
             ),
-          ),
+          if (canDelete)
+            const PopupMenuItem(
+              value: 'delete',
+              child: Row(
+                children: [
+                  Icon(Icons.delete_outline, size: 19, color: kLike),
+                  SizedBox(width: 10),
+                  Text('Delete check-in', style: TextStyle(color: kLike)),
+                ],
+              ),
+            ),
         ],
       ),
     );
@@ -1254,27 +1368,36 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
         ),
       );
 
-  /// The same menu a check-in carries, for the actions that are not the common one. Report
-  /// is the only entry today; it belongs behind a menu rather than beside Reply, where the
-  /// two sat close enough to be mistaken for each other.
-  Widget _commentMenu(Comment c) => SizedBox(
-        height: 44,
-        width: 44,
-        child: PopupMenuButton<String>(
-          icon: Icon(Icons.more_horiz,
-              size: 19, color: kFgMuted, semanticLabel: 'More on ${c.authorName}\'s comment'),
-          tooltip: 'Comment options',
-          padding: EdgeInsets.zero,
-          color: kBgSurface,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-            side: const BorderSide(color: kBorder),
-          ),
-          onSelected: (v) {
-            if (v == 'report') _reportComment(c);
-          },
-          itemBuilder: (_) => const [
-            PopupMenuItem(
+  /// The same menu a check-in carries, for the actions that are not the common one. It
+  /// belongs behind a menu rather than beside Reply, where the two sat close enough to be
+  /// mistaken for each other.
+  ///
+  /// What it offers depends on whose comment it is: you can delete your own, an admin can
+  /// delete anyone's in their group, and there is nothing to report about your own.
+  Widget _commentMenu(Comment c) {
+    final me = ref.read(contentAccountProvider(c.groupId ?? widget.groupId))?.user;
+    final mine = me != null && me.id == c.authorId;
+    final canDelete = me != null && (mine || me.isAdmin);
+    return SizedBox(
+      height: 44,
+      width: 44,
+      child: PopupMenuButton<String>(
+        icon: Icon(Icons.more_horiz,
+            size: 19, color: kFgMuted, semanticLabel: 'More on ${c.authorName}\'s comment'),
+        tooltip: 'Comment options',
+        padding: EdgeInsets.zero,
+        color: kBgSurface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: kBorder),
+        ),
+        onSelected: (v) {
+          if (v == 'report') _reportComment(c);
+          if (v == 'delete') _deleteComment(c);
+        },
+        itemBuilder: (_) => [
+          if (!mine)
+            const PopupMenuItem(
               value: 'report',
               child: Row(
                 children: [
@@ -1284,9 +1407,28 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                 ],
               ),
             ),
-          ],
-        ),
-      );
+          if (canDelete)
+            const PopupMenuItem(
+              value: 'delete',
+              child: Row(
+                children: [
+                  Icon(Icons.delete_outline, size: 19, color: kLike),
+                  SizedBox(width: 10),
+                  Text('Delete comment', style: TextStyle(color: kLike)),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Whether the menu has anything to offer for this comment. Report covers other people's
+  /// comments and delete covers your own (and, as admin, everyone's), so between them a
+  /// signed-in viewer always has at least one entry. Signed out there is none, and the slot
+  /// stays empty so the reply arrows still line up down the thread.
+  bool _commentHasMenu(Comment c) =>
+      ref.read(contentAccountProvider(c.groupId ?? widget.groupId))?.user != null;
 
   Widget _composer() {
     // The picker searches against one server (whichever target can), but the chosen gif is
@@ -1347,6 +1489,12 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                         focusNode: _commentFocus,
                         onSubmitted: (_) => _send(),
                         textInputAction: TextInputAction.send,
+                        // Grow with the text instead of scrolling a long comment sideways
+                        // through a one-line window. keyboardType stays `text` so return
+                        // still sends, as it always has, rather than inserting a newline.
+                        keyboardType: TextInputType.text,
+                        minLines: 1,
+                        maxLines: 6,
                         style: const TextStyle(color: kFgPrimary, fontSize: 14),
                         cursorColor: context.accent,
                         decoration: InputDecoration(
@@ -1359,11 +1507,11 @@ class _PostDetailScreenState extends ConsumerState<PostDetailScreen> {
                           isDense: true,
                           contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
                           enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(9999),
+                            borderRadius: BorderRadius.circular(22),
                             borderSide: const BorderSide(color: kBorder),
                           ),
                           focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(9999),
+                            borderRadius: BorderRadius.circular(22),
                             borderSide: BorderSide(color: context.accent),
                           ),
                           // Right-aligned inside the field, matching compose's own gif icon.

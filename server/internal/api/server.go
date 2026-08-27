@@ -156,6 +156,7 @@ func (s *Server) Router() http.Handler {
 		r.With(s.rateLimitUser(s.content.comments)).Post("/api/posts/{id}/comments", s.handleAddComment)
 
 		r.Post("/api/posts/{id}/report", s.handleReportPost)
+		r.Delete("/api/comments/{id}", s.handleDeleteComment)
 		r.Post("/api/comments/{id}/report", s.handleReportComment)
 
 		r.Get("/api/me/blocks", s.handleListBlocks)

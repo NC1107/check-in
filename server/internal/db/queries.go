@@ -1310,11 +1310,24 @@ func deleteOrphanMedia(ctx context.Context, tx pgx.Tx, candidates []int64) ([]st
 	return paths, nil
 }
 
-// AdminDeleteComment removes any comment by id (operator dashboard moderation), plus its
-// media if that leaves it orphaned, returning the stored file path to remove (empty when
-// the comment carried no attachment or its media is still used elsewhere - by another
-// comment, a post, or a profile photo).
+// DeleteComment removes a comment the given author owns, plus its media if that leaves it
+// orphaned, returning the stored file paths to remove (empty when the comment carried no
+// attachment or its media is still used elsewhere - by another comment, a post, or a
+// profile photo). Returns ErrNotFound when the comment is not theirs, so a member cannot
+// probe which ids exist.
+func (d *DB) DeleteComment(ctx context.Context, commentID, authorID int64) ([]string, error) {
+	return d.deleteComment(ctx, commentID, &authorID)
+}
+
+// AdminDeleteComment removes any comment by id regardless of author (in-app admin
+// moderation and the operator dashboard), with the same orphaned-media cleanup.
 func (d *DB) AdminDeleteComment(ctx context.Context, commentID int64) ([]string, error) {
+	return d.deleteComment(ctx, commentID, nil)
+}
+
+// deleteComment deletes a comment, optionally constrained to an author, and garbage-collects
+// its media when nothing else references it.
+func (d *DB) deleteComment(ctx context.Context, commentID int64, authorID *int64) ([]string, error) {
 	tx, err := d.Pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -1330,7 +1343,12 @@ func (d *DB) AdminDeleteComment(ctx context.Context, commentID int64) ([]string,
 		return nil, err
 	}
 
-	ct, err := tx.Exec(ctx, `DELETE FROM comments WHERE id = $1`, commentID)
+	var ct pgconn.CommandTag
+	if authorID != nil {
+		ct, err = tx.Exec(ctx, `DELETE FROM comments WHERE id = $1 AND user_id = $2`, commentID, *authorID)
+	} else {
+		ct, err = tx.Exec(ctx, `DELETE FROM comments WHERE id = $1`, commentID)
+	}
 	if err != nil {
 		return nil, err
 	}

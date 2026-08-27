@@ -68,11 +68,11 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
   // Like state lives in the app-wide likesProvider (a single source of truth shared with
   // the post screen), so only the comment count is tracked locally here.
   late int _comments = widget.post.totalComments;
-  final _commentCtrl = TextEditingController();
-  bool _postingComment = false;
   // Comments added inline on this card since it was built, shown immediately so the
   // typed text doesn't appear to vanish (the post's own preview is immutable).
-  final List<CommentPreview> _added = [];
+  /// The post as last re-read after returning from the thread, so a comment written
+  /// there shows here too instead of leaving a stale preview and count behind.
+  List<CommentPreview>? _preview;
 
   // A quick pop on the heart when a like lands, and a bigger burst over the photo on a
   // double-tap-to-like.
@@ -95,13 +95,12 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
     super.didUpdateWidget(oldWidget);
     if (oldWidget.post.id != widget.post.id) {
       _comments = widget.post.totalComments;
-      _added.clear();
+      _preview = null;
     }
   }
 
   @override
   void dispose() {
-    _commentCtrl.dispose();
     _likePop.dispose();
     _burst.dispose();
     super.dispose();
@@ -126,13 +125,23 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
   }
 
   Future<void> _confirmDelete() async {
+    // Deleting your own check-in and moderating someone else's are different enough acts
+    // to deserve different words on the button you are about to press.
+    final me = ref.read(contentAccountProvider(widget.post.groupId))?.user;
+    final mine = me != null && me.id == widget.post.authorId;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: _bgSurface,
-        title: const Text('Delete this check-in?', style: TextStyle(color: _fgPrimary)),
-        content: const Text('This permanently removes the check-in for everyone.',
-            style: TextStyle(color: _fgSecondary)),
+        title: Text(
+            mine ? 'Delete this check-in?' : 'Delete ${widget.post.authorName}\'s check-in?',
+            style: const TextStyle(color: _fgPrimary)),
+        content: Text(
+            mine
+                ? 'This permanently removes the check-in for everyone.'
+                : 'This permanently removes someone else\'s check-in for everyone. They are '
+                    'not told who removed it.',
+            style: const TextStyle(color: _fgSecondary)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -222,33 +231,6 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
     _burst.forward(from: 0);
   }
 
-  Future<void> _addComment() async {
-    final text = _commentCtrl.text.trim();
-    if (text.isEmpty || _postingComment) return;
-    setState(() => _postingComment = true);
-    FocusScope.of(context).unfocus(); // close the keyboard
-    try {
-      final comment =
-          await ref.read(contentApiProvider(widget.post.groupId)).addComment(widget.post.id, text);
-      _commentCtrl.clear();
-      if (mounted) {
-        setState(() {
-          _comments++;
-          _added.add(CommentPreview(
-              authorId: comment.authorId, authorName: comment.authorName, body: comment.body));
-        });
-      }
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not add comment')),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _postingComment = false);
-    }
-  }
-
   /// Opens a member's profile in the post's own group - the viewer's own editable
   /// profile if it's their own account, otherwise a read-only view (no-op for a missing
   /// id).
@@ -278,15 +260,32 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
 
   /// Opens the post detail. For a collapsed cross-post it carries the copies so the thread
   /// merges every group's comments (only groups the viewer is in), each tagged.
-  void _openDetail() {
+  List<CommentPreview> _shownPreview(Post p) => _preview ?? p.commentsPreview;
+
+  Future<void> _openDetail({bool focusComposer = false}) async {
     final p = widget.post;
-    Navigator.of(context).push(MaterialPageRoute(
+    await Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => PostDetailScreen(
         postId: p.id,
         groupId: p.groupId,
         copies: p.isCrossPost ? p.copies : null,
+        focusComposer: focusComposer,
       ),
     ));
+    // Commenting moved to the thread, so the count and preview on this card go stale the
+    // moment the member writes one. Re-read on the way back rather than leaving it wrong.
+    if (!mounted) return;
+    try {
+      final fresh = await ref.read(contentApiProvider(p.groupId)).getPost(p.id);
+      if (!mounted) return;
+      setState(() {
+        _comments = fresh.totalComments;
+        _preview = fresh.commentsPreview;
+      });
+    } catch (_) {
+      // A failed refresh just leaves the previous count showing, which is what the card
+      // did before this refresh existed. Nothing worth interrupting the member for.
+    }
   }
 
   /// Opens the tapped attachment full screen.
@@ -579,7 +578,9 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                             ],
                           ),
                         ),
-                      if (me != null && me.id == p.authorId)
+                      // An admin moderates the whole group, so they can remove anyone's
+                      // check-in here rather than only through the operator dashboard.
+                      if (me != null && (me.id == p.authorId || me.isAdmin))
                         const PopupMenuItem(
                           value: 'delete',
                           child: Row(
@@ -702,13 +703,13 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
             ),
           ),
           // Recent comments preview (inline, so you don't have to open the post)
-          if (p.commentsPreview.isNotEmpty || _added.isNotEmpty)
+          if (_shownPreview(p).isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (_comments > p.commentsPreview.length + _added.length)
+                  if (_comments > _shownPreview(p).length)
                     GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: _openDetail,
@@ -718,7 +719,7 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                             style: const TextStyle(color: _fgMuted, fontSize: 13)),
                       ),
                     ),
-                  ...[...p.commentsPreview, ..._added].map((c) => Padding(
+                  ..._shownPreview(p).map((c) => Padding(
                         padding: const EdgeInsets.only(bottom: 3),
                         child: Text.rich(
                           TextSpan(children: [
@@ -744,58 +745,35 @@ class _PostCardState extends ConsumerState<PostCard> with TickerProviderStateMix
                 ],
               ),
             ),
-          // Quick comment input
-          Container(
-            decoration: const BoxDecoration(
-              border: Border(top: BorderSide(color: _border)),
-            ),
-            padding: const EdgeInsets.fromLTRB(14, 9, 14, 11),
-            child: Row(
-              children: [
-                if (me != null)
-                  UserAvatar(
-                      name: me.name,
-                      size: 26,
-                      mediaId: me.profileMediaId,
-                      colorSeed: me.id,
-                      groupId: p.groupId),
-                const SizedBox(width: 9),
-                Expanded(
-                  child: TextField(
-                    controller: _commentCtrl,
-                    onSubmitted: (_) => _addComment(),
-                    style: const TextStyle(color: _fgPrimary, fontSize: 13),
-                    decoration: const InputDecoration(
-                      hintText: 'Add a comment…',
-                      hintStyle: TextStyle(color: _fgMuted),
-                      border: InputBorder.none,
-                      isDense: true,
-                      contentPadding: EdgeInsets.zero,
-                    ),
+          // Tapping through to the check-in rather than commenting in place: the inline
+          // composer could only ever post a plain top-level comment to the default group,
+          // silently dropping the three things the thread's own composer has - replying to
+          // a specific comment, attaching a gif, and choosing which group a cross-post's
+          // comment lands in. A member who commented from here lost those without being
+          // told. The preview above stays; only the input moved.
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _openDetail(focusComposer: true),
+            child: Container(
+              decoration: const BoxDecoration(
+                border: Border(top: BorderSide(color: _border)),
+              ),
+              padding: const EdgeInsets.fromLTRB(14, 9, 14, 11),
+              child: Row(
+                children: [
+                  if (me != null)
+                    UserAvatar(
+                        name: me.name,
+                        size: 26,
+                        mediaId: me.profileMediaId,
+                        colorSeed: me.id,
+                        groupId: p.groupId),
+                  const SizedBox(width: 9),
+                  const Expanded(
+                    child: Text('Add a comment…', style: TextStyle(color: _fgMuted, fontSize: 13)),
                   ),
-                ),
-                ValueListenableBuilder<TextEditingValue>(
-                  valueListenable: _commentCtrl,
-                  builder: (_, val, __) {
-                    final canPost = val.text.trim().isNotEmpty;
-                    return TextButton(
-                      onPressed: canPost ? _addComment : null,
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                        minimumSize: const Size(44, 44),
-                      ),
-                      child: Text(
-                        'Post',
-                        style: TextStyle(
-                          color: canPost ? context.accent : _fgMuted,
-                          fontWeight: FontWeight.w700,
-                          fontSize: 13,
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ],
