@@ -77,10 +77,23 @@ COUNTRIES_TSV = os.path.join(
 )
 
 
+def readable_file(path, what):
+    """Resolves a path from the command line and refuses anything but a readable file.
+
+    These paths come from whoever runs the script, but resolving and checking before the
+    open() keeps a mistyped or surprising argument (a directory, a dangling symlink, a
+    traversal out of the tree) a clear error here rather than a stack trace deeper in.
+    """
+    resolved = os.path.realpath(os.path.expanduser(path))
+    if not os.path.isfile(resolved):
+        sys.exit(f"{what}: {path!r} did not resolve to a readable file")
+    return resolved
+
+
 def load_countries(path):
     """ISO country code -> country name, from the same table the gazetteer is built with."""
     codes = {}
-    with open(path, encoding="utf-8") as f:
+    with open(readable_file(path, "countries table"), encoding="utf-8") as f:
         for row in csv.reader(f, delimiter="\t"):
             if len(row) >= 2 and row[0] and row[1]:
                 codes[row[0]] = row[1]
@@ -93,7 +106,7 @@ def load_cities(path):
     """Buckets every populated place by whole-degree cell, keyed for nearest-match lookup."""
     cells = defaultdict(list)
     count = 0
-    with open(path, encoding="utf-8") as f:
+    with open(readable_file(path, "places export"), encoding="utf-8") as f:
         for line in f:
             parts = line.rstrip("\n").split("\t")
             if len(parts) < EXPECTED_COLUMNS:
@@ -146,7 +159,47 @@ def nearest_city(cells, lat, lng, max_km):
     return best
 
 
-def main():
+def canonical_label(cells, countries, lat, lng, max_km):
+    """The "City, Country" a coordinate should carry, or None when it cannot be derived."""
+    if lat is None or lng is None:
+        return None
+    city = nearest_city(cells, float(lat), float(lng), max_km)
+    if city is None:
+        return None
+    country = countries.get(city[3])
+    return None if country is None else f"{city[2]}, {country}"
+
+
+def plan_updates(cur, cells, countries, max_km):
+    """Walks every located post and returns the rewrites to make, plus a tally of the rest.
+
+    Split out of main so the reporting and the writing stay separately readable; this is
+    also the whole of the dry run, which is why it prints as it goes rather than at the end.
+    """
+    updates = []
+    tally = {"changed": 0, "unchanged": 0, "no_coords": 0, "unresolved": 0}
+    cur.execute("""
+        SELECT id, location, lat, lng FROM posts
+        WHERE location IS NOT NULL AND location <> ''
+        ORDER BY id
+    """)
+    for post_id, location, lat, lng in cur.fetchall():
+        if lat is None or lng is None:
+            tally["no_coords"] += 1
+            continue
+        canonical = canonical_label(cells, countries, lat, lng, max_km)
+        if canonical is None:
+            tally["unresolved"] += 1
+        elif canonical == location:
+            tally["unchanged"] += 1
+        else:
+            tally["changed"] += 1
+            updates.append((canonical, post_id))
+            print(f"post {post_id}: {location!r} -> {canonical!r}")
+    return updates, tally
+
+
+def parse_args():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--database-url", required=True,
@@ -159,8 +212,11 @@ def main():
                     help="furthest a place may be from the coordinates and still name it")
     ap.add_argument("--apply", action="store_true",
                     help="write the changes; without it the run only reports them")
-    args = ap.parse_args()
+    return ap.parse_args()
 
+
+def main():
+    args = parse_args()
     try:
         import psycopg
     except ImportError:
@@ -170,45 +226,19 @@ def main():
     cells, city_count = load_cities(args.cities)
     print(f"loaded {city_count} places and {len(countries)} countries", file=sys.stderr)
 
-    changed = unchanged = no_coords = unresolved = 0
-    updates = []
     with psycopg.connect(args.database_url) as conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, location, lat, lng FROM posts
-                WHERE location IS NOT NULL AND location <> ''
-                ORDER BY id
-            """)
-            for post_id, location, lat, lng in cur.fetchall():
-                if lat is None or lng is None:
-                    no_coords += 1
-                    continue
-                city = nearest_city(cells, float(lat), float(lng), args.max_km)
-                if city is None:
-                    unresolved += 1
-                    continue
-                country = countries.get(city[3])
-                if country is None:
-                    unresolved += 1
-                    continue
-                canonical = f"{city[2]}, {country}"
-                if canonical == location:
-                    unchanged += 1
-                    continue
-                changed += 1
-                updates.append((canonical, post_id))
-                print(f"post {post_id}: {location!r} -> {canonical!r}")
-
+            updates, tally = plan_updates(cur, cells, countries, args.max_km)
         if args.apply and updates:
             with conn.cursor() as cur:
                 cur.executemany("UPDATE posts SET location = %s WHERE id = %s", updates)
             conn.commit()
 
     verb = "updated" if args.apply else "would update"
-    print(f"\n{verb} {changed}; already canonical {unchanged}; "
-          f"skipped {no_coords} without coordinates and {unresolved} with no place "
-          f"within {args.max_km:g}km", file=sys.stderr)
-    if not args.apply and changed:
+    print(f"\n{verb} {tally['changed']}; already canonical {tally['unchanged']}; "
+          f"skipped {tally['no_coords']} without coordinates and {tally['unresolved']} "
+          f"with no place within {args.max_km:g}km", file=sys.stderr)
+    if not args.apply and tally["changed"]:
         print("dry run - nothing was written. Re-run with --apply to commit.", file=sys.stderr)
 
 
