@@ -65,9 +65,18 @@ from collections import defaultdict
 COL_NAME = 1
 COL_LAT = 4
 COL_LNG = 5
+COL_FCLASS = 6
+COL_FCODE = 7
 COL_COUNTRY = 8
 COL_POPULATION = 14
 EXPECTED_COLUMNS = 19
+
+# Only real settlements. GeoNames' populated-place class also covers sections of a city
+# (PPLX) and minor localities, so without this filter a coordinate inside San Francisco
+# resolves to "Chinatown" or "Noe Valley" - the nearest centroid, but not the name anyone
+# would write, and not what the phone geocoder that produced these labels returns.
+PLACE_CLASS = "P"
+SKIPPED_PLACE_CODES = frozenset({"PPLX", "PPLL", "PPLQ", "PPLW", "PPLH", "PPLCH", "PPLR"})
 
 # Candidate cities are bucketed into whole-degree cells so a lookup compares against its own
 # cell and the eight around it, rather than against every row in the file.
@@ -130,6 +139,10 @@ def load_cities(path):
             country = parts[COL_COUNTRY].strip()
             if not name or not country:
                 continue
+            if parts[COL_FCLASS].strip() != PLACE_CLASS:
+                continue
+            if parts[COL_FCODE].strip() in SKIPPED_PLACE_CODES:
+                continue
             cells[(math.floor(lat / CELL), math.floor(lng / CELL))].append(
                 (lat, lng, name, country, population))
             count += 1
@@ -147,12 +160,21 @@ def haversine_km(lat1, lng1, lat2, lng2):
     return 2 * r * math.asin(math.sqrt(a))
 
 
-def nearest_city(cells, lat, lng, max_km):
-    """The closest populated place, or None when nothing is within max_km.
+def place_score(distance_km, population):
+    """Lower is better: distance, discounted by how substantial the place is.
 
-    Ties on distance are broken by population, so a coordinate sitting between a city and a
-    hamlet of the same distance gets the name a person would actually have written.
+    Pure nearest-centroid is wrong for anywhere large. A point by the Golden Gate is closer
+    to Sausalito's centre than to San Francisco's, so nearest alone renames half a trip to
+    the town across the bay. Pure population is wrong the other way - it would rename a
+    check-in in a small town to whichever city nearby happens to be bigger. Dividing by the
+    population's order of magnitude keeps a place that is genuinely at hand while letting a
+    real city outrank a village a similar distance off.
     """
+    return distance_km / (1.0 + math.log10(max(population, 1)))
+
+
+def nearest_city(cells, lat, lng, max_km):
+    """The best-matching populated place, or None when nothing is within max_km."""
     ci, cj = math.floor(lat / CELL), math.floor(lng / CELL)
     best = None
     best_key = None
@@ -162,7 +184,9 @@ def nearest_city(cells, lat, lng, max_km):
                 d = haversine_km(lat, lng, city[0], city[1])
                 if d > max_km:
                     continue
-                key = (round(d, 3), -city[4])
+                # Distance breaks a score tie, so two equally-weighted places still resolve
+                # deterministically rather than by file order.
+                key = (round(place_score(d, city[4]), 6), round(d, 3))
                 if best_key is None or key < best_key:
                     best_key, best = key, city
     return best
