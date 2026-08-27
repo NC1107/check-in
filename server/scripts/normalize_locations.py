@@ -36,13 +36,15 @@ is the right granularity for a city label):
 Then, from the repo root, dry run first - it prints every change it would make and touches
 nothing:
 
-    python3 server/scripts/normalize_locations.py \\
-      --database-url "$CHECKIN_DATABASE_URL" --cities cities500.txt
+    python3 server/scripts/normalize_locations.py --database-url "$CHECKIN_DATABASE_URL"
 
 and once the output looks right, apply it:
 
-    python3 server/scripts/normalize_locations.py \\
-      --database-url "$CHECKIN_DATABASE_URL" --cities cities500.txt --apply
+    python3 server/scripts/normalize_locations.py --database-url "$CHECKIN_DATABASE_URL" --apply
+
+The export is looked for as cities500.txt in the working directory. Unzipped it somewhere
+else? Pass --data-dir /path/to/that/directory. Names are resolved inside that directory
+rather than taken as free paths.
 
 Run it once per server: each group is its own database.
 
@@ -77,23 +79,30 @@ COUNTRIES_TSV = os.path.join(
 )
 
 
-def readable_file(path, what):
-    """Resolves a path from the command line and refuses anything but a readable file.
+def data_file(data_dir, name, what):
+    """Resolves `name` inside `data_dir`, refusing anything that escapes it or is not a file.
 
-    These paths come from whoever runs the script, but resolving and checking before the
-    open() keeps a mistyped or surprising argument (a directory, a dangling symlink, a
-    traversal out of the tree) a clear error here rather than a stack trace deeper in.
+    The data files are named relative to a directory rather than by free path so that a
+    mistyped or surprising argument cannot wander off somewhere unrelated - it fails here,
+    with the name it was given, instead of raising deeper in or reading the wrong file.
+    Point --data-dir at wherever the export was unzipped; it defaults to the working
+    directory, which is where the usage above puts it.
     """
-    resolved = os.path.realpath(os.path.expanduser(path))
+    root = os.path.realpath(os.path.expanduser(data_dir))
+    if not os.path.isdir(root):
+        sys.exit(f"--data-dir: {data_dir!r} is not a directory")
+    resolved = os.path.realpath(os.path.join(root, name))
+    if os.path.commonpath([root, resolved]) != root:
+        sys.exit(f"{what}: {name!r} resolves outside {data_dir!r}")
     if not os.path.isfile(resolved):
-        sys.exit(f"{what}: {path!r} did not resolve to a readable file")
+        sys.exit(f"{what}: {name!r} is not a readable file inside {data_dir!r}")
     return resolved
 
 
 def load_countries(path):
     """ISO country code -> country name, from the same table the gazetteer is built with."""
     codes = {}
-    with open(readable_file(path, "countries table"), encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for row in csv.reader(f, delimiter="\t"):
             if len(row) >= 2 and row[0] and row[1]:
                 codes[row[0]] = row[1]
@@ -106,7 +115,7 @@ def load_cities(path):
     """Buckets every populated place by whole-degree cell, keyed for nearest-match lookup."""
     cells = defaultdict(list)
     count = 0
-    with open(readable_file(path, "places export"), encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             parts = line.rstrip("\n").split("\t")
             if len(parts) < EXPECTED_COLUMNS:
@@ -204,10 +213,13 @@ def parse_args():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--database-url", required=True,
                     help="postgres:// URL for the group's database")
-    ap.add_argument("--cities", required=True,
-                    help="GeoNames export, e.g. the cities500.txt from cities500.zip")
-    ap.add_argument("--countries", default=COUNTRIES_TSV,
-                    help="ISO-to-country-name table (defaults to the gazetteer's own)")
+    ap.add_argument("--data-dir", default=".",
+                    help="directory holding the GeoNames export (default: working directory)")
+    ap.add_argument("--cities", default="cities500.txt",
+                    help="name of the export inside --data-dir")
+    ap.add_argument("--countries", default=None,
+                    help="ISO-to-country-name table inside --data-dir "
+                         "(defaults to the gazetteer's own, shipped in this repo)")
     ap.add_argument("--max-km", type=float, default=40.0,
                     help="furthest a place may be from the coordinates and still name it")
     ap.add_argument("--apply", action="store_true",
@@ -222,8 +234,12 @@ def main():
     except ImportError:
         sys.exit("psycopg (v3) is required: pip install 'psycopg[binary]'")
 
-    countries = load_countries(args.countries)
-    cells, city_count = load_cities(args.cities)
+    # The default countries table ships in this repo and is located from __file__, so only
+    # an explicit override is resolved against --data-dir.
+    countries_path = (COUNTRIES_TSV if args.countries is None
+                      else data_file(args.data_dir, args.countries, "--countries"))
+    countries = load_countries(countries_path)
+    cells, city_count = load_cities(data_file(args.data_dir, args.cities, "--cities"))
     print(f"loaded {city_count} places and {len(countries)} countries", file=sys.stderr)
 
     with psycopg.connect(args.database_url) as conn:
