@@ -379,7 +379,16 @@ func (s *Server) handleDeletePost(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, msgInvalidID)
 		return
 	}
-	orphans, err := s.db.DeletePost(r.Context(), id, userFrom(r).ID)
+	// An admin moderates the whole group, so they delete by id alone; everyone else is
+	// constrained to their own posts. ErrNotFound covers both "no such post" and "not
+	// yours" on purpose, so a member cannot probe which ids exist.
+	me := userFrom(r)
+	var orphans []string
+	if me.IsAdmin {
+		orphans, err = s.db.AdminDeletePost(r.Context(), id)
+	} else {
+		orphans, err = s.db.DeletePost(r.Context(), id, me.ID)
+	}
 	if errors.Is(err, db.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "post not found or not yours")
 		return
@@ -592,6 +601,35 @@ func crossCommentIDFrom(raw *string) *string {
 		return nil
 	}
 	return &id
+}
+
+// handleDeleteComment removes a comment. A member may delete their own; an admin may
+// delete anyone's, since they are the one who acts on reports for this group.
+func (s *Server) handleDeleteComment(w http.ResponseWriter, r *http.Request) {
+	id, err := pathInt(r, "id")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, msgInvalidID)
+		return
+	}
+	me := userFrom(r)
+	var orphans []string
+	if me.IsAdmin {
+		orphans, err = s.db.AdminDeleteComment(r.Context(), id)
+	} else {
+		orphans, err = s.db.DeleteComment(r.Context(), id, me.ID)
+	}
+	if errors.Is(err, db.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, "comment not found or not yours")
+		return
+	}
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, msgServerError)
+		return
+	}
+	for _, p := range orphans {
+		_ = s.store.Delete(p)
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleUpcomingBirthdays(w http.ResponseWriter, r *http.Request) {

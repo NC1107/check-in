@@ -100,14 +100,27 @@ void main() {
     expect(menuOn('nice'), findsOneWidget, reason: 'and reporting did not go anywhere');
   });
 
-  testWidgets('your own comment can be replied to but not reported', (tester) async {
+  // Your own comment carries a menu now, because deleting it lives there - but reporting
+  // yourself still is not a thing, so the menu's CONTENTS are what differ, not whether it
+  // exists. Asserting only that the menu is absent would pass again the moment delete
+  // stopped rendering, which is exactly how that regression hid the first time.
+  testWidgets('your own comment offers delete, never report', (tester) async {
     await pump(tester);
 
-    expect(menuOn('ha'), findsNothing, reason: 'reporting your own comment is not a thing');
+    expect(menuOn('ha'), findsOneWidget, reason: 'your own comment can be deleted');
+
+    await tester.tap(menuOn('ha'));
+    await tester.pumpAndSettle();
+    expect(find.text('Delete comment'), findsOneWidget);
+    expect(find.text('Report comment'), findsNothing,
+        reason: 'reporting your own comment is not a thing');
+  });
+
+  testWidgets('your own comment can still be replied to', (tester) async {
+    await pump(tester);
 
     await openCommentActions(tester, find.text('ha'));
     expect(find.byIcon(Icons.reply_outlined), findsOneWidget);
-    expect(menuOn('ha'), findsNothing);
   });
 
   // Only one reply arrow at a time, so a thread cannot fill back up with chrome.

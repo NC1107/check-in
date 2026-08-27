@@ -1067,6 +1067,11 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
   /// geocoder finds nothing. Raw coordinates never leave the phone.
   Future<String?> _placeFromCoords(double lat, double lng) async {
     try {
+      // Pin the geocoder's language. Without this it answers in the device locale, so the
+      // same coordinates become "Lisbon" on one member's phone and "Lissabon" on another's
+      // - and the label is what the server's gazetteer matches on, so a localized name can
+      // also drop the check-in off the Places map entirely.
+      await setLocaleIdentifier('en_US');
       final marks = await placemarkFromCoordinates(lat, lng);
       if (marks.isEmpty) return null;
       final p = marks.first;

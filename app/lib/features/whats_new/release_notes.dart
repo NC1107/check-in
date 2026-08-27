@@ -19,6 +19,16 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.27',
+    highlights: [
+      "You can delete your own comments now. There wasn't a way to do that before, so anything you posted by accident, or in the wrong thread, just sort of stayed there.",
+      "If you're the host you can delete anyone's comments and check-ins. Reports already came to you, but there wasn't actually anything you could do about one from inside the app, which was mostly the point of them.",
+      "The comment box grows as you type. It was stuck at one line before, so anything longer than a few words scrolled sideways through a little window and you couldn't really read what you'd written.",
+      "Commenting moved into the check-in itself. The box on the feed could only post a plain comment to one group, no replies and no gifs, so you were quietly getting less than you would by opening it. Tapping \"Add a comment\" opens the check-in with the keyboard already up.",
+      "Places should be consistent between people now. The name was coming from whatever language your phone is set to, so the same spot could save as Lisbon for one of you and Lissabon for another, and the ones that weren't in the latin alphabet were dropping off the map entirely.",
+    ],
+  ),
+  ReleaseNote(
     version: '1.26',
     highlights: [
       "Settings has a blocked people list now, so you can see who you've blocked and unblock them. Before this the unblock button only lived on the person's profile, and blocking someone hides their check-ins, so there wasn't really a way back to it unless you remembered their name and searched for it.",

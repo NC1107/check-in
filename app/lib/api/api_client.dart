@@ -443,6 +443,10 @@ class ApiClient {
 
   Future<void> deletePost(int id) => _dio.delete('/api/posts/$id');
 
+  /// Removes a comment. The server allows this for the comment's own author, and for
+  /// an admin on any comment in their group.
+  Future<void> deleteComment(int id) => _dio.delete('/api/comments/$id');
+
   Future<void> like(int postId) => _dio.post('/api/posts/$postId/like');
   Future<void> unlike(int postId) => _dio.delete('/api/posts/$postId/like');
 
