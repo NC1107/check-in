@@ -24,7 +24,7 @@ you want screenshots and app info.
 - Share a photo + caption or a quick text update, then close the app. Later, scroll the
   chronological feed or **filter to one person** to see a timeline of what they've been
   up to. Like and comment.
-- **Birthday reminders** fire on-device — the app notes friends' birthdays and nudges you
+- **Birthday reminders** fire on-device - the app notes friends' birthdays and nudges you
   on the day so you can check in.
 
 ## Quick start (self-host the server)
@@ -39,7 +39,7 @@ self-hosting (DNS, HTTPS, backups, upgrades) see the
 **[self-hosting guide](docs/self-hosting/README.md)**.
 
 One host can also run **several independent groups** (one container + database per
-group, each on its own subdomain) — see
+group, each on its own subdomain) - see
 [multiple groups](docs/self-hosting/multiple-groups.md).
 
 ## Tech stack
@@ -95,3 +95,12 @@ Some tests stand up **two** independent servers against two databases, because a
 The second database is created on the same PostgreSQL and dropped again when the test binary exits - including when the run fails.
 A run killed outright cannot clean up after itself, so the next run drops any leftover before creating its own.
 
+## License
+
+[PolyForm Noncommercial 1.0.0](LICENSE).
+
+Free for noncommercial use: personal, hobby, educational, research, nonprofit, and all that.
+You can fork it, change it and redistribute it, you just can't sell it or use it commercially without asking first.
+If you want to use it commercially, open an issue and ask.
+
+Contributions are welcome. By submitting a pull request you agree that your changes are released under this same license.
