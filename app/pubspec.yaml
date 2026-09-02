@@ -32,7 +32,7 @@ dependencies:
   firebase_core: ^4.11.0      # initialise Firebase from the native google-services config
   firebase_messaging: ^16.4.1 # FCM push: delivers to Android directly and iOS via APNs
   visibility_detector: ^0.4.0+2  # how much of a feed clip is on screen, for autoplay
-  flutter_map: ^8.3.1
+  flutter_map: ^8.3.2
   flutter_map_marker_cluster: ^8.2.2
   latlong2: ^0.9.1
 
