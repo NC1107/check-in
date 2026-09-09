@@ -3,7 +3,7 @@ module github.com/nc1107/check-in/server
 go 1.25.0
 
 require (
-	github.com/abema/go-mp4 v1.7.1
+	github.com/abema/go-mp4 v1.7.2
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/jackc/pgx/v5 v5.10.0
 	golang.org/x/crypto v0.55.0
