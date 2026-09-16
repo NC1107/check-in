@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/abema/go-mp4 v1.7.1
 	github.com/go-chi/chi/v5 v5.3.1
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	golang.org/x/crypto v0.55.0
 	golang.org/x/image v0.45.0
 	golang.org/x/oauth2 v0.36.0
