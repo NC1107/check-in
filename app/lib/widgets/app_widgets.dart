@@ -31,6 +31,7 @@ class AppTextField extends StatelessWidget {
     this.maxLines = 1,
     this.errorText,
     this.inputFormatters,
+    this.autofillHints,
   });
 
   final TextEditingController controller;
@@ -46,6 +47,9 @@ class AppTextField extends StatelessWidget {
 
   final List<TextInputFormatter>? inputFormatters;
 
+  /// Tells the OS password manager what this field is, so it can offer to fill or save it.
+  final Iterable<String>? autofillHints;
+
   @override
   Widget build(BuildContext context) {
     final hasError = errorText != null;
@@ -54,6 +58,7 @@ class AppTextField extends StatelessWidget {
       keyboardType: keyboardType,
       obscureText: obscure,
       inputFormatters: inputFormatters,
+      autofillHints: autofillHints,
       onChanged: onChanged,
       minLines: obscure ? 1 : minLines,
       maxLines: obscure ? 1 : maxLines,
