@@ -79,7 +79,7 @@ jobs:
         with:
           channel: stable
           flutter-version: "3.47.0"
-      - run: flutter pub get
+      - run: flutter pub get --enforce-lockfile
       - name: Check formatting (dart format)
         run: dart format --output=none --set-exit-if-changed lib test
       - run: flutter analyze
@@ -238,7 +238,7 @@ jobs:
           printf '%s' "$KEY_PROPERTIES" > app/android/key.properties
       - working-directory: app
         run: |
-          flutter pub get
+          flutter pub get --enforce-lockfile
           flutter build apk --release \
             --build-name=${{ needs.version.outputs.new_version }} \
             --build-number=${{ needs.version.outputs.build_number }}
@@ -403,7 +403,7 @@ jobs:
           # in the Podfile) - the stable path 1.0 shipped on. SPM's linking left the app stuck
           # on a white launch screen (Firebase's grpc native init trapped before runApp).
           flutter config --no-enable-swift-package-manager
-          flutter pub get
+          flutter pub get --enforce-lockfile
           flutter build ipa --release \
             --build-name=${{ needs.version.outputs.new_version }} \
             --build-number=${{ needs.version.outputs.build_number }} \

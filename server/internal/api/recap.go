@@ -209,6 +209,41 @@ type generateRecapReq struct {
 	BestowTitles bool `json:"bestowTitles,omitempty"`
 }
 
+// validateRecapRequest checks a manual recap request and returns the period and the panels
+// twice over. requested keeps the order the client asked for - it becomes spec.Panels, which
+// BuildRecap renders pages in verbatim (see RecapSpec.Panels' doc comment). sorted is a
+// separate, canonical (alphabetical) view of the exact same set, used only as the
+// order-independent lookup/storage key FindManualRecap and CreateRecapPost key duplicate
+// detection on - it must never be the one handed to BuildRecap, or render order would
+// silently collapse to alphabetical regardless of what was requested. msg is the client
+// error, empty when the request is valid.
+func validateRecapRequest(req generateRecapReq) (start, end time.Time, requested, sorted []string, msg string) {
+	start, err := time.Parse(time.RFC3339, req.PeriodStart)
+	if err != nil {
+		return start, end, nil, nil, "periodStart must be RFC3339"
+	}
+	end, err = time.Parse(time.RFC3339, req.PeriodEnd)
+	if err != nil {
+		return start, end, nil, nil, "periodEnd must be RFC3339"
+	}
+	if !end.After(start) {
+		return start, end, nil, nil, "periodEnd must be after periodStart"
+	}
+	if end.Sub(start) > recapMaxManualSpan {
+		return start, end, nil, nil, "the period can't be longer than 366 days"
+	}
+	requested = orderedUniquePanels(req.Panels)
+	if len(requested) == 0 {
+		return start, end, nil, nil, "panels must include at least one of: collage"
+	}
+	for _, p := range requested {
+		if !recapValidPanels[p] {
+			return start, end, nil, nil, "unknown panel type: " + p
+		}
+	}
+	return start, end, requested, sortedUniquePanels(req.Panels), ""
+}
+
 // handleGenerateRecap is the on-demand recap endpoint: admin-only, alongside
 // PATCH /api/admin/server. A duplicate request for the same (periodStart, periodEnd,
 // panels) is confirmed, never silently duplicated - see FindManualRecap.
@@ -218,42 +253,11 @@ func (s *Server) handleGenerateRecap(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, msgInvalidBody)
 		return
 	}
-	start, err := time.Parse(time.RFC3339, req.PeriodStart)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "periodStart must be RFC3339")
+	start, end, requested, sorted, msg := validateRecapRequest(req)
+	if msg != "" {
+		writeErr(w, http.StatusBadRequest, msg)
 		return
 	}
-	end, err := time.Parse(time.RFC3339, req.PeriodEnd)
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "periodEnd must be RFC3339")
-		return
-	}
-	if !end.After(start) {
-		writeErr(w, http.StatusBadRequest, "periodEnd must be after periodStart")
-		return
-	}
-	if end.Sub(start) > recapMaxManualSpan {
-		writeErr(w, http.StatusBadRequest, "the period can't be longer than 366 days")
-		return
-	}
-	// requested keeps the order the client asked for - it becomes spec.Panels, which
-	// BuildRecap renders pages in verbatim (see RecapSpec.Panels' doc comment). sorted is a
-	// separate, canonical (alphabetical) view of the exact same set, used only as the
-	// order-independent lookup/storage key FindManualRecap and CreateRecapPost key duplicate
-	// detection on - it must never be the one handed to BuildRecap, or render order would
-	// silently collapse to alphabetical regardless of what was requested.
-	requested := orderedUniquePanels(req.Panels)
-	if len(requested) == 0 {
-		writeErr(w, http.StatusBadRequest, "panels must include at least one of: collage")
-		return
-	}
-	for _, p := range requested {
-		if !recapValidPanels[p] {
-			writeErr(w, http.StatusBadRequest, "unknown panel type: "+p)
-			return
-		}
-	}
-	sorted := sortedUniquePanels(req.Panels)
 
 	ctx := r.Context()
 	existingID, found, err := s.db.FindManualRecap(ctx, start, end, sorted)

@@ -714,6 +714,26 @@ func (d *DB) FindManualRecap(ctx context.Context, start, end time.Time, panels [
 	return postID, true, nil
 }
 
+// findRecapDuplicate reports whether the recap already exists: for a scheduled recap by
+// cadence and period start, for a manual one by period and panel set (returning that post's
+// id). A scheduled recap has no replace flow, so its existingID is always 0.
+func findRecapDuplicate(ctx context.Context, tx pgx.Tx, spec RecapSpec, panels []string) (duplicate bool, existingID int64, err error) {
+	if spec.Origin == "scheduled" {
+		err = tx.QueryRow(ctx, `
+			SELECT EXISTS(SELECT 1 FROM recaps WHERE cadence = $1 AND period_start = $2 AND origin = 'scheduled')`,
+			spec.Cadence, spec.PeriodStart).Scan(&duplicate)
+		return duplicate, 0, err
+	}
+	err = tx.QueryRow(ctx, `
+		SELECT post_id FROM recaps
+		WHERE origin = 'manual' AND period_start = $1 AND period_end = $2 AND panels = $3
+		ORDER BY created_at DESC LIMIT 1`, spec.PeriodStart, spec.PeriodEnd, panels).Scan(&existingID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, 0, nil
+	}
+	return err == nil, existingID, err
+}
+
 // CreateRecapPost writes a recap post (kind = 'recap', authored by the group admin, no
 // media) and its recaps row in one transaction.
 //
@@ -744,28 +764,12 @@ func (d *DB) CreateRecapPost(ctx context.Context, adminID int64, spec RecapSpec,
 		return 0, false, 0, err
 	}
 
-	if spec.Origin == "scheduled" {
-		var exists bool
-		if err := tx.QueryRow(ctx, `
-			SELECT EXISTS(SELECT 1 FROM recaps WHERE cadence = $1 AND period_start = $2 AND origin = 'scheduled')`,
-			spec.Cadence, spec.PeriodStart).Scan(&exists); err != nil {
-			return 0, false, 0, err
-		}
-		if exists {
-			return 0, false, 0, nil
-		}
-	} else {
-		var existingID int64
-		err := tx.QueryRow(ctx, `
-			SELECT post_id FROM recaps
-			WHERE origin = 'manual' AND period_start = $1 AND period_end = $2 AND panels = $3
-			ORDER BY created_at DESC LIMIT 1`, spec.PeriodStart, spec.PeriodEnd, panels).Scan(&existingID)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return 0, false, 0, err
-		}
-		if err == nil && replacePostID == nil {
-			return 0, false, existingID, nil
-		}
+	duplicate, existingID, err := findRecapDuplicate(ctx, tx, spec, panels)
+	if err != nil {
+		return 0, false, 0, err
+	}
+	if duplicate && (spec.Origin == "scheduled" || replacePostID == nil) {
+		return 0, false, existingID, nil
 	}
 
 	if replacePostID != nil {
