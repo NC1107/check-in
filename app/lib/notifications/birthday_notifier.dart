@@ -44,7 +44,7 @@ Future<void> _ensureInit() async {
     android: AndroidInitializationSettings('@mipmap/ic_launcher'),
     iOS: DarwinInitializationSettings(),
   );
-  await _plugin.initialize(settings);
+  await _plugin.initialize(settings: settings);
   // Request Android 13+ notification permission (no-op on earlier versions).
   // iOS permission is deferred - request it explicitly via requestNotificationPermission()
   // so the system dialog only appears when the user has seen the feature.
@@ -157,13 +157,12 @@ Future<void> scheduleBirthdayNotifications(List<BirthdayGroup> groups) async {
       final groupName = multiGroup ? e.groupName : null;
       await _plugin.zonedSchedule(
         // Stable id per (group, friend) so re-scheduling replaces, not duplicates.
-        birthdayNotificationId(e.groupId, e.birthday.userId),
-        birthdayReminderTitle(e.birthday.name, groupName),
-        'Open Check-In to wish them a happy birthday.',
-        tz.TZDateTime(tz.local, e.when.year, e.when.month, e.when.day, e.when.hour),
-        details,
+        id: birthdayNotificationId(e.groupId, e.birthday.userId),
+        title: birthdayReminderTitle(e.birthday.name, groupName),
+        body: 'Open Check-In to wish them a happy birthday.',
+        scheduledDate: tz.TZDateTime(tz.local, e.when.year, e.when.month, e.when.day, e.when.hour),
+        notificationDetails: details,
         androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
         matchDateTimeComponents: DateTimeComponents.dateAndTime,
       );
       if (leadDays > 0) {
@@ -172,14 +171,12 @@ Future<void> scheduleBirthdayNotifications(List<BirthdayGroup> groups) async {
         // lead time); the day-of reminder above still fires.
         if (early.isAfter(now)) {
           await _plugin.zonedSchedule(
-            birthdayNotificationId(e.groupId, e.birthday.userId, early: true),
-            birthdayEarlyReminderTitle(e.birthday.name, leadDays, groupName),
-            'A heads-up so you have time to plan something.',
-            tz.TZDateTime(tz.local, early.year, early.month, early.day, early.hour),
-            details,
+            id: birthdayNotificationId(e.groupId, e.birthday.userId, early: true),
+            title: birthdayEarlyReminderTitle(e.birthday.name, leadDays, groupName),
+            body: 'A heads-up so you have time to plan something.',
+            scheduledDate: tz.TZDateTime(tz.local, early.year, early.month, early.day, early.hour),
+            notificationDetails: details,
             androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-            uiLocalNotificationDateInterpretation:
-                UILocalNotificationDateInterpretation.absoluteTime,
             matchDateTimeComponents: DateTimeComponents.dateAndTime,
           );
         }
