@@ -25,6 +25,8 @@ const releaseNotes = <ReleaseNote>[
       "If a group does sign you out, the feed tells you now and gives you a button to sign back in. Before it just stopped showing that group, so you'd miss everything there without really knowing why.",
       "Your phone's password manager should work on the login screen now, so you can fill it with face id instead of typing it every time. It'll offer to save it after you log in.",
       "Photos should stop changing shape after you open one full screen and come back. Albums with a few photos also keep the same height as you swipe through them.",
+      "Recaps skip quiet weeks now. If the group had fewer than 5 check-ins that week, or 20 that month, there's no recap, since a recap of two posts is pretty much just noise in the feed.",
+      "Birthday reminders go off at 9am your time. They were going by UTC, so depending on where you are they could show up in the middle of the night, and on android they might not have been showing up at all.",
     ],
   ),
   ReleaseNote(
