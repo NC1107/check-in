@@ -706,6 +706,15 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
     return null;
   }
 
+  /// Whether the server field points at a group already on this device, i.e. this is
+  /// signing back into it rather than adding a new one.
+  bool get _rejoiningGroup {
+    final url = _normalizeServer(_server.text);
+    if (url == null) return false;
+    final id = MultiSessionController.groupIdFor(url);
+    return ref.watch(multiSessionProvider).groups.any((g) => g.id == id);
+  }
+
   Widget _entryStep() {
     final natDigits = _phone.text.replaceAll(RegExp(r'\D'), '');
     final phoneValid = natDigits.length >= _country.minLen && natDigits.length <= _country.maxLen;
@@ -734,9 +743,11 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         Text(
           _loginMode
               ? 'Welcome back'
-              : (ref.watch(multiSessionProvider).anySignedIn
-                  ? 'Add a group'
-                  : 'Connect to Check-In'),
+              : _rejoiningGroup
+                  ? 'Sign in'
+                  : (ref.watch(multiSessionProvider).anySignedIn
+                      ? 'Add a group'
+                      : 'Connect to Check-In'),
           style: const TextStyle(color: _fgPrimary, fontWeight: FontWeight.w700, fontSize: 22),
         ),
         const SizedBox(height: 24),

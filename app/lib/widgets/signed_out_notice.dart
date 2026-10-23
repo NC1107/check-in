@@ -29,7 +29,7 @@ class _SignedOutNotice extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
       child: Container(
         padding: const EdgeInsets.only(left: 12, top: 4, bottom: 4, right: 2),
         decoration: BoxDecoration(
