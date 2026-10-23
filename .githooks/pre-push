@@ -33,6 +33,11 @@ fi
 
 # --- Dart (dart format) ---
 if command -v dart >/dev/null 2>&1; then
+  # Without a package config (a fresh clone or worktree), dart format can't see the
+  # package's language version and reformats everything in the newest style.
+  if [ ! -f "$root/app/.dart_tool/package_config.json" ] && command -v flutter >/dev/null 2>&1; then
+    (cd "$root/app" && flutter pub get >/dev/null 2>&1)
+  fi
   if ! (cd "$root/app" && dart format --output=none --set-exit-if-changed lib test >/dev/null 2>&1); then
     echo "✗ dart format: app files need formatting." >&2
     echo "  fix: (cd app && dart format lib test)" >&2
