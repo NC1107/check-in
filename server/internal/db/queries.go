@@ -509,14 +509,16 @@ func (d *DB) CreateSession(ctx context.Context, userID int64, tokenHash string, 
 	return err
 }
 
-// UserForToken returns the active user owning a (hashed) session token, if valid.
-func (d *DB) UserForToken(ctx context.Context, tokenHash string) (User, error) {
+// UserForToken returns the active user owning a (hashed) session token, if valid: not
+// expired and not older than maxAge, the absolute cap on a session's life.
+func (d *DB) UserForToken(ctx context.Context, tokenHash string, maxAge time.Duration) (User, error) {
 	var u User
 	err := d.Pool.QueryRow(ctx, `
 		SELECT u.id, u.phone, u.name, u.first_name, u.last_name, u.birthday, u.profile_media_id, u.is_admin, u.status, u.created_at, u.title, u.title_set_at
 		FROM sessions s
 		JOIN users u ON u.id = s.user_id
-		WHERE s.token_hash = $1 AND s.expires_at > now() AND u.status = 'active'`, tokenHash,
+		WHERE s.token_hash = $1 AND s.expires_at > now() AND s.created_at > now() - $2::interval
+		  AND u.status = 'active'`, tokenHash, maxAge,
 	).Scan(&u.ID, &u.Phone, &u.Name, &u.FirstName, &u.LastName, &u.Birthday, &u.ProfileMediaID, &u.IsAdmin, &u.Status, &u.CreatedAt, &u.Title, &u.TitleSetAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return u, ErrNotFound
@@ -526,12 +528,14 @@ func (d *DB) UserForToken(ctx context.Context, tokenHash string) (User, error) {
 
 // ExtendSession pushes a still-valid session's expiry out to newExpiry. It only writes when
 // the stored expiry is earlier than staleBefore, so a busy client costs one write per
-// throttle window rather than one per request.
-func (d *DB) ExtendSession(ctx context.Context, tokenHash string, newExpiry, staleBefore time.Time) error {
+// throttle window rather than one per request. The new expiry never passes created_at +
+// maxAge, so the absolute cap holds however long a session is kept alive.
+func (d *DB) ExtendSession(ctx context.Context, tokenHash string, newExpiry, staleBefore time.Time, maxAge time.Duration) error {
 	_, err := d.Pool.Exec(ctx,
-		`UPDATE sessions SET expires_at = $2
-		 WHERE token_hash = $1 AND expires_at > now() AND expires_at < $3`,
-		tokenHash, newExpiry, staleBefore)
+		`UPDATE sessions SET expires_at = LEAST($2::timestamptz, created_at + $4::interval)
+		 WHERE token_hash = $1 AND expires_at > now() AND expires_at < $3
+		   AND LEAST($2::timestamptz, created_at + $4::interval) > expires_at`,
+		tokenHash, newExpiry, staleBefore, maxAge)
 	return err
 }
 

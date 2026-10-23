@@ -31,8 +31,12 @@ type Config struct {
 	// several servers can attribute a notification to the right one. Optional; empty means
 	// the client falls back to matching on nothing (single-server installs don't need it).
 	PublicURL string
-	// SessionTTL is how long a login session token stays valid.
+	// SessionTTL is how long a login session token stays valid without being used; each
+	// use slides it forward.
 	SessionTTL time.Duration
+	// SessionMaxAge is the absolute lifetime of a session however often it is used, so a
+	// leaked token cannot be kept alive forever by polling.
+	SessionMaxAge time.Duration
 	// MaxUploadBytes caps the size of an uploaded image.
 	MaxUploadBytes int64
 	// MaxVideoBytes caps the size of an uploaded video clip. Separate from MaxUploadBytes
@@ -101,6 +105,7 @@ func Load() (Config, error) {
 		ServerName:         getenv("CHECKIN_SERVER_NAME", "Check-In"),
 		PublicURL:          getenv("CHECKIN_PUBLIC_URL", ""),
 		SessionTTL:         getdur("CHECKIN_SESSION_TTL", 30*24*time.Hour),
+		SessionMaxAge:      getdur("CHECKIN_SESSION_MAX_AGE", 180*24*time.Hour),
 		MaxUploadBytes:     getint64("CHECKIN_MAX_UPLOAD_BYTES", 10<<20), // 10 MiB
 		MaxVideoBytes:      getint64("CHECKIN_MAX_VIDEO_BYTES", 25<<20),  // 25 MiB
 		DebugToken:         getenv("CHECKIN_DEBUG_TOKEN", ""),

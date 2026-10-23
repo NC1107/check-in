@@ -60,6 +60,7 @@ services:
       CHECKIN_SERVER_NAME: ${CHECKIN_SERVER_NAME:-Check-In}
       # Optional debug web view at /debug?token=... - unset/empty disables it.
       CHECKIN_DEBUG_TOKEN: ${CHECKIN_DEBUG_TOKEN:-}
+      CHECKIN_SESSION_MAX_AGE: ${CHECKIN_SESSION_MAX_AGE:-}
       # Push notifications. On by default: with CHECKIN_RELAY_URL left unset the server
       # forwards push through the maintainer's relay, so members using the published apps get
       # notifications with no setup. Set it to an empty string to turn push off, or point it

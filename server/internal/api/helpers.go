@@ -67,7 +67,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			return
 		}
 		hash := auth.HashToken(token)
-		user, err := s.db.UserForToken(r.Context(), hash)
+		user, err := s.db.UserForToken(r.Context(), hash, s.cfg.SessionMaxAge)
 		if err != nil {
 			writeErr(w, http.StatusUnauthorized, "invalid or expired session")
 			return
@@ -91,7 +91,7 @@ func (s *Server) slideSession(ctx context.Context, tokenHash string) {
 	ttl := s.cfg.SessionTTL
 	gap := min(sessionSlideGap, ttl/10)
 	now := time.Now()
-	if err := s.db.ExtendSession(ctx, tokenHash, now.Add(ttl), now.Add(ttl-gap)); err != nil {
+	if err := s.db.ExtendSession(ctx, tokenHash, now.Add(ttl), now.Add(ttl-gap), s.cfg.SessionMaxAge); err != nil {
 		log.Printf("slideSession: %v", err)
 	}
 }
