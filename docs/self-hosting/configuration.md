@@ -23,7 +23,7 @@ you normally don't set it directly when using Compose.
 ## Server
 
 These are read by the Go server (defaults defined in `server/internal/config/config.go`).
-Under Compose, sensible values are already wired up; override only if you need to.
+Under Compose, sensible values are already wired up, and the optional ones listed here (session lifetime, upload limits, country code, proxy hops, Klipy key) are forwarded from your `.env` when you set them; override only if you need to.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -33,9 +33,11 @@ Under Compose, sensible values are already wired up; override only if you need t
 | `CHECKIN_DATABASE_URL` | _(required)_ | Full PostgreSQL connection string. Set automatically by Compose from `POSTGRES_PASSWORD`; only set it yourself for a custom or external database. The server refuses to start without it rather than guessing a local one. |
 | `CHECKIN_MEDIA_DIR` | `./data/media` (`/data/media` in the image) | Where uploaded images are stored. Backed by the `media_data` volume in Compose. |
 | `CHECKIN_SESSION_TTL` | `720h` (30 days) | How long a login session stays valid. Accepts Go durations (e.g. `168h`, `720h`). |
+| `CHECKIN_DEFAULT_COUNTRY_CODE` | `1` | Phone country calling code applied to numbers typed without a leading `+`, so a contact saved as `+1 (415) 555-0148` matches a friend who types `(415) 555-0148`. Use your own code (e.g. `44` UK, `61` AU). Numbers with a leading `+` are always taken as-is. |
 | `CHECKIN_MAX_UPLOAD_BYTES` | `10485760` (10 MiB) | Maximum accepted size for an uploaded image. |
 | `CHECKIN_MAX_VIDEO_BYTES` | `26214400` (25 MiB) | Maximum accepted size for an uploaded video clip. Clips are capped at 12 seconds server-side, so this mostly bounds how generous a bitrate the app may send. If you raise it, raise the reverse proxy's request body limit to match (`request_body max_size` in the `Caddyfile`), or uploads fail at the proxy before reaching the server. |
 | `CHECKIN_TRUSTED_PROXY_HOPS` | `1` | How many reverse proxies sit directly in front of this server. Used to find the caller's real IP in the `X-Forwarded-For` chain for the login/signup rate limiter, at the position only that many trusted hops could have written - never a position a caller could forge by setting the header themselves. The standard Compose deployment is exactly one (Caddy; nothing else is exposed - see [security.md](security.md)) and that's the default. Only raise this if you put another reverse proxy of your own in front of Caddy (e.g. a corporate load balancer); fronting Caddy with Cloudflare or similar does **not** count, since Caddy is still the only hop that talks to this process directly. Getting it wrong in either direction either lets a caller spoof past the limiter again or throttles every member under one shared bucket. |
+| `CHECKIN_KLIPY_KEY` | *(empty)* | API key for [Klipy](https://klipy.com) GIF search in comments. Leave it empty and the server answers GIF searches with 503, so the picker has nothing to show; everything else works. The app only talks to your server, which proxies Klipy and re-hosts a chosen GIF, so the key never reaches members' phones. |
 
 ## Push notifications
 

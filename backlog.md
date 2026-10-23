@@ -2,10 +2,10 @@
 
 Notes from real usage after standing up a few groups with friends.
 
-## Shipped to `dev` on 2026-08-15 (not released)
+## Shipped in v1.7.0 (2026-08-15)
 
-All three merged into `dev`, which was created for this batch so nothing publishes until
-you cut a release. `main` is still at `f7371ff`.
+All three merged to `main` and went out in v1.7.0; the `dev` branch created for the batch
+has since been fully merged.
 Merging to `main` fires `release.yml`: prod Docker push, Play Store internal, TestFlight.
 
 - **#80 - the color picker only asks on a first signup.**
@@ -18,7 +18,7 @@ Merging to `main` fires `release.yml`: prod Docker push, Play Store internal, Te
   Each group's server now serves a `/join` page with store links. This also fixed a live
   bug: tapping `checkin://` on the current build pushes an unhandled route.
 
-### Needs a device check before any of it reaches `main`
+### Device checks that were needed for the deep-link work
 
 None of the deep-link work can be proven in CI, and PR CI never builds iOS at all.
 Every test starts after a route already exists, so nothing proves iOS or Android actually

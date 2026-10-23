@@ -75,10 +75,9 @@ class VideoPlugin: NSObject, FlutterPlugin {
     export.exportAsynchronously {
       // The completion fires on a background queue; a FlutterResult must go back on main.
       DispatchQueue.main.async {
-        switch export.status {
-        case .completed:
+        if export.status == .completed {
           result(outURL.path)
-        default:
+        } else {
           let message = export.error?.localizedDescription ?? "export failed"
           result(FlutterError(code: "export_failed", message: message, details: nil))
         }
