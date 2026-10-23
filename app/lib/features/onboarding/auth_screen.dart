@@ -687,6 +687,17 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
 
   // ---- Step: entry (server + phone → login / signup) ----
 
+  /// The group the server field points at, when its server rejected our session.
+  ServerAccount? get _signedOutHere {
+    final url = _normalizeServer(_server.text);
+    if (url == null) return null;
+    final id = MultiSessionController.groupIdFor(url);
+    for (final g in ref.watch(signedOutNoticeGroupsProvider)) {
+      if (g.id == id) return g;
+    }
+    return null;
+  }
+
   Widget _entryStep() {
     final natDigits = _phone.text.replaceAll(RegExp(r'\D'), '');
     final phoneValid = natDigits.length >= _country.minLen && natDigits.length <= _country.maxLen;
@@ -705,6 +716,13 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
       children: [
         Image.asset('assets/logo/echo-rings.png', width: 52, height: 52),
         const SizedBox(height: 20),
+        if (_signedOutHere case final g?) ...[
+          Text(
+            'You were signed out of ${g.displayName}. Log in again to see its updates.',
+            style: const TextStyle(color: _fgSecondary, fontSize: 14, height: 1.4),
+          ),
+          const SizedBox(height: 16),
+        ],
         Text(
           _loginMode
               ? 'Welcome back'

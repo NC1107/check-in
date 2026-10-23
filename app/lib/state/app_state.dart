@@ -441,8 +441,10 @@ class MultiSessionController extends Notifier<MultiSession> {
   }
 
   /// Validates a restored token by fetching the current user, and refreshes the group's
-  /// display name. Only a real auth rejection drops the token - a network/timeout error
-  /// must NOT sign the group out (a self-hosted box being briefly offline is normal).
+  /// display name. Only this server's own 401 drops the token - a network/timeout error
+  /// must NOT sign the group out (a self-hosted box being briefly offline is normal), and
+  /// neither must a 403, which is what a reverse proxy or CDN answers with when it blocks
+  /// a request before it reaches Check-In (the server itself never 403s a valid session).
   Future<void> _hydrate(ServerAccount g) async {
     final client = ApiClient(baseUrl: g.baseUrl, token: g.token);
     try {
@@ -450,7 +452,7 @@ class MultiSessionController extends Notifier<MultiSession> {
       _update(g.id, (a) => a.copyWith(user: user));
     } on DioException catch (e) {
       final code = e.response?.statusCode;
-      if (code == 401 || code == 403) await signOutGroup(g.id);
+      if (code == 401) await expireGroup(g.id);
       return;
     } catch (_) {
       return;
@@ -566,6 +568,7 @@ class MultiSessionController extends Notifier<MultiSession> {
     ServerInfo? info,
   }) async {
     final id = groupIdFor(baseUrl);
+    await ref.read(signOutNoticesProvider.notifier).clear(id);
     await _secure.write(key: _tokenKey(id), value: token);
     final account = ServerAccount(
       id: id,
@@ -607,8 +610,17 @@ class MultiSessionController extends Notifier<MultiSession> {
     _update(id, (g) => g.copyWith(clearAuth: true));
   }
 
+  /// Signs a group out because its server rejected the session, and remembers that so the
+  /// member is told. A deliberate sign-out uses [signOutGroup] and leaves no notice.
+  Future<void> expireGroup(String id) async {
+    if (state.byId(id)?.isSignedIn != true) return;
+    await signOutGroup(id);
+    await ref.read(signOutNoticesProvider.notifier).add(id);
+  }
+
   /// Leaves a group entirely: token gone, entry gone.
   Future<void> removeGroup(String id) async {
+    await ref.read(signOutNoticesProvider.notifier).clear(id);
     await _secure.delete(key: _tokenKey(id));
     final groups = [
       for (final g in state.groups)
@@ -801,6 +813,70 @@ class MultiSessionController extends Notifier<MultiSession> {
 final multiSessionProvider =
     NotifierProvider<MultiSessionController, MultiSession>(MultiSessionController.new);
 
+const _kSignOutNotices = 'signed_out_notice_ids';
+
+/// Ids of groups whose server rejected this device's session, so the member was signed out
+/// without asking. Persisted: the rejection is usually discovered on a launch the member
+/// does not watch, and they need to still be told on the next one. Cleared per group when
+/// they sign back in, remove the group, or dismiss the notice.
+class SignOutNoticesController extends Notifier<Set<String>> {
+  SignOutNoticesController() : _seed = null;
+
+  @visibleForTesting
+  SignOutNoticesController.seeded(Set<String> initial) : _seed = initial;
+
+  final Set<String>? _seed;
+
+  @override
+  Set<String> build() {
+    final seed = _seed;
+    if (seed != null) return seed;
+    _load();
+    return const {};
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_kSignOutNotices);
+    if (raw == null) return;
+    try {
+      final stored = (jsonDecode(raw) as List).cast<String>();
+      // Merge rather than replace: an add() may have landed while this was reading.
+      state = {...stored, ...state};
+    } catch (_) {}
+  }
+
+  Future<void> add(String id) async {
+    state = {...state, id};
+    await _persist();
+  }
+
+  Future<void> clear(String id) async {
+    if (!state.contains(id)) return;
+    state = state.difference({id});
+    await _persist();
+  }
+
+  Future<void> _persist() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kSignOutNotices, jsonEncode(state.toList()));
+  }
+}
+
+final signOutNoticesProvider =
+    NotifierProvider<SignOutNoticesController, Set<String>>(SignOutNoticesController.new);
+
+/// Groups to show a "you were signed out" notice for: flagged ones that are still on this
+/// device and still signed out.
+final signedOutNoticeGroupsProvider = Provider<List<ServerAccount>>((ref) {
+  final ids = ref.watch(signOutNoticesProvider);
+  final session = ref.watch(multiSessionProvider);
+  return [
+    for (final g in session.signedOut)
+      if (ids.contains(g.id)) g
+  ];
+});
+
 /// An ApiClient bound to one group. A 401 there signs out ONLY that group - the other
 /// groups' sessions (and the shared image cache) stay intact.
 final apiForGroupProvider = Provider.family<ApiClient, String>((ref, groupId) {
@@ -808,7 +884,7 @@ final apiForGroupProvider = Provider.family<ApiClient, String>((ref, groupId) {
   return ApiClient(
     baseUrl: g?.baseUrl ?? '',
     token: g?.token,
-    onUnauthorized: () => ref.read(multiSessionProvider.notifier).signOutGroup(groupId),
+    onUnauthorized: () => ref.read(multiSessionProvider.notifier).expireGroup(groupId),
   );
 });
 
