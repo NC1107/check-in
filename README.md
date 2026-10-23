@@ -52,7 +52,7 @@ group, each on its own subdomain) - see
 | Auth          | Phone + password (argon2id), opaque session tokens |
 | TLS           | Caddy reverse proxy, automatic Let's Encrypt       |
 | App           | Flutter, Riverpod, dio                             |
-| Notifications | On-device local notifications                      |
+| Notifications | Push through FCM/APNs via a relay, birthdays local |
 
 ## Repository layout
 

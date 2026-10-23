@@ -62,5 +62,10 @@ You need a Linux server with Docker, a domain/subdomain pointed at it, and ports
    Admin tab). Tapping it opens the app with your server's address already filled in, or
    points them at the App Store / Google Play first.
 
+Push notifications need no setup.
+Your server forwards them through a relay the maintainer runs, because the published apps can only be reached through the maintainer's Firebase project.
+The relay sees each notification's short title and body in transit.
+To turn it off, or to send through your own Firebase project with your own app build, see [configuration.md](configuration.md#push-notifications).
+
 That's it. To upgrade later: `docker compose pull && docker compose up -d`
 (see [operations.md](operations.md)).
