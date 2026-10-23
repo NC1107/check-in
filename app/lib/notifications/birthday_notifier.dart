@@ -1,10 +1,12 @@
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
 import '../api/api_client.dart';
 import '../api/models.dart';
+import 'local_notifications.dart';
 
 /// On-device birthday reminders. The app fetches friends' birthdays from the server and
 /// schedules a local notification on the morning of each birthday - no cloud push
@@ -13,8 +15,7 @@ import '../api/models.dart';
 /// A reminder always fires on the birthday itself; the user can additionally opt into an
 /// early heads-up some days ahead (see [birthdayLeadDays]).
 
-final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
-bool _initialized = false;
+bool _timezoneReady = false;
 
 const _kBirthdayLeadDays = 'birthday_lead_days';
 
@@ -37,41 +38,41 @@ Future<void> setBirthdayLeadDays(int days) async {
   await prefs.setInt(_kBirthdayLeadDays, days.clamp(0, birthdayMaxLeadDays));
 }
 
+/// The timezone database knows every zone but not which one the phone is in; without
+/// [tz.setLocalLocation] `tz.local` is UTC and a "9am" reminder fires at 9am UTC.
 Future<void> _ensureInit() async {
-  if (_initialized) return;
+  await ensureLocalNotificationsInitialized();
+  if (_timezoneReady) return;
   tzdata.initializeTimeZones();
-  const settings = InitializationSettings(
-    android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-    iOS: DarwinInitializationSettings(),
-  );
-  await _plugin.initialize(settings);
+  try {
+    final zone = await FlutterTimezone.getLocalTimezone();
+    tz.setLocalLocation(tz.getLocation(zone.identifier));
+  } catch (_) {
+    // Unknown zone: stay on UTC rather than skip the reminders entirely.
+  }
+  _timezoneReady = true;
   // Request Android 13+ notification permission (no-op on earlier versions).
   // iOS permission is deferred - request it explicitly via requestNotificationPermission()
   // so the system dialog only appears when the user has seen the feature.
-  await _plugin
+  await localNotifications
       .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
       ?.requestNotificationsPermission();
-  _initialized = true;
 }
 
 /// Call this once from a user-visible action (e.g. a "Enable birthday reminders" button)
 /// to show the iOS permission dialog. Safe to call multiple times.
 Future<void> requestNotificationPermission() async {
-  await _plugin
+  await localNotifications
       .resolvePlatformSpecificImplementation<IOSFlutterLocalNotificationsPlugin>()
       ?.requestPermissions(alert: true, badge: true, sound: true);
 }
 
 /// A deterministic 31-bit id for one friend's reminder. User ids are only unique per
 /// group (server), so the id mixes in the group; FNV-1a keeps it stable across launches
-/// (Dart's String.hashCode isn't guaranteed to be). [early] gives the early heads-up its
+/// (see [stableNotificationId]). [early] gives the early heads-up its
 /// own id (bit 30 flipped) so it doesn't overwrite the day-of reminder for the same friend.
 int birthdayNotificationId(String groupId, int userId, {bool early = false}) {
-  var hash = 0x811c9dc5;
-  for (final unit in '$groupId#$userId'.codeUnits) {
-    hash ^= unit;
-    hash = (hash * 0x01000193) & 0x7fffffff;
-  }
+  final hash = stableNotificationId('$groupId#$userId');
   return early ? hash ^ 0x40000000 : hash;
 }
 
@@ -120,6 +121,93 @@ String birthdayEarlyReminderTitle(String friendName, int leadDays, String? group
   return groupName == null ? base : '$base - $groupName';
 }
 
+/// The slice of the notifications plugin that scheduling needs, so tests can capture what
+/// would be scheduled without a platform channel.
+typedef ReminderScheduler = Future<void> Function({
+  required int id,
+  required String title,
+  required String body,
+  required tz.TZDateTime scheduledDate,
+  required AndroidScheduleMode androidScheduleMode,
+  required DateTimeComponents matchDateTimeComponents,
+});
+
+const _details = NotificationDetails(
+  android: AndroidNotificationDetails(
+    'birthdays',
+    'Birthday reminders',
+    channelDescription: 'Reminds you to check in on friends on their birthday',
+    importance: Importance.defaultImportance,
+  ),
+  iOS: DarwinNotificationDetails(),
+);
+
+// Inexact: a birthday reminder doesn't need to-the-second delivery, and it avoids the
+// exact-alarm permission. dateAndTime repeats it every year.
+const _scheduleMode = AndroidScheduleMode.inexactAllowWhileIdle;
+const _repeat = DateTimeComponents.dateAndTime;
+
+Future<void> _scheduleOnPlugin({
+  required int id,
+  required String title,
+  required String body,
+  required tz.TZDateTime scheduledDate,
+  required AndroidScheduleMode androidScheduleMode,
+  required DateTimeComponents matchDateTimeComponents,
+}) =>
+    localNotifications.zonedSchedule(
+      id: id,
+      title: title,
+      body: body,
+      scheduledDate: scheduledDate,
+      notificationDetails: _details,
+      androidScheduleMode: androidScheduleMode,
+      matchDateTimeComponents: matchDateTimeComponents,
+    );
+
+/// Schedules the day-of reminder (and the early heads-up when [leadDays] > 0) for every
+/// birthday within the window, at 9am wall-clock time in [location].
+Future<void> scheduleBirthdayReminders({
+  required List<({String groupId, String groupName, Birthday birthday})> all,
+  required tz.Location location,
+  required tz.TZDateTime now,
+  required int leadDays,
+  required bool multiGroup,
+  required ReminderScheduler schedule,
+}) async {
+  // Birthdays are wall-clock dates, so compare in wall-clock terms rather than instants.
+  final wallNow = DateTime(now.year, now.month, now.day, now.hour, now.minute);
+  // With an early reminder too, each friend takes two slots - halve the cap to stay well
+  // under iOS's 64-pending limit.
+  for (final e in upcomingBirthdaySchedule(all, wallNow, max: leadDays > 0 ? 30 : 60)) {
+    final groupName = multiGroup ? e.groupName : null;
+    await schedule(
+      // Stable id per (group, friend) so re-scheduling replaces, not duplicates.
+      id: birthdayNotificationId(e.groupId, e.birthday.userId),
+      title: birthdayReminderTitle(e.birthday.name, groupName),
+      body: 'Open Check-In to wish them a happy birthday.',
+      scheduledDate: tz.TZDateTime(location, e.when.year, e.when.month, e.when.day, e.when.hour),
+      androidScheduleMode: _scheduleMode,
+      matchDateTimeComponents: _repeat,
+    );
+    if (leadDays > 0) {
+      final early = e.when.subtract(Duration(days: leadDays));
+      // Skip an early reminder whose date has already passed (birthday nearer than the
+      // lead time); the day-of reminder above still fires.
+      if (early.isAfter(wallNow)) {
+        await schedule(
+          id: birthdayNotificationId(e.groupId, e.birthday.userId, early: true),
+          title: birthdayEarlyReminderTitle(e.birthday.name, leadDays, groupName),
+          body: 'A heads-up so you have time to plan something.',
+          scheduledDate: tz.TZDateTime(location, early.year, early.month, early.day, early.hour),
+          androidScheduleMode: _scheduleMode,
+          matchDateTimeComponents: _repeat,
+        );
+      }
+    }
+  }
+}
+
 /// scheduleBirthdayNotifications syncs birthdays from every connected group and
 /// (re)schedules reminders for each friend's birthday at 9am local time (next 3
 /// months, see [upcomingBirthdaySchedule]). Groups that can't be reached right now
@@ -137,54 +225,15 @@ Future<void> scheduleBirthdayNotifications(List<BirthdayGroup> groups) async {
         // One offline group must not cost the others their reminders.
       }
     }
-    await _plugin.cancelAll();
-
-    const details = NotificationDetails(
-      android: AndroidNotificationDetails(
-        'birthdays',
-        'Birthday reminders',
-        channelDescription: 'Reminds you to check in on friends on their birthday',
-        importance: Importance.defaultImportance,
-      ),
-      iOS: DarwinNotificationDetails(),
+    await localNotifications.cancelAllPendingNotifications();
+    await scheduleBirthdayReminders(
+      all: all,
+      location: tz.local,
+      now: tz.TZDateTime.now(tz.local),
+      leadDays: leadDays,
+      multiGroup: groups.length > 1,
+      schedule: _scheduleOnPlugin,
     );
-
-    final now = tz.TZDateTime.now(tz.local);
-    final multiGroup = groups.length > 1;
-    // With an early reminder too, each friend takes two slots - halve the cap to stay well
-    // under iOS's 64-pending limit.
-    for (final e in upcomingBirthdaySchedule(all, now, max: leadDays > 0 ? 30 : 60)) {
-      final groupName = multiGroup ? e.groupName : null;
-      await _plugin.zonedSchedule(
-        // Stable id per (group, friend) so re-scheduling replaces, not duplicates.
-        birthdayNotificationId(e.groupId, e.birthday.userId),
-        birthdayReminderTitle(e.birthday.name, groupName),
-        'Open Check-In to wish them a happy birthday.',
-        tz.TZDateTime(tz.local, e.when.year, e.when.month, e.when.day, e.when.hour),
-        details,
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        uiLocalNotificationDateInterpretation: UILocalNotificationDateInterpretation.absoluteTime,
-        matchDateTimeComponents: DateTimeComponents.dateAndTime,
-      );
-      if (leadDays > 0) {
-        final early = e.when.subtract(Duration(days: leadDays));
-        // Skip an early reminder whose date has already passed (birthday nearer than the
-        // lead time); the day-of reminder above still fires.
-        if (early.isAfter(now)) {
-          await _plugin.zonedSchedule(
-            birthdayNotificationId(e.groupId, e.birthday.userId, early: true),
-            birthdayEarlyReminderTitle(e.birthday.name, leadDays, groupName),
-            'A heads-up so you have time to plan something.',
-            tz.TZDateTime(tz.local, early.year, early.month, early.day, early.hour),
-            details,
-            androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-            uiLocalNotificationDateInterpretation:
-                UILocalNotificationDateInterpretation.absoluteTime,
-            matchDateTimeComponents: DateTimeComponents.dateAndTime,
-          );
-        }
-      }
-    }
   } catch (_) {
     // Notifications are best-effort; never block app startup on them.
   }

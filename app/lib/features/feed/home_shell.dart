@@ -7,7 +7,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:geocoding/geocoding.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:native_exif/native_exif.dart';
 import 'package:video_compress/video_compress.dart';
@@ -31,6 +30,7 @@ import '../post/post_detail_screen.dart';
 import '../profile/profile_screen.dart';
 import '../whats_new/release_notes.dart';
 import 'compose_media_buttons.dart';
+import 'place_label.dart';
 import 'feed_screen.dart';
 
 /// Whether a picked file has to be re-encoded before upload. Photos do: it transcodes the
@@ -1057,34 +1057,9 @@ class _ComposeSheetState extends ConsumerState<ComposeSheet> {
   /// rounded coordinates - null when the geocoder finds nothing, so a post never carries
   /// coordinates without the place label a member can see and remove.
   Future<_PlaceFix?> _placeFix(double lat, double lng) async {
-    final place = await _placeFromCoords(lat, lng);
+    final place = await placeLabelFromCoords(lat, lng);
     if (place == null) return null;
     return _PlaceFix(place: place, lat: _roundCoord(lat), lng: _roundCoord(lng));
-  }
-
-  /// Reverse-geocodes a coordinate to a coarse "City, Country". Shared by the photo EXIF
-  /// path and the clip's MP4-atom path so both post the same kind of label. Null when the
-  /// geocoder finds nothing. Raw coordinates never leave the phone.
-  Future<String?> _placeFromCoords(double lat, double lng) async {
-    try {
-      // Pin the geocoder's language. Without this it answers in the device locale, so the
-      // same coordinates become "Lisbon" on one member's phone and "Lissabon" on another's
-      // - and the label is what the server's gazetteer matches on, so a localized name can
-      // also drop the check-in off the Places map entirely.
-      await setLocaleIdentifier('en_US');
-      final marks = await placemarkFromCoordinates(lat, lng);
-      if (marks.isEmpty) return null;
-      final p = marks.first;
-      final city = [p.locality, p.subAdministrativeArea, p.administrativeArea]
-          .firstWhere((s) => s != null && s.isNotEmpty, orElse: () => null);
-      final parts = <String>[
-        if (city != null) city,
-        if (p.country != null && p.country!.isNotEmpty) p.country!,
-      ];
-      return parts.isEmpty ? null : parts.join(', ');
-    } catch (_) {
-      return null;
-    }
   }
 
   /// Rounds a coordinate to 2 decimal places (~1.1km) before it ever reaches [_submit] -
