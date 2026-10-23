@@ -93,6 +93,7 @@ emit_server() {
       CHECKIN_SERVER_NAME: ${name}
       CHECKIN_PUBLIC_URL: "${url}"
       CHECKIN_DEBUG_TOKEN: ${token}
+      CHECKIN_SESSION_MAX_AGE: \${CHECKIN_SESSION_MAX_AGE:-}
       CHECKIN_FCM_CREDENTIALS_FILE: \${CHECKIN_FCM_CREDENTIALS_FILE:-}
       CHECKIN_RELAY_URL: \${CHECKIN_RELAY_URL-https://checkin-relay.npc-server.top}
       # Optional tuning and GIF search; unset or empty falls back to the server default.

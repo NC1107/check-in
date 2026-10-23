@@ -32,7 +32,8 @@ Under Compose, sensible values are already wired up, and the optional ones liste
 | `CHECKIN_HTTP_ADDR` | `:8080` | Address the API listens on inside the container. |
 | `CHECKIN_DATABASE_URL` | _(required)_ | Full PostgreSQL connection string. Set automatically by Compose from `POSTGRES_PASSWORD`; only set it yourself for a custom or external database. The server refuses to start without it rather than guessing a local one. |
 | `CHECKIN_MEDIA_DIR` | `./data/media` (`/data/media` in the image) | Where uploaded images are stored. Backed by the `media_data` volume in Compose. |
-| `CHECKIN_SESSION_TTL` | `720h` (30 days) | How long a login session stays valid. Accepts Go durations (e.g. `168h`, `720h`). |
+| `CHECKIN_SESSION_TTL` | `720h` (30 days) | How long a login session stays valid without being used. Each use extends it (at most about once a day), so only a session idle for this long expires. Accepts Go durations (e.g. `168h`, `720h`). |
+| `CHECKIN_SESSION_MAX_AGE` | `4320h` (180 days) | Absolute cap on a session's life, however often it is used. Past it the member logs in again. Accepts Go durations. |
 | `CHECKIN_DEFAULT_COUNTRY_CODE` | `1` | Phone country calling code applied to numbers typed without a leading `+`, so a contact saved as `+1 (415) 555-0148` matches a friend who types `(415) 555-0148`. Use your own code (e.g. `44` UK, `61` AU). Numbers with a leading `+` are always taken as-is. |
 | `CHECKIN_MAX_UPLOAD_BYTES` | `10485760` (10 MiB) | Maximum accepted size for an uploaded image. |
 | `CHECKIN_MAX_VIDEO_BYTES` | `26214400` (25 MiB) | Maximum accepted size for an uploaded video clip. Clips are capped at 12 seconds server-side, so this mostly bounds how generous a bitrate the app may send. If you raise it, raise the reverse proxy's request body limit to match (`request_body max_size` in the `Caddyfile`), or uploads fail at the proxy before reaching the server. |

@@ -339,9 +339,15 @@ class MultiSessionController extends Notifier<MultiSession> {
     // Restore reads storage and so can't be synchronous. Start from the empty session -
     // whose `restored: false` is exactly what startup shows as "still restoring" - and swap
     // the stored one in when it lands.
-    _load();
+    _restoring = _load();
     return const MultiSession();
   }
+
+  Future<void> _restoring = Future.value();
+
+  /// Completes once restore and the launch hydrate of every signed-in group have finished.
+  @visibleForTesting
+  Future<void> get restoreDone => _restoring;
 
   /// Derives the stable group id from a base URL: its host. One group per subdomain,
   /// so the host is unique, readable, and survives reinstalling the group.
@@ -435,14 +441,17 @@ class MultiSessionController extends Notifier<MultiSession> {
     state = MultiSession(groups: accounts, hiddenGroupIds: hidden, restored: true);
 
     // Hydrate each signed-in group's user (and refresh its display name) in parallel.
-    for (final g in accounts) {
-      if (g.isSignedIn) _hydrate(g);
-    }
+    await Future.wait([
+      for (final g in accounts)
+        if (g.isSignedIn) _hydrate(g),
+    ]);
   }
 
   /// Validates a restored token by fetching the current user, and refreshes the group's
-  /// display name. Only a real auth rejection drops the token - a network/timeout error
-  /// must NOT sign the group out (a self-hosted box being briefly offline is normal).
+  /// display name. Only this server's own 401 drops the token - a network/timeout error
+  /// must NOT sign the group out (a self-hosted box being briefly offline is normal), and
+  /// neither must a 403, which is what a reverse proxy or CDN answers with when it blocks
+  /// a request before it reaches Check-In (the server itself never 403s a valid session).
   Future<void> _hydrate(ServerAccount g) async {
     final client = ApiClient(baseUrl: g.baseUrl, token: g.token);
     try {
@@ -450,7 +459,7 @@ class MultiSessionController extends Notifier<MultiSession> {
       _update(g.id, (a) => a.copyWith(user: user));
     } on DioException catch (e) {
       final code = e.response?.statusCode;
-      if (code == 401 || code == 403) await signOutGroup(g.id);
+      if (code == 401) await expireGroup(g.id, rejectedToken: g.token);
       return;
     } catch (_) {
       return;
@@ -566,6 +575,7 @@ class MultiSessionController extends Notifier<MultiSession> {
     ServerInfo? info,
   }) async {
     final id = groupIdFor(baseUrl);
+    await ref.read(signOutNoticesProvider.notifier).clear(id);
     await _secure.write(key: _tokenKey(id), value: token);
     final account = ServerAccount(
       id: id,
@@ -607,8 +617,25 @@ class MultiSessionController extends Notifier<MultiSession> {
     _update(id, (g) => g.copyWith(clearAuth: true));
   }
 
+  /// Signs a group out because its server rejected the session, and remembers that so the
+  /// member is told. A deliberate sign-out uses [signOutGroup] and leaves no notice.
+  ///
+  /// [rejectedToken] is the token the failed request was sent with. A response can land after
+  /// the member has already signed back in, and that old token's 401 says nothing about the
+  /// new session, so it is ignored unless the token is still the group's current one.
+  Future<void> expireGroup(String id, {String? rejectedToken}) async {
+    final current = state.byId(id)?.token;
+    if (current == null) return;
+    if (rejectedToken != null && rejectedToken != current) return;
+    // Notice first: if the app is killed in between, the member is told rather than left
+    // signed out with no explanation.
+    await ref.read(signOutNoticesProvider.notifier).add(id);
+    await signOutGroup(id);
+  }
+
   /// Leaves a group entirely: token gone, entry gone.
   Future<void> removeGroup(String id) async {
+    await ref.read(signOutNoticesProvider.notifier).clear(id);
     await _secure.delete(key: _tokenKey(id));
     final groups = [
       for (final g in state.groups)
@@ -801,14 +828,88 @@ class MultiSessionController extends Notifier<MultiSession> {
 final multiSessionProvider =
     NotifierProvider<MultiSessionController, MultiSession>(MultiSessionController.new);
 
+const _kSignOutNotices = 'signed_out_notice_ids';
+
+/// Ids of groups whose server rejected this device's session, so the member was signed out
+/// without asking. Persisted: the rejection is usually discovered on a launch the member
+/// does not watch, and they need to still be told on the next one. Cleared per group when
+/// they sign back in, remove the group, or dismiss the notice.
+class SignOutNoticesController extends Notifier<Set<String>> {
+  SignOutNoticesController() : _seed = null;
+
+  @visibleForTesting
+  SignOutNoticesController.seeded(Set<String> initial) : _seed = initial;
+
+  final Set<String>? _seed;
+
+  @visibleForTesting
+  Future<void> get loaded => _loaded;
+
+  // Writes wait for the stored set to land, otherwise the load would overwrite (or
+  // resurrect) an id that add/clear had just changed.
+  Future<void> _loaded = Future.value();
+
+  @override
+  Set<String> build() {
+    final seed = _seed;
+    if (seed != null) return seed;
+    _loaded = _load();
+    return const {};
+  }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_kSignOutNotices);
+    if (raw == null) return;
+    try {
+      final stored = (jsonDecode(raw) as List).cast<String>();
+      state = {...stored};
+    } catch (_) {}
+  }
+
+  Future<void> add(String id) async {
+    await _loaded;
+    state = {...state, id};
+    await _persist();
+  }
+
+  Future<void> clear(String id) async {
+    await _loaded;
+    if (!state.contains(id)) return;
+    state = state.difference({id});
+    await _persist();
+  }
+
+  Future<void> _persist() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kSignOutNotices, jsonEncode(state.toList()));
+  }
+}
+
+final signOutNoticesProvider =
+    NotifierProvider<SignOutNoticesController, Set<String>>(SignOutNoticesController.new);
+
+/// Groups to show a "you were signed out" notice for: flagged ones that are still on this
+/// device and still signed out.
+final signedOutNoticeGroupsProvider = Provider<List<ServerAccount>>((ref) {
+  final ids = ref.watch(signOutNoticesProvider);
+  final session = ref.watch(multiSessionProvider);
+  return [
+    for (final g in session.signedOut)
+      if (ids.contains(g.id)) g
+  ];
+});
+
 /// An ApiClient bound to one group. A 401 there signs out ONLY that group - the other
 /// groups' sessions (and the shared image cache) stay intact.
 final apiForGroupProvider = Provider.family<ApiClient, String>((ref, groupId) {
   final g = ref.watch(multiSessionProvider.select((s) => s.byId(groupId)));
+  final sentToken = g?.token;
   return ApiClient(
     baseUrl: g?.baseUrl ?? '',
-    token: g?.token,
-    onUnauthorized: () => ref.read(multiSessionProvider.notifier).signOutGroup(groupId),
+    token: sentToken,
+    onUnauthorized: () =>
+        ref.read(multiSessionProvider.notifier).expireGroup(groupId, rejectedToken: sentToken),
   );
 });
 

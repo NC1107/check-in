@@ -11,6 +11,7 @@ import '../../state/unread.dart';
 import '../../theme/accent.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/date_range_sheet.dart';
+import '../../widgets/signed_out_notice.dart';
 import '../../widgets/skeletons.dart';
 import '../../widgets/user_avatar.dart';
 import '../onboarding/auth_screen.dart';
@@ -213,6 +214,9 @@ class _UnreachableItem extends _FeedItem {
   _UnreachableItem(this.names);
   final List<String> names;
 }
+
+/// Slot for the "you were signed out of ..." notices; draws nothing when there are none.
+class _SignedOutItem extends _FeedItem {}
 
 class _GapItem extends _FeedItem {}
 
@@ -892,7 +896,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   }
 
   List<_FeedItem> _buildItems(List<Post> posts, List<String> unreachable) {
-    final items = <_FeedItem>[];
+    final items = <_FeedItem>[_SignedOutItem()];
     if (unreachable.isNotEmpty) items.add(_UnreachableItem(unreachable));
     // Only worth drawing when there's unread above it AND seen posts below it - a line at
     // the very top or with nothing under it says nothing.
@@ -921,6 +925,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
       _DividerItem(:final label) => _DateDivider(label: label),
       _CaughtUpItem() => const _CaughtUpDivider(),
       _GapItem() => const _GapConnector(),
+      _SignedOutItem() => const SignedOutNotices(),
       _UnreachableItem(:final names) => Padding(
           padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
           child: Container(
@@ -1115,7 +1120,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
 
   Widget _emptyState({required IconData icon, required String title, required String subtitle}) {
     return ListView(primary: false, children: [
-      const SizedBox(height: 150),
+      const SizedBox(height: 72),
+      const SignedOutNotices(),
+      const SizedBox(height: 78),
       Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,

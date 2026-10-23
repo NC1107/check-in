@@ -202,6 +202,7 @@ func newHarnessOn(t *testing.T, database *db.DB, mutate func(*config.Config),
 	cfg := config.Config{
 		ServerName:         "Check-In",
 		SessionTTL:         time.Hour,
+		SessionMaxAge:      24 * time.Hour,
 		MaxUploadBytes:     testMaxImageBytes,
 		MaxVideoBytes:      testMaxVideoBytes,
 		DefaultCountryCode: "1",
