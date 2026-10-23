@@ -105,7 +105,6 @@ class PhoneField extends StatelessWidget {
     required this.onCountryChanged,
     this.onChanged,
     this.errorText,
-    this.autofillHints = const [AutofillHints.telephoneNumber],
   });
 
   final TextEditingController controller;
@@ -113,10 +112,6 @@ class PhoneField extends StatelessWidget {
   final ValueChanged<Country> onCountryChanged;
   final ValueChanged<String>? onChanged;
   final String? errorText;
-
-  /// Defaults to offering the device's own number; the login form passes the username hint
-  /// instead so a password manager pairs this field with the password.
-  final Iterable<String> autofillHints;
 
   List<TextInputFormatter> get _formatters => [PhoneNumberFormatter(country)];
 
@@ -153,9 +148,9 @@ class PhoneField extends StatelessWidget {
             child: TextField(
               controller: controller,
               keyboardType: TextInputType.phone,
-              // If an autofilled number arrives with a country code, the formatter strips
-              // it (see below).
-              autofillHints: autofillHints,
+              // Offer the device's own number in the QuickType bar. If it arrives
+              // with a country code, the formatter strips it (see below).
+              autofillHints: const [AutofillHints.telephoneNumber],
               inputFormatters: _formatters,
               onChanged: onChanged,
               style: const TextStyle(color: kFgPrimary, fontSize: 15),

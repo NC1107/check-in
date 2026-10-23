@@ -294,8 +294,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   /// switcher - pop back to the shell. The root instance is swapped out automatically
   /// once a session exists.
   Future<void> _finish(AuthResult auth) async {
-    // Success is the signal the OS waits for before offering to save the credential.
-    TextInput.finishAutofillContext();
     await ref.read(multiSessionProvider.notifier).addGroup(
           baseUrl: _connectedUrl!,
           serverName: _serverInfo?.name ?? 'Check-In',
@@ -487,9 +485,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         birthday: DateFormat('yyyy-MM-dd').format(_birthday!),
         password: _password.text,
       );
-      // The password field is about to leave the tree; tell the OS the signup succeeded
-      // while it can still pair the number with it.
-      TextInput.finishAutofillContext();
       // The server marshals birthdays without the year, so this is the only place the
       // full date exists. Remember it against this number so the next group join can fill
       // it in exactly instead of asking for a year the API can never give back.
@@ -646,15 +641,12 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           children: [
             if (_step == _Step.entry || _step == _Step.profile) _header(),
             Expanded(
-              // One group so the OS sees the phone and password as a single credential.
-              child: AutofillGroup(
-                child: switch (_step) {
-                  _Step.entry => _entryStep(),
-                  _Step.profile => _profileStep(),
-                  _Step.invite => _inviteStep(),
-                  _Step.done => _doneStep(),
-                },
-              ),
+              child: switch (_step) {
+                _Step.entry => _entryStep(),
+                _Step.profile => _profileStep(),
+                _Step.invite => _inviteStep(),
+                _Step.done => _doneStep(),
+              },
             ),
           ],
         ),
@@ -783,8 +775,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         PhoneField(
           controller: _phone,
           country: _country,
-          autofillHints:
-              _loginMode ? const [AutofillHints.username] : const [AutofillHints.telephoneNumber],
           onCountryChanged: (c) => setState(() {
             _country = c;
             // Strip prior formatting and cap to the new country's max length so a
@@ -803,7 +793,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
             controller: _password,
             hint: 'Your password',
             obscure: true,
-            autofillHints: const [AutofillHints.password],
             onChanged: (_) => setState(() {}),
           ),
           Align(
@@ -1021,7 +1010,6 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
           controller: _password,
           hint: 'At least 8 characters',
           obscure: true,
-          autofillHints: const [AutofillHints.newPassword],
           onChanged: (_) => setState(() {}),
         ),
         if (_error != null) _errorRow(_error!),
