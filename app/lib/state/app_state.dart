@@ -339,9 +339,15 @@ class MultiSessionController extends Notifier<MultiSession> {
     // Restore reads storage and so can't be synchronous. Start from the empty session -
     // whose `restored: false` is exactly what startup shows as "still restoring" - and swap
     // the stored one in when it lands.
-    _load();
+    _restoring = _load();
     return const MultiSession();
   }
+
+  Future<void> _restoring = Future.value();
+
+  /// Completes once restore and the launch hydrate of every signed-in group have finished.
+  @visibleForTesting
+  Future<void> get restoreDone => _restoring;
 
   /// Derives the stable group id from a base URL: its host. One group per subdomain,
   /// so the host is unique, readable, and survives reinstalling the group.
@@ -435,9 +441,10 @@ class MultiSessionController extends Notifier<MultiSession> {
     state = MultiSession(groups: accounts, hiddenGroupIds: hidden, restored: true);
 
     // Hydrate each signed-in group's user (and refresh its display name) in parallel.
-    for (final g in accounts) {
-      if (g.isSignedIn) _hydrate(g);
-    }
+    await Future.wait([
+      for (final g in accounts)
+        if (g.isSignedIn) _hydrate(g),
+    ]);
   }
 
   /// Validates a restored token by fetching the current user, and refreshes the group's
@@ -452,7 +459,7 @@ class MultiSessionController extends Notifier<MultiSession> {
       _update(g.id, (a) => a.copyWith(user: user));
     } on DioException catch (e) {
       final code = e.response?.statusCode;
-      if (code == 401) await expireGroup(g.id);
+      if (code == 401) await expireGroup(g.id, rejectedToken: g.token);
       return;
     } catch (_) {
       return;
@@ -612,10 +619,18 @@ class MultiSessionController extends Notifier<MultiSession> {
 
   /// Signs a group out because its server rejected the session, and remembers that so the
   /// member is told. A deliberate sign-out uses [signOutGroup] and leaves no notice.
-  Future<void> expireGroup(String id) async {
-    if (state.byId(id)?.isSignedIn != true) return;
-    await signOutGroup(id);
+  ///
+  /// [rejectedToken] is the token the failed request was sent with. A response can land after
+  /// the member has already signed back in, and that old token's 401 says nothing about the
+  /// new session, so it is ignored unless the token is still the group's current one.
+  Future<void> expireGroup(String id, {String? rejectedToken}) async {
+    final current = state.byId(id)?.token;
+    if (current == null) return;
+    if (rejectedToken != null && rejectedToken != current) return;
+    // Notice first: if the app is killed in between, the member is told rather than left
+    // signed out with no explanation.
     await ref.read(signOutNoticesProvider.notifier).add(id);
+    await signOutGroup(id);
   }
 
   /// Leaves a group entirely: token gone, entry gone.
@@ -827,11 +842,18 @@ class SignOutNoticesController extends Notifier<Set<String>> {
 
   final Set<String>? _seed;
 
+  @visibleForTesting
+  Future<void> get loaded => _loaded;
+
+  // Writes wait for the stored set to land, otherwise the load would overwrite (or
+  // resurrect) an id that add/clear had just changed.
+  Future<void> _loaded = Future.value();
+
   @override
   Set<String> build() {
     final seed = _seed;
     if (seed != null) return seed;
-    _load();
+    _loaded = _load();
     return const {};
   }
 
@@ -841,17 +863,18 @@ class SignOutNoticesController extends Notifier<Set<String>> {
     if (raw == null) return;
     try {
       final stored = (jsonDecode(raw) as List).cast<String>();
-      // Merge rather than replace: an add() may have landed while this was reading.
-      state = {...stored, ...state};
+      state = {...stored};
     } catch (_) {}
   }
 
   Future<void> add(String id) async {
+    await _loaded;
     state = {...state, id};
     await _persist();
   }
 
   Future<void> clear(String id) async {
+    await _loaded;
     if (!state.contains(id)) return;
     state = state.difference({id});
     await _persist();
@@ -881,10 +904,12 @@ final signedOutNoticeGroupsProvider = Provider<List<ServerAccount>>((ref) {
 /// groups' sessions (and the shared image cache) stay intact.
 final apiForGroupProvider = Provider.family<ApiClient, String>((ref, groupId) {
   final g = ref.watch(multiSessionProvider.select((s) => s.byId(groupId)));
+  final sentToken = g?.token;
   return ApiClient(
     baseUrl: g?.baseUrl ?? '',
-    token: g?.token,
-    onUnauthorized: () => ref.read(multiSessionProvider.notifier).expireGroup(groupId),
+    token: sentToken,
+    onUnauthorized: () =>
+        ref.read(multiSessionProvider.notifier).expireGroup(groupId, rejectedToken: sentToken),
   );
 });
 

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -71,11 +72,7 @@ void main() {
     addTearDown(c.dispose);
     c.listen(multiSessionProvider, (_, __) {});
     c.listen(signOutNoticesProvider, (_, __) {});
-    for (var i = 0; i < 100 && c.read(multiSessionProvider).byId(host)?.isSignedIn != false; i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 20));
-      if (meStatus != 401) break;
-    }
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await c.read(multiSessionProvider.notifier).restoreDone;
     return c;
   }
 
@@ -91,7 +88,7 @@ void main() {
     addTearDown(restarted.dispose);
     expect(prefs.getString('signed_out_notice_ids'), jsonEncode([host]));
     restarted.listen(signOutNoticesProvider, (_, __) {});
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await restarted.read(signOutNoticesProvider.notifier).loaded;
     expect(restarted.read(signOutNoticesProvider), {host});
   });
 
@@ -126,6 +123,60 @@ void main() {
 
     expect(c.read(signOutNoticesProvider), isEmpty);
     expect(c.read(signedOutNoticeGroupsProvider), isEmpty);
+  });
+
+  test('clearing a notice before the stored set has loaded is not undone by the load', () async {
+    SharedPreferences.setMockInitialValues({
+      'signed_out_notice_ids': jsonEncode([host]),
+    });
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    c.listen(signOutNoticesProvider, (_, __) {});
+
+    await c.read(signOutNoticesProvider.notifier).clear(host);
+    await c.read(signOutNoticesProvider.notifier).loaded;
+
+    expect(c.read(signOutNoticesProvider), isEmpty);
+  });
+
+  group('a request rejected through the group API client', () {
+    test('signs the group out and leaves a notice; a late second 401 after dismissal adds none',
+        () async {
+      meStatus = 200;
+      final c = await launch();
+      final api = c.read(apiForGroupProvider(host));
+      meStatus = 401;
+
+      await expectLater(api.me(), throwsA(isA<DioException>()));
+      await Future<void>.delayed(Duration.zero);
+      expect(c.read(multiSessionProvider).byId(host)!.isSignedIn, isFalse);
+      expect(c.read(signOutNoticesProvider), {host});
+
+      await c.read(signOutNoticesProvider.notifier).clear(host);
+      await expectLater(api.me(), throwsA(isA<DioException>()));
+      await Future<void>.delayed(Duration.zero);
+      expect(c.read(signOutNoticesProvider), isEmpty);
+    });
+
+    test('a 401 for a token the member has since replaced does not sign out the new session',
+        () async {
+      meStatus = 200;
+      final c = await launch();
+      final oldApi = c.read(apiForGroupProvider(host));
+
+      await c.read(multiSessionProvider.notifier).addGroup(
+            baseUrl: baseUrl,
+            serverName: 'Family',
+            token: 'fresh',
+            user: User(id: 1, name: 'Nick', phone: '+15550001111', isAdmin: false),
+          );
+      meStatus = 401;
+      await expectLater(oldApi.me(), throwsA(isA<DioException>()));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(c.read(multiSessionProvider).byId(host)!.token, 'fresh');
+      expect(c.read(signOutNoticesProvider), isEmpty);
+    });
   });
 
   group('feed', () {

@@ -487,6 +487,9 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
         birthday: DateFormat('yyyy-MM-dd').format(_birthday!),
         password: _password.text,
       );
+      // The password field is about to leave the tree; tell the OS the signup succeeded
+      // while it can still pair the number with it.
+      TextInput.finishAutofillContext();
       // The server marshals birthdays without the year, so this is the only place the
       // full date exists. Remember it against this number so the next group join can fill
       // it in exactly instead of asking for a year the API can never give back.
