@@ -19,6 +19,15 @@ class ReleaseNote {
 /// should notice; the auto sheet shows everything newer than what they last acknowledged.
 const releaseNotes = <ReleaseNote>[
   ReleaseNote(
+    version: '1.28',
+    highlights: [
+      "You should stay signed in now. Logins were quietly running out a month after you signed in, even if you were opening the app every day, and since it usually got noticed right after an update it looked like the updates were doing it.",
+      "If a group does sign you out, the feed tells you now and gives you a button to sign back in. Before it just stopped showing that group, so you'd miss everything there without really knowing why.",
+      "Your phone's password manager should work on the login screen now, so you can fill it with face id instead of typing it every time. It'll offer to save it after you log in.",
+      "Photos should stop changing shape after you open one full screen and come back. Albums with a few photos also keep the same height as you swipe through them.",
+    ],
+  ),
+  ReleaseNote(
     version: '1.27',
     highlights: [
       "You can delete your own comments now. There wasn't a way to do that before, so anything you posted by accident, or in the wrong thread, just sort of stayed there.",
