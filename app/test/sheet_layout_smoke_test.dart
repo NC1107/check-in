@@ -91,10 +91,10 @@ void main() {
           await tester.pumpAndSettle();
 
           // The settings screen itself is a plain (already scrollable) ListView; the
-          // button can sit below the fold - offstage by the default finder - at a small
+          // button can sit below the fold - not even built yet by the lazy list - at a small
           // size, which is not the overflow this test is checking for.
-          final generateButton = find.text('Generate a recap now', skipOffstage: false);
-          await tester.ensureVisible(generateButton);
+          final generateButton = find.text('Generate a recap now');
+          await tester.scrollUntilVisible(generateButton, 100);
           await tester.pumpAndSettle();
           await tester.tap(generateButton);
           await tester.pumpAndSettle();
