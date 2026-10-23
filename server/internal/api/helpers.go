@@ -3,10 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -64,15 +66,34 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			writeErr(w, http.StatusUnauthorized, "missing bearer token")
 			return
 		}
-		user, err := s.db.UserForToken(r.Context(), auth.HashToken(token))
+		hash := auth.HashToken(token)
+		user, err := s.db.UserForToken(r.Context(), hash)
 		if err != nil {
 			writeErr(w, http.StatusUnauthorized, "invalid or expired session")
 			return
 		}
+		s.slideSession(r.Context(), hash)
 		ctx := context.WithValue(r.Context(), userCtxKey, user)
 		ctx = context.WithValue(ctx, tokenCtxKey, token)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// sessionSlideGap is the most a session's expiry may lag behind "now + SessionTTL" before a
+// request pushes it forward again.
+const sessionSlideGap = 24 * time.Hour
+
+// slideSession keeps a session alive for as long as it is used: SessionTTL is an idle
+// limit, not an absolute one, so a member who opens the app every few weeks is never
+// signed out. A failed write is harmless because the session is still valid and the next
+// request retries.
+func (s *Server) slideSession(ctx context.Context, tokenHash string) {
+	ttl := s.cfg.SessionTTL
+	gap := min(sessionSlideGap, ttl/10)
+	now := time.Now()
+	if err := s.db.ExtendSession(ctx, tokenHash, now.Add(ttl), now.Add(ttl-gap)); err != nil {
+		log.Printf("slideSession: %v", err)
+	}
 }
 
 // requireAdmin ensures the authenticated user is the admin.

@@ -524,6 +524,17 @@ func (d *DB) UserForToken(ctx context.Context, tokenHash string) (User, error) {
 	return u, err
 }
 
+// ExtendSession pushes a still-valid session's expiry out to newExpiry. It only writes when
+// the stored expiry is earlier than staleBefore, so a busy client costs one write per
+// throttle window rather than one per request.
+func (d *DB) ExtendSession(ctx context.Context, tokenHash string, newExpiry, staleBefore time.Time) error {
+	_, err := d.Pool.Exec(ctx,
+		`UPDATE sessions SET expires_at = $2
+		 WHERE token_hash = $1 AND expires_at > now() AND expires_at < $3`,
+		tokenHash, newExpiry, staleBefore)
+	return err
+}
+
 // DeleteSession removes a single session token (logout).
 func (d *DB) DeleteSession(ctx context.Context, tokenHash string) error {
 	_, err := d.Pool.Exec(ctx, `DELETE FROM sessions WHERE token_hash = $1`, tokenHash)
