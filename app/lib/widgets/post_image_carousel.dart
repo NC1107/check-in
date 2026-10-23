@@ -11,8 +11,9 @@ const _defaultAspect = 4 / 3; // used while the image dimensions are still loadi
 
 /// Renders a post's attachment(s), sizing itself. A single one adopts its own (clamped)
 /// aspect ratio so portrait photos aren't center-cropped; several become a swipeable
-/// carousel with page dots and a counter pill at a fixed 4:3. A clip shows as its poster
-/// frame with a play badge (see [MediaFrame]).
+/// carousel with page dots and a counter pill, sized once by the first photo's clamped
+/// ratio so the card keeps one height across swipes. A clip shows as its poster frame with
+/// a play badge (see [MediaFrame]).
 ///
 /// Tap and double-tap are handled here (not by the caller) so the currently-shown media
 /// id is known: a single tap reports the visible image via [onImageTap] (e.g. to open a
@@ -79,7 +80,7 @@ class _PostImageCarouselState extends State<PostImageCarousel> {
 
   Widget _carousel(List<PostMedia> media) {
     return AspectRatio(
-      aspectRatio: _defaultAspect,
+      aspectRatio: feedAspectFor(media.first, widget.groupId),
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -130,14 +131,27 @@ class _PostImageCarouselState extends State<PostImageCarousel> {
   }
 }
 
+/// Intrinsic ratios learned from decoded images, for media the server reported no
+/// dimensions for (rows stored before dimensions were kept). A feed card is disposed and
+/// rebuilt as it scrolls or the viewer closes; without this memory it would restart at the
+/// default box and visibly jump to the real shape once the cached image resolved again.
+final _decodedRatios = <String, double>{};
+
+String _ratioKey(String? groupId, int mediaId) => '$groupId/$mediaId';
+
+/// The box ratio for [media] before any pixel has decoded: what the server stored, else
+/// what an earlier decode taught us, else the default. Deterministic from the first frame,
+/// so the loading placeholder is already the final size.
+double feedAspectFor(PostMedia media, String? groupId) =>
+    (media.aspectRatio ?? _decodedRatios[_ratioKey(groupId, media.id)] ?? _defaultAspect)
+        .clamp(_minAspect, _maxAspect)
+        .toDouble();
+
 /// A single attachment that adopts its own aspect ratio (clamped to [_minAspect] ..
-/// [_maxAspect]) so portrait photos aren't center-cropped to a fixed box. The server's
-/// stored dimensions size the box immediately; the decoded size then confirms or corrects
-/// it (a server predating stored dimensions reports none). Reading that size off the
-/// still [MediaFrame] is already displaying - rather than a second, separate resolve of
-/// the same url - means a fetch/decode hiccup can't leave the box silently and permanently
-/// stuck at the default: if the image fails, [AuthImage] shows its own error state instead
-/// of this ever being asked for a size at all.
+/// [_maxAspect]) so portrait photos aren't center-cropped to a fixed box. Server-stored
+/// dimensions are authoritative; the decoded size is only consulted when the server has
+/// none, so a decode landing late (for instance after returning from the full-screen
+/// viewer) can never resize a card that already has a final shape.
 class _AdaptiveImage extends StatefulWidget {
   const _AdaptiveImage({required this.media, this.groupId});
 
@@ -149,19 +163,27 @@ class _AdaptiveImage extends StatefulWidget {
 }
 
 class _AdaptiveImageState extends State<_AdaptiveImage> {
-  double? _ratio; // intrinsic width / height, once something has decoded
-
   void _onImage(ImageInfo info) {
+    if (widget.media.aspectRatio != null) return;
+    final key = _ratioKey(widget.groupId, widget.media.id);
     final r = info.image.width / info.image.height;
-    if (mounted && r != _ratio) setState(() => _ratio = r);
+    if (_decodedRatios[key] == r) return;
+    _decodedRatios[key] = r;
+    // The callback can fire synchronously from inside a build (an already-cached image).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final known = _ratio ?? widget.media.aspectRatio ?? _defaultAspect;
     return AspectRatio(
-      aspectRatio: known.clamp(_minAspect, _maxAspect).toDouble(),
-      child: MediaFrame(media: widget.media, groupId: widget.groupId, onImageResolved: _onImage),
+      aspectRatio: feedAspectFor(widget.media, widget.groupId),
+      child: MediaFrame(
+        media: widget.media,
+        groupId: widget.groupId,
+        onImageResolved: _onImage,
+      ),
     );
   }
 }

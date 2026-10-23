@@ -64,6 +64,88 @@ void main() {
     expect(tester.widget<AspectRatio>(find.byType(AspectRatio)).aspectRatio, closeTo(4 / 3, 0.001));
   });
 
+  group('feed card aspect ratio', () {
+    Future<void> pump(WidgetTester tester, List<PostMedia> media) async {
+      const account = ServerAccount(
+        id: 'g',
+        baseUrl: 'https://g.invalid',
+        serverName: 'G',
+        token: 't',
+      );
+      final controller = MultiSessionController.seeded(
+        const MultiSession(groups: [account], restored: true),
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [multiSessionProvider.overrideWith(() => controller)],
+          child: MaterialApp(
+            home: Scaffold(
+              body: PostImageCarousel(media: media, groupId: 'g'),
+            ),
+          ),
+        ),
+      );
+    }
+
+    double boxRatio(WidgetTester tester) {
+      final size = tester.getSize(find.byType(AspectRatio).first);
+      return size.width / size.height;
+    }
+
+    PostMedia sized(int w, int h, {int id = 1}) =>
+        PostMedia(id: id, mime: 'image/jpeg', width: w, height: h);
+
+    testWidgets(
+      'stored dimensions size the box on the first frame and it never changes',
+      (tester) async {
+        await pump(tester, [sized(3, 4)]);
+        final loading = tester.getSize(find.byType(AspectRatio).first);
+        expect(loading.width / loading.height, closeTo(4 / 5, 0.001));
+
+        // The load resolves (here to the broken-image state); the box must not move.
+        await tester.pump(const Duration(seconds: 1));
+        expect(tester.getSize(find.byType(AspectRatio).first), loading);
+      },
+    );
+
+    testWidgets('a square photo stays square', (tester) async {
+      await pump(tester, [sized(1000, 1000)]);
+      expect(boxRatio(tester), closeTo(1, 0.001));
+    });
+
+    testWidgets('very tall photos clamp to 4:5', (tester) async {
+      await pump(tester, [sized(1000, 4000)]);
+      expect(boxRatio(tester), closeTo(4 / 5, 0.001));
+    });
+
+    testWidgets('very wide photos clamp to 1.91:1', (tester) async {
+      await pump(tester, [sized(4000, 1000)]);
+      expect(boxRatio(tester), closeTo(1.91, 0.001));
+    });
+
+    testWidgets(
+      "a gallery takes the first photo's clamped ratio and keeps it across swipes",
+      (tester) async {
+        await pump(tester, [
+          sized(1000, 4000, id: 1),
+          sized(4000, 1000, id: 2),
+        ]);
+        final before = tester.getSize(find.byType(AspectRatio).first);
+        expect(before.width / before.height, closeTo(4 / 5, 0.001));
+
+        await tester.fling(find.byType(PageView), const Offset(-400, 0), 1000);
+        await tester.pump(const Duration(seconds: 1));
+        expect(tester.getSize(find.byType(AspectRatio).first), before);
+      },
+    );
+
+    test('feedAspectFor falls back to 4:3 only when nothing is known', () {
+      expect(
+        feedAspectFor(const PostMedia(id: 99, mime: 'image/jpeg'), 'g'),
+        closeTo(4 / 3, 0.001),
+      );
+    });
+  });
   testWidgets('resolving an already-decoded image delivers its real intrinsic size via a listener',
       (tester) async {
     final bytes = _minimalPng(160, 90); // exactly 16:9
