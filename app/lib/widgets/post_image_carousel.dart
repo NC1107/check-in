@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/models.dart';
+import '../state/app_state.dart';
 import 'media_frame.dart';
 
 // Post images size to their own aspect ratio, clamped so a very tall or very wide photo
@@ -19,7 +21,7 @@ const _defaultAspect = 4 / 3; // used while the image dimensions are still loadi
 /// id is known: a single tap reports the visible image via [onImageTap] (e.g. to open a
 /// full-screen viewer), a double-tap fires [onDoubleTap] (e.g. like). Centralising both in
 /// one detector avoids the gesture-arena conflicts of nesting tap handlers.
-class PostImageCarousel extends StatefulWidget {
+class PostImageCarousel extends ConsumerStatefulWidget {
   const PostImageCarousel({
     super.key,
     required this.media,
@@ -40,12 +42,27 @@ class PostImageCarousel extends StatefulWidget {
   final VoidCallback? onDoubleTap;
 
   @override
-  State<PostImageCarousel> createState() => _PostImageCarouselState();
+  ConsumerState<PostImageCarousel> createState() => _PostImageCarouselState();
 }
 
-class _PostImageCarouselState extends State<PostImageCarousel> {
+class _PostImageCarouselState extends ConsumerState<PostImageCarousel> {
   final _ctrl = PageController();
   int _page = 0;
+
+  // A gallery is sized by its first photo and holds that height; it is refreshed only while
+  // the first page is showing so a decode landing mid-swipe cannot move the card.
+  double? _galleryRatio;
+  String? _scope;
+
+  void _onFirstImage(ImageInfo info) {
+    final first = widget.media.first;
+    if (first.aspectRatio != null) return;
+    _rememberDecodedRatio(_scope, first.id, info);
+    if (_page != 0) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _page == 0) setState(() => _galleryRatio = null);
+    });
+  }
 
   @override
   void dispose() {
@@ -55,6 +72,7 @@ class _PostImageCarouselState extends State<PostImageCarousel> {
 
   @override
   Widget build(BuildContext context) {
+    _scope = ref.watch(contentAccountProvider(widget.groupId))?.id;
     final media = widget.media;
     if (media.isEmpty) return const SizedBox.shrink();
     final content = media.length == 1 ? _single(media) : _carousel(media);
@@ -69,8 +87,8 @@ class _PostImageCarouselState extends State<PostImageCarousel> {
     );
   }
 
-  Widget _single(List<PostMedia> media) =>
-      _hero(media.first, _AdaptiveImage(media: media.first, groupId: widget.groupId));
+  Widget _single(List<PostMedia> media) => _hero(
+      media.first, _AdaptiveImage(media: media.first, groupId: widget.groupId, scope: _scope));
 
   // Wrap real images (gifs included) so a tapped feed photo flies into the full-screen
   // viewer, which shares the same [photoHeroTag]. A clip shows a poster, not the photo
@@ -80,7 +98,7 @@ class _PostImageCarouselState extends State<PostImageCarousel> {
 
   Widget _carousel(List<PostMedia> media) {
     return AspectRatio(
-      aspectRatio: feedAspectFor(media.first, widget.groupId),
+      aspectRatio: _galleryRatio ??= feedAspectFor(media.first, _scope),
       child: Stack(
         fit: StackFit.expand,
         children: [
@@ -88,8 +106,14 @@ class _PostImageCarouselState extends State<PostImageCarousel> {
             controller: _ctrl,
             itemCount: media.length,
             onPageChanged: (i) => setState(() => _page = i),
-            itemBuilder: (_, i) =>
-                _hero(media[i], MediaFrame(media: media[i], groupId: widget.groupId)),
+            itemBuilder: (_, i) => _hero(
+              media[i],
+              MediaFrame(
+                media: media[i],
+                groupId: widget.groupId,
+                onImageResolved: i == 0 ? _onFirstImage : null,
+              ),
+            ),
           ),
           Positioned(
             top: 8,
@@ -137,13 +161,22 @@ class _PostImageCarouselState extends State<PostImageCarousel> {
 /// default box and visibly jump to the real shape once the cached image resolved again.
 final _decodedRatios = <String, double>{};
 
-String _ratioKey(String? groupId, int mediaId) => '$groupId/$mediaId';
+@visibleForTesting
+void resetDecodedRatios() => _decodedRatios.clear();
+
+// Media ids are only unique per server, so the key is the resolved account id; a null
+// groupId (current group) is resolved by the caller rather than sharing one 'null' bucket.
+String _ratioKey(String? scope, int mediaId) => '${scope ?? ''}/$mediaId';
+
+void _rememberDecodedRatio(String? scope, int mediaId, ImageInfo info) {
+  _decodedRatios[_ratioKey(scope, mediaId)] = info.image.width / info.image.height;
+}
 
 /// The box ratio for [media] before any pixel has decoded: what the server stored, else
 /// what an earlier decode taught us, else the default. Deterministic from the first frame,
-/// so the loading placeholder is already the final size.
-double feedAspectFor(PostMedia media, String? groupId) =>
-    (media.aspectRatio ?? _decodedRatios[_ratioKey(groupId, media.id)] ?? _defaultAspect)
+/// so the loading placeholder is already the final size. [scope] is the account id.
+double feedAspectFor(PostMedia media, String? scope) =>
+    (media.aspectRatio ?? _decodedRatios[_ratioKey(scope, media.id)] ?? _defaultAspect)
         .clamp(_minAspect, _maxAspect)
         .toDouble();
 
@@ -153,10 +186,11 @@ double feedAspectFor(PostMedia media, String? groupId) =>
 /// none, so a decode landing late (for instance after returning from the full-screen
 /// viewer) can never resize a card that already has a final shape.
 class _AdaptiveImage extends StatefulWidget {
-  const _AdaptiveImage({required this.media, this.groupId});
+  const _AdaptiveImage({required this.media, this.groupId, this.scope});
 
   final PostMedia media;
   final String? groupId;
+  final String? scope;
 
   @override
   State<_AdaptiveImage> createState() => _AdaptiveImageState();
@@ -165,10 +199,9 @@ class _AdaptiveImage extends StatefulWidget {
 class _AdaptiveImageState extends State<_AdaptiveImage> {
   void _onImage(ImageInfo info) {
     if (widget.media.aspectRatio != null) return;
-    final key = _ratioKey(widget.groupId, widget.media.id);
-    final r = info.image.width / info.image.height;
-    if (_decodedRatios[key] == r) return;
-    _decodedRatios[key] = r;
+    final before = feedAspectFor(widget.media, widget.scope);
+    _rememberDecodedRatio(widget.scope, widget.media.id, info);
+    if (feedAspectFor(widget.media, widget.scope) == before) return;
     // The callback can fire synchronously from inside a build (an already-cached image).
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) setState(() {});
@@ -178,7 +211,7 @@ class _AdaptiveImageState extends State<_AdaptiveImage> {
   @override
   Widget build(BuildContext context) {
     return AspectRatio(
-      aspectRatio: feedAspectFor(widget.media, widget.groupId),
+      aspectRatio: feedAspectFor(widget.media, widget.scope),
       child: MediaFrame(
         media: widget.media,
         groupId: widget.groupId,
