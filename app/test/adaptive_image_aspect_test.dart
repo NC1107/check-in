@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -64,6 +66,209 @@ void main() {
     expect(tester.widget<AspectRatio>(find.byType(AspectRatio)).aspectRatio, closeTo(4 / 3, 0.001));
   });
 
+  group('feed card aspect ratio', () {
+    Future<void> pump(WidgetTester tester, List<PostMedia> media) async {
+      const account = ServerAccount(
+        id: 'g',
+        baseUrl: 'https://g.invalid',
+        serverName: 'G',
+        token: 't',
+      );
+      final controller = MultiSessionController.seeded(
+        const MultiSession(groups: [account], restored: true),
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [multiSessionProvider.overrideWith(() => controller)],
+          child: MaterialApp(
+            home: Scaffold(
+              body: PostImageCarousel(media: media, groupId: 'g'),
+            ),
+          ),
+        ),
+      );
+    }
+
+    double boxRatio(WidgetTester tester) {
+      final size = tester.getSize(find.byType(AspectRatio).first);
+      return size.width / size.height;
+    }
+
+    PostMedia sized(int w, int h, {int id = 1}) =>
+        PostMedia(id: id, mime: 'image/jpeg', width: w, height: h);
+
+    testWidgets(
+      'stored dimensions size the box on the first frame and it never changes',
+      (tester) async {
+        await pump(tester, [sized(3, 4)]);
+        final loading = tester.getSize(find.byType(AspectRatio).first);
+        expect(loading.width / loading.height, closeTo(4 / 5, 0.001));
+
+        // The load resolves (here to the broken-image state); the box must not move.
+        await tester.pump(const Duration(seconds: 1));
+        expect(tester.getSize(find.byType(AspectRatio).first), loading);
+      },
+    );
+
+    testWidgets('a square photo stays square', (tester) async {
+      await pump(tester, [sized(1000, 1000)]);
+      expect(boxRatio(tester), closeTo(1, 0.001));
+    });
+
+    testWidgets('very tall photos clamp to 4:5', (tester) async {
+      await pump(tester, [sized(1000, 4000)]);
+      expect(boxRatio(tester), closeTo(4 / 5, 0.001));
+    });
+
+    testWidgets('very wide photos clamp to 1.91:1', (tester) async {
+      await pump(tester, [sized(4000, 1000)]);
+      expect(boxRatio(tester), closeTo(1.91, 0.001));
+    });
+
+    testWidgets(
+      "a gallery takes the first photo's clamped ratio and keeps it across swipes",
+      (tester) async {
+        await pump(tester, [
+          sized(1000, 4000, id: 1),
+          sized(4000, 1000, id: 2),
+        ]);
+        final before = tester.getSize(find.byType(AspectRatio).first);
+        expect(before.width / before.height, closeTo(4 / 5, 0.001));
+
+        await tester.fling(find.byType(PageView), const Offset(-400, 0), 1000);
+        await tester.pump(const Duration(seconds: 1));
+        expect(tester.getSize(find.byType(AspectRatio).first), before);
+      },
+    );
+
+    group('decoded ratios for media the server sent no dimensions for', () {
+      setUp(resetDecodedRatios);
+      tearDown(() => PaintingBinding.instance.imageCache.clear());
+
+      // Puts a decoded w x h image where AuthImage's provider will find it, so the widget
+      // resolves it without any network.
+      Future<void> seedDecoded(
+        WidgetTester tester, {
+        required String account,
+        required int mediaId,
+        required int w,
+        required int h,
+      }) async {
+        final image = await tester.runAsync(() async {
+          final recorder = ui.PictureRecorder();
+          Canvas(recorder).drawRect(
+            Rect.fromLTWH(0, 0, w.toDouble(), h.toDouble()),
+            Paint()..color = const Color(0xFF3060C8),
+          );
+          return recorder.endRecording().toImage(w, h);
+        });
+        PaintingBinding.instance.imageCache.putIfAbsent(
+          CachedNetworkImageProvider('https://x.invalid/$mediaId',
+              cacheKey: 'media-$account-$mediaId'),
+          () => OneFrameImageStreamCompleter(Future.value(ImageInfo(image: image!))),
+        );
+      }
+
+      Future<void> pumpIn(WidgetTester tester, Widget child, {List<String> groups = const ['g']}) {
+        final accounts = [
+          for (final id in groups)
+            ServerAccount(id: id, baseUrl: 'https://$id.invalid', serverName: id, token: 't'),
+        ];
+        final controller = MultiSessionController.seeded(
+          MultiSession(groups: accounts, restored: true),
+        );
+        return tester.pumpWidget(
+          ProviderScope(
+            overrides: [multiSessionProvider.overrideWith(() => controller)],
+            child: MaterialApp(home: Scaffold(body: child)),
+          ),
+        );
+      }
+
+      double ratioOf(WidgetTester tester) {
+        final size = tester.getSize(find.byType(AspectRatio).first);
+        return size.width / size.height;
+      }
+
+      const bare = PostMedia(id: 7, mime: 'image/jpeg');
+
+      testWidgets('a rebuilt card starts at the learned shape on its first frame', (tester) async {
+        await seedDecoded(tester, account: 'g', mediaId: 7, w: 100, h: 100);
+        const card = PostImageCarousel(media: [bare], groupId: 'g');
+
+        await pumpIn(tester, card);
+        expect(ratioOf(tester), closeTo(4 / 3, 0.001));
+        await tester.pump();
+        await tester.pump();
+        expect(ratioOf(tester), closeTo(1, 0.001));
+
+        await pumpIn(tester, const SizedBox());
+        await pumpIn(tester, card);
+        expect(ratioOf(tester), closeTo(1, 0.001));
+      });
+
+      testWidgets('another media id, or the same id in another group, does not inherit it', (
+        tester,
+      ) async {
+        await seedDecoded(tester, account: 'g', mediaId: 7, w: 100, h: 100);
+        await pumpIn(tester, const PostImageCarousel(media: [bare], groupId: 'g'));
+        await tester.pump();
+        await tester.pump();
+        expect(ratioOf(tester), closeTo(1, 0.001));
+
+        await pumpIn(tester, const SizedBox(), groups: ['g', 'h']);
+        await pumpIn(
+          tester,
+          const PostImageCarousel(media: [PostMedia(id: 8, mime: 'image/jpeg')], groupId: 'g'),
+          groups: ['g', 'h'],
+        );
+        expect(ratioOf(tester), closeTo(4 / 3, 0.001));
+
+        await pumpIn(tester, const PostImageCarousel(media: [bare], groupId: 'h'),
+            groups: ['g', 'h']);
+        expect(ratioOf(tester), closeTo(4 / 3, 0.001));
+      });
+
+      testWidgets('server dimensions win over a conflicting decode', (tester) async {
+        await seedDecoded(tester, account: 'g', mediaId: 7, w: 100, h: 100);
+        await pumpIn(
+          tester,
+          const PostImageCarousel(
+            media: [PostMedia(id: 7, mime: 'image/jpeg', width: 4, height: 5)],
+            groupId: 'g',
+          ),
+        );
+        await tester.pump();
+        await tester.pump();
+        expect(ratioOf(tester), closeTo(4 / 5, 0.001));
+      });
+
+      testWidgets('a gallery whose first photo has no dimensions learns its height', (
+        tester,
+      ) async {
+        await seedDecoded(tester, account: 'g', mediaId: 7, w: 100, h: 100);
+        const gallery = PostImageCarousel(
+          media: [bare, PostMedia(id: 9, mime: 'image/jpeg', width: 4000, height: 1000)],
+          groupId: 'g',
+        );
+        await pumpIn(tester, gallery);
+        await tester.pump();
+        await tester.pump();
+        expect(ratioOf(tester), closeTo(1, 0.001));
+
+        await tester.fling(find.byType(PageView), const Offset(-400, 0), 1000);
+        await tester.pump(const Duration(seconds: 1));
+        expect(ratioOf(tester), closeTo(1, 0.001));
+      });
+    });
+
+    test('feedAspectFor falls back to 4:3 only when nothing is known', () {
+      expect(
+        feedAspectFor(const PostMedia(id: 99, mime: 'image/jpeg'), 'g'),
+        closeTo(4 / 3, 0.001),
+      );
+    });
+  });
   testWidgets('resolving an already-decoded image delivers its real intrinsic size via a listener',
       (tester) async {
     final bytes = _minimalPng(160, 90); // exactly 16:9
