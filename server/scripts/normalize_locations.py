@@ -103,7 +103,7 @@ def open_data_file(data_dir, name, what):
     if not os.path.isdir(root):
         sys.exit(f"--data-dir: {data_dir!r} is not a directory")
     resolved = os.path.realpath(os.path.join(root, name))
-    if not resolved.startswith(root + os.sep):
+    if not resolved.startswith(root.rstrip(os.sep) + os.sep):
         sys.exit(f"{what}: {name!r} resolves outside {data_dir!r}")
     if not os.path.isfile(resolved):
         sys.exit(f"{what}: {name!r} is not a readable file inside {data_dir!r}")
@@ -138,16 +138,16 @@ def load_cities(data_dir, name, what):
                 population = int(parts[COL_POPULATION] or 0)
             except ValueError:
                 continue
-            name = parts[COL_NAME].strip()
+            place = parts[COL_NAME].strip()
             country = parts[COL_COUNTRY].strip()
-            if not name or not country:
+            if not place or not country:
                 continue
             if parts[COL_FCLASS].strip() != PLACE_CLASS:
                 continue
             if parts[COL_FCODE].strip() in SKIPPED_PLACE_CODES:
                 continue
             cells[(math.floor(lat / CELL), math.floor(lng / CELL))].append(
-                (lat, lng, name, country, population))
+                (lat, lng, place, country, population))
             count += 1
     if not count:
         sys.exit(f"no places loaded from {name!r} - is it a GeoNames tab-separated export?")

@@ -46,6 +46,8 @@ jobs:
         run: test -z "$(gofmt -l .)" || { echo 'These files need gofmt:'; gofmt -l .; exit 1; }
       - run: go vet ./...
       - run: go build ./...
+      - name: Python script tests
+        run: python3 -m unittest discover -s scripts
       - run: go test ./... -race
         env:
           TESTDB_URL: postgres://checkin:ci-${{ github.run_id }}@localhost:5432/checkin_test?sslmode=disable
