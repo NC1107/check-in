@@ -69,6 +69,13 @@ services:
       # Direct FCM (only for hosts shipping their own app with their own Firebase project):
       # in-container path to the Firebase service-account JSON. See CHECKIN_FCM_CREDENTIALS_HOST.
       CHECKIN_FCM_CREDENTIALS_FILE: ${CHECKIN_FCM_CREDENTIALS_FILE:-}
+      # Optional tuning and GIF search; unset or empty falls back to the server default.
+      CHECKIN_SESSION_TTL: ${CHECKIN_SESSION_TTL:-}
+      CHECKIN_DEFAULT_COUNTRY_CODE: ${CHECKIN_DEFAULT_COUNTRY_CODE:-}
+      CHECKIN_MAX_UPLOAD_BYTES: ${CHECKIN_MAX_UPLOAD_BYTES:-}
+      CHECKIN_MAX_VIDEO_BYTES: ${CHECKIN_MAX_VIDEO_BYTES:-}
+      CHECKIN_TRUSTED_PROXY_HOPS: ${CHECKIN_TRUSTED_PROXY_HOPS:-}
+      CHECKIN_KLIPY_KEY: ${CHECKIN_KLIPY_KEY:-}
     volumes:
       - media_data:/data/media
       # Mounts your Firebase service-account JSON when CHECKIN_FCM_CREDENTIALS_HOST points
