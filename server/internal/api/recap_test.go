@@ -17,6 +17,8 @@ func seedRecapActivity(h *harness, admin, member actor) {
 	h.createPost(admin, map[string]any{"kind": "text", "body": "Monday check-in"})
 	h.createPost(member, map[string]any{"kind": "text", "body": "Tuesday check-in"})
 	h.createPost(member, map[string]any{"kind": "text", "body": "Wednesday check-in"})
+	h.createPost(admin, map[string]any{"kind": "text", "body": "Thursday check-in"})
+	h.createPost(member, map[string]any{"kind": "text", "body": "Friday check-in"})
 }
 
 // setUserTitle stamps a member's title directly (bypassing BestowTitles), so a test can pin
@@ -602,6 +604,8 @@ func TestScheduledRecapBestowsTitlesAndPreservesNonQualifying(t *testing.T) {
 	h.createPost(admin, map[string]any{"kind": "text", "body": "Monday check-in"})
 	samPost := h.createPost(sam, map[string]any{"kind": "text", "body": "Tuesday check-in"})
 	h.createPost(sam, map[string]any{"kind": "text", "body": "Wednesday check-in"})
+	h.createPost(admin, map[string]any{"kind": "text", "body": "Thursday check-in"})
+	h.createPost(admin, map[string]any{"kind": "text", "body": "Friday check-in"})
 	h.like(admin, samPost.ID) // the only like anyone gets this period - makes Sam the sole most_liked qualifier
 
 	start := time.Now().Add(-1 * time.Hour)
@@ -764,4 +768,93 @@ func TestSortedUniquePanelsStillSorts(t *testing.T) {
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Errorf("sortedUniquePanels = %v, want %v (alphabetical)", got, want)
 	}
+}
+
+func countRecapPosts(h *harness, viewer actor) int {
+	n := 0
+	for _, p := range h.feed(viewer) {
+		if p.Kind == "recap" {
+			n++
+		}
+	}
+	return n
+}
+
+// seedCheckIns inserts rows directly: the API's post rate limit would reject a month's worth.
+func seedCheckIns(t *testing.T, h *harness, who actor, n int) {
+	t.Helper()
+	if _, err := h.db.Pool.Exec(context.Background(),
+		`INSERT INTO posts (author_id, kind, body) SELECT $1, 'text', 'check-in' FROM generate_series(1, $2)`,
+		who.ID, n); err != nil {
+		t.Fatalf("seed check-ins: %v", err)
+	}
+}
+
+// TestScheduledRecapSkipsQuietPeriods pins the minimum-activity gate: a weekly recap needs
+// 5 check-ins and a monthly one 20, and a skipped period posts no recap and bestows no
+// titles (which would otherwise ride along with it).
+func TestScheduledRecapSkipsQuietPeriods(t *testing.T) {
+	cases := []struct {
+		cadence string
+		min     int
+	}{{"weekly", 5}, {"monthly", 20}}
+	for _, tc := range cases {
+		t.Run(tc.cadence, func(t *testing.T) {
+			h := newHarness(t)
+			admin := h.admin("Robin")
+			sam := h.member(admin, "Sam")
+			start := time.Now().Add(-1 * time.Hour)
+			end := time.Now().Add(1 * time.Hour)
+
+			seedCheckIns(t, h, admin, tc.min-2)
+			samPost := h.createPost(sam, map[string]any{"kind": "text", "body": "check-in"})
+			h.like(admin, samPost.ID) // would make Sam the most_liked qualifier if titles were bestowed
+
+			h.srv.generateScheduledRecap(context.Background(), tc.cadence, start, end)
+			if got := countRecapPosts(h, admin); got != 0 {
+				t.Fatalf("recaps with %d check-ins = %d, want 0", tc.min-1, got)
+			}
+			samUser, err := h.db.GetUser(context.Background(), sam.ID)
+			if err != nil {
+				t.Fatalf("get sam: %v", err)
+			}
+			if samUser.Title != nil {
+				t.Errorf("sam's title = %q for a skipped period, want none", *samUser.Title)
+			}
+
+			// A later tick in the same hour still sees the same quiet period.
+			h.srv.generateScheduledRecap(context.Background(), tc.cadence, start, end)
+			if got := countRecapPosts(h, admin); got != 0 {
+				t.Fatalf("recaps after a repeated tick = %d, want 0", got)
+			}
+
+			// At the threshold the recap posts as before.
+			seedCheckIns(t, h, admin, 1)
+			h.srv.generateScheduledRecap(context.Background(), tc.cadence, start, end)
+			if got := countRecapPosts(h, admin); got != 1 {
+				t.Fatalf("recaps with %d check-ins = %d, want 1", tc.min, got)
+			}
+			samUser, _ = h.db.GetUser(context.Background(), sam.ID)
+			if samUser.Title == nil || *samUser.Title != "most_liked" {
+				t.Errorf("sam's title = %v, want most_liked once the recap posts", samUser.Title)
+			}
+		})
+	}
+}
+
+// TestManualRecapIgnoresQuietGate pins that an admin's on-demand recap is not held to the
+// scheduler's minimum: three check-ins is under the weekly bar yet still generates.
+func TestManualRecapIgnoresQuietGate(t *testing.T) {
+	h := newHarness(t)
+	admin := h.admin("Robin")
+	member := h.member(admin, "Sam")
+	h.createPost(admin, map[string]any{"kind": "text", "body": "a"})
+	h.createPost(member, map[string]any{"kind": "text", "body": "b"})
+	h.createPost(member, map[string]any{"kind": "text", "body": "c"})
+
+	h.post("/api/admin/recaps", admin.Token, map[string]any{
+		"periodStart": time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339),
+		"periodEnd":   time.Now().Add(1 * time.Hour).UTC().Format(time.RFC3339),
+		"panels":      []string{"collage"},
+	}).expect(http.StatusCreated)
 }

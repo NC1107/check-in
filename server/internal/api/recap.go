@@ -133,6 +133,18 @@ func isoWeekday(t time.Time) int {
 // generateScheduledRecap builds and stores one standing-cadence recap, pushing a
 // notification only when it is genuinely new (never on a raced no-op).
 func (s *Server) generateScheduledRecap(ctx context.Context, cadence string, start, end time.Time) {
+	// Gated here, before the recap and the title bestowal that rides along with it. The
+	// skip isn't recorded: the window is fixed once its hour starts, so every later tick in
+	// that hour counts the same posts and reaches the same answer, and once the hour passes
+	// the period is never due again.
+	count, err := s.db.CountRecapCheckIns(ctx, start, end)
+	if err != nil {
+		log.Printf("generateScheduledRecap: count: %v", err)
+		return
+	}
+	if count < db.RecapMinCheckIns(cadence) {
+		return // too quiet to be worth a feed post
+	}
 	spec := db.RecapSpec{PeriodStart: start, PeriodEnd: end, Panels: recapV1Panels, Cadence: cadence, Origin: "scheduled"}
 	payload, err := s.db.BuildRecap(ctx, spec)
 	if errors.Is(err, db.ErrRecapEmpty) {

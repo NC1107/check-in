@@ -228,7 +228,8 @@ class _RecapSettingsScreenState extends ConsumerState<RecapSettingsScreen> {
             padding: EdgeInsets.fromLTRB(20, 12, 20, 12),
             child: Text(
               'A recap post rounds up the group\'s check-ins into a swipeable deck of the '
-              'best-received photos for the period.',
+              'best-received photos for the period. A scheduled recap is skipped when the group '
+              'had fewer than 5 check-ins that week or 20 that month.',
               style: TextStyle(color: kFgMuted, fontSize: 12.5, height: 1.4),
             ),
           ),
