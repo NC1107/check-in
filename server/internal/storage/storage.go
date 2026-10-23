@@ -291,15 +291,8 @@ func exifOrientation(data []byte) int {
 	}
 	i := 2
 	for i+4 <= len(data) {
-		if data[i] != 0xFF {
-			return 1
-		}
-		marker := data[i+1]
-		if marker == 0xDA || marker == 0xD9 { // start-of-scan / end — no metadata past here
-			return 1
-		}
-		size := int(data[i+2])<<8 | int(data[i+3])
-		if size < 2 || i+2+size > len(data) {
+		marker, size, ok := jpegSegment(data, i)
+		if !ok {
 			return 1
 		}
 		if marker == 0xE1 { // APP1
@@ -310,6 +303,24 @@ func exifOrientation(data []byte) int {
 		i += 2 + size
 	}
 	return 1
+}
+
+// jpegSegment reads the marker and length of the segment at data[i]. ok is false when the
+// bytes are not a segment header, the segment overruns data, or it is start-of-scan /
+// end-of-image - no metadata past either.
+func jpegSegment(data []byte, i int) (marker byte, size int, ok bool) {
+	if data[i] != 0xFF {
+		return 0, 0, false
+	}
+	marker = data[i+1]
+	if marker == 0xDA || marker == 0xD9 {
+		return 0, 0, false
+	}
+	size = int(data[i+2])<<8 | int(data[i+3])
+	if size < 2 || i+2+size > len(data) {
+		return 0, 0, false
+	}
+	return marker, size, true
 }
 
 func parseExifOrientation(seg []byte) int {
@@ -374,31 +385,30 @@ func applyOrientation(img image.Image, o int) image.Image {
 func rotate(src image.Image, deg int) image.Image {
 	b := src.Bounds()
 	w, h := b.Dx(), b.Dy()
-	var dst *image.RGBA
-	switch deg {
-	case 90:
-		dst = image.NewRGBA(image.Rect(0, 0, h, w))
-		for y := 0; y < h; y++ {
-			for x := 0; x < w; x++ {
-				dst.Set(h-1-y, x, src.At(b.Min.X+x, b.Min.Y+y))
-			}
-		}
-	case 270:
-		dst = image.NewRGBA(image.Rect(0, 0, h, w))
-		for y := 0; y < h; y++ {
-			for x := 0; x < w; x++ {
-				dst.Set(y, w-1-x, src.At(b.Min.X+x, b.Min.Y+y))
-			}
-		}
-	default: // 180
-		dst = image.NewRGBA(image.Rect(0, 0, w, h))
-		for y := 0; y < h; y++ {
-			for x := 0; x < w; x++ {
-				dst.Set(w-1-x, h-1-y, src.At(b.Min.X+x, b.Min.Y+y))
-			}
+	dstW, dstH := w, h
+	if deg == 90 || deg == 270 {
+		dstW, dstH = h, w
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			dx, dy := rotatedPoint(deg, x, y, w, h)
+			dst.Set(dx, dy, src.At(b.Min.X+x, b.Min.Y+y))
 		}
 	}
 	return dst
+}
+
+// rotatedPoint maps a source pixel (x, y) of a w by h image to its clockwise-rotated spot.
+func rotatedPoint(deg, x, y, w, h int) (int, int) {
+	switch deg {
+	case 90:
+		return h - 1 - y, x
+	case 270:
+		return y, w - 1 - x
+	default: // 180
+		return w - 1 - x, h - 1 - y
+	}
 }
 
 // flip mirrors img horizontally (horizontal=true) or vertically.

@@ -55,6 +55,7 @@ check-in into a wrongly placed one.
 """
 
 import argparse
+import contextlib
 import csv
 import math
 import os
@@ -88,8 +89,9 @@ COUNTRIES_TSV = os.path.join(
 )
 
 
-def data_file(data_dir, name, what):
-    """Resolves `name` inside `data_dir`, refusing anything that escapes it or is not a file.
+@contextlib.contextmanager
+def open_data_file(data_dir, name, what):
+    """Opens `name` inside `data_dir`, refusing anything that escapes it or is not a file.
 
     The data files are named relative to a directory rather than by free path so that a
     mistyped or surprising argument cannot wander off somewhere unrelated - it fails here,
@@ -101,30 +103,31 @@ def data_file(data_dir, name, what):
     if not os.path.isdir(root):
         sys.exit(f"--data-dir: {data_dir!r} is not a directory")
     resolved = os.path.realpath(os.path.join(root, name))
-    if os.path.commonpath([root, resolved]) != root:
+    if not resolved.startswith(root + os.sep):
         sys.exit(f"{what}: {name!r} resolves outside {data_dir!r}")
     if not os.path.isfile(resolved):
         sys.exit(f"{what}: {name!r} is not a readable file inside {data_dir!r}")
-    return resolved
+    with open(resolved, encoding="utf-8") as f:
+        yield f
 
 
-def load_countries(path):
+def load_countries(data_dir, name, what):
     """ISO country code -> country name, from the same table the gazetteer is built with."""
     codes = {}
-    with open(path, encoding="utf-8") as f:
+    with open_data_file(data_dir, name, what) as f:
         for row in csv.reader(f, delimiter="\t"):
             if len(row) >= 2 and row[0] and row[1]:
                 codes[row[0]] = row[1]
     if not codes:
-        sys.exit(f"no countries loaded from {path}")
+        sys.exit(f"no countries loaded from {name!r}")
     return codes
 
 
-def load_cities(path):
+def load_cities(data_dir, name, what):
     """Buckets every populated place by whole-degree cell, keyed for nearest-match lookup."""
     cells = defaultdict(list)
     count = 0
-    with open(path, encoding="utf-8") as f:
+    with open_data_file(data_dir, name, what) as f:
         for line in f:
             parts = line.rstrip("\n").split("\t")
             if len(parts) < EXPECTED_COLUMNS:
@@ -147,7 +150,7 @@ def load_cities(path):
                 (lat, lng, name, country, population))
             count += 1
     if not count:
-        sys.exit(f"no places loaded from {path} - is it a GeoNames tab-separated export?")
+        sys.exit(f"no places loaded from {name!r} - is it a GeoNames tab-separated export?")
     return cells, count
 
 
@@ -260,10 +263,12 @@ def main():
 
     # The default countries table ships in this repo and is located from __file__, so only
     # an explicit override is resolved against --data-dir.
-    countries_path = (COUNTRIES_TSV if args.countries is None
-                      else data_file(args.data_dir, args.countries, "--countries"))
-    countries = load_countries(countries_path)
-    cells, city_count = load_cities(data_file(args.data_dir, args.cities, "--cities"))
+    if args.countries is None:
+        countries = load_countries(os.path.dirname(COUNTRIES_TSV), os.path.basename(COUNTRIES_TSV),
+                                   "default countries table")
+    else:
+        countries = load_countries(args.data_dir, args.countries, "--countries")
+    cells, city_count = load_cities(args.data_dir, args.cities, "--cities")
     print(f"loaded {city_count} places and {len(countries)} countries", file=sys.stderr)
 
     with psycopg.connect(args.database_url) as conn:

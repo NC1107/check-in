@@ -877,35 +877,11 @@ func (d *DB) CreatePost(ctx context.Context, authorID int64, body string, mediaI
 		}
 	}
 
-	// Manual people-tags: members the author marked as appearing in the post. Dedupe, drop
-	// the author (implicit), and insert only ids that resolve to an active user so a bad id
-	// silently no-ops rather than poisoning the post. Then read names back for the response.
-	if ids := dedupeExcluding(peopleIDs, authorID); len(ids) > 0 {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO post_people (post_id, user_id)
-			SELECT $1, u.id FROM users u WHERE u.id = ANY($2) AND u.status = 'active'`,
-			p.ID, ids); err != nil {
-			return p, err
-		}
-		rows, err := tx.Query(ctx, `
-			SELECT pp.user_id, tu.name FROM post_people pp JOIN users tu ON tu.id = pp.user_id
-			WHERE pp.post_id = $1 ORDER BY tu.name`, p.ID)
-		if err != nil {
-			return p, err
-		}
-		for rows.Next() {
-			var tp TaggedPerson
-			if err := rows.Scan(&tp.ID, &tp.Name); err != nil {
-				rows.Close()
-				return p, err
-			}
-			p.People = append(p.People, tp)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return p, err
-		}
+	people, err := tagPostPeople(ctx, tx, p.ID, authorID, peopleIDs)
+	if err != nil {
+		return p, err
 	}
+	p.People = people
 
 	if err := tx.Commit(ctx); err != nil {
 		return p, err
@@ -913,6 +889,38 @@ func (d *DB) CreatePost(ctx context.Context, authorID int64, body string, mediaI
 	p.MediaIDs = mediaIDs
 	p.Media = attached
 	return p, nil
+}
+
+// tagPostPeople records the members the author marked as appearing in the post. It dedupes,
+// drops the author (implicit), and inserts only ids that resolve to an active user so a bad
+// id silently no-ops rather than poisoning the post. It returns the tagged names, by name.
+func tagPostPeople(ctx context.Context, tx pgx.Tx, postID, authorID int64, peopleIDs []int64) ([]TaggedPerson, error) {
+	ids := dedupeExcluding(peopleIDs, authorID)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO post_people (post_id, user_id)
+		SELECT $1, u.id FROM users u WHERE u.id = ANY($2) AND u.status = 'active'`,
+		postID, ids); err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT pp.user_id, tu.name FROM post_people pp JOIN users tu ON tu.id = pp.user_id
+		WHERE pp.post_id = $1 ORDER BY tu.name`, postID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var people []TaggedPerson
+	for rows.Next() {
+		var tp TaggedPerson
+		if err := rows.Scan(&tp.ID, &tp.Name); err != nil {
+			return nil, err
+		}
+		people = append(people, tp)
+	}
+	return people, rows.Err()
 }
 
 // ownedMedia returns the given media items in the order asked for, and ErrNotOwned unless
