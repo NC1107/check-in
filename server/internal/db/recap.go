@@ -21,6 +21,20 @@ const (
 	recapMinPosters = 2
 )
 
+// RecapMinCheckIns is how many check-ins a scheduled recap's period needs before the
+// scheduler posts it: about five per week of period length, so a group that barely posted
+// isn't sent a recap of nothing. Manual (custom) recaps are never gated, hence 0.
+func RecapMinCheckIns(cadence string) int {
+	switch cadence {
+	case "weekly":
+		return 5
+	case "monthly":
+		return 20
+	default:
+		return 0
+	}
+}
+
 // ErrRecapEmpty is returned by BuildRecap when the period doesn't clear the quality bar.
 // Callers (the scheduler, the on-demand handler) must treat it as "nothing to post", not
 // as a failure.
@@ -392,6 +406,19 @@ func (d *DB) recapCandidates(ctx context.Context, start, end time.Time) ([]recap
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// CountRecapCheckIns counts the posts in [start, end) that recapCandidates would feed a
+// recap: same filter, so the scheduler's quiet-period gate and the recap itself agree on
+// what a check-in is.
+func (d *DB) CountRecapCheckIns(ctx context.Context, start, end time.Time) (int, error) {
+	var n int
+	err := d.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM posts p
+		JOIN users u ON u.id = p.author_id
+		WHERE p.kind <> 'recap' AND u.status = 'active'
+		  AND p.created_at >= $1 AND p.created_at < $2`, start, end).Scan(&n)
+	return n, err
 }
 
 // recapMember is an active member's identity, for members who qualify for an award
