@@ -64,6 +64,13 @@ authenticated users through the API — there's no public, directly-browsable me
 
 ## What's intentionally not here
 
-No ads, no third-party trackers, no external analytics, no cloud push services. Birthday
+No ads, no third-party trackers, no external analytics. Birthday
 reminders are scheduled **on each user's device**, so birthday data never leaves your
 server for a push provider.
+
+Push notifications are the one thing that leaves your server by default. They go through
+the maintainer's relay to Firebase, carrying a short title and body (for example "Alice
+shared a check-in") and the device tokens to deliver to. Post content, photos, comments,
+phone numbers and the member list don't go through it. Set
+`CHECKIN_RELAY_URL` empty to turn push off entirely; see
+[configuration.md](configuration.md#push-notifications).

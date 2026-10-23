@@ -62,6 +62,17 @@ curl https://check-in.example.com/api/health
 # {"status":"ok"}
 ```
 
+Then check that push notifications are on:
+
+```bash
+docker compose logs server | grep 'push:'
+# push: relay via https://checkin-relay.npc-server.top
+```
+
+By default the server registers with the maintainer's push relay on first boot, and that is all members on the published apps need to get notifications.
+If you see `push: relay registration ... failed` instead, the server couldn't reach the relay; see [troubleshooting.md](troubleshooting.md).
+How the relay works, what it can see, and how to opt out are in [configuration.md](configuration.md#push-notifications).
+
 ## 5. Become the admin
 
 Open the Check-In app on your phone. On the first screen, enter your server URL:
